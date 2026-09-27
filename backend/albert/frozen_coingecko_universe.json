@@ -66,23 +66,6 @@
     {"rank":90,"symbol":"INJ","id":"injective-protocol","name":"Injective","selectedBy":"original_22"},
     {"rank":118,"symbol":"TIA","id":"celestia","name":"Celestia","selectedBy":"original_22"}
   ],
-  "verification": {
-    "figure-heloc": {"status":"BLOCKED","reasonCode":"NO_EXACT_SPOT_USD_PAIR","detail":"No active FIGR_HELOC/USD spot market on Kraken or Coinbase in preliminary inventory"},
-    "rain": {"status":"BLOCKED","reasonCode":"NO_EXACT_SPOT_USD_PAIR","detail":"No active RAIN/USD spot market on either approved provider"},
-    "leo-token": {"status":"BLOCKED","reasonCode":"NO_EXACT_SPOT_USD_PAIR","detail":"No active LEO/USD spot market on either approved provider"},
-    "the-open-network": {"status":"BLOCKED","reasonCode":"RENAMED_ID_UNPROVEN","detail":"No GRAM/USD spot market; TON historical/pair identity and migration not independently proven"},
-    "bitway": {"status":"BLOCKED","reasonCode":"NO_EXACT_SPOT_USD_PAIR","detail":"No active BTW/USD spot market on either approved provider"},
-    "memecore": {"status":"BLOCKED","reasonCode":"NO_EXACT_SPOT_USD_PAIR","detail":"No active M/USD spot market; one-letter symbol remains ambiguous"},
-    "htx-dao": {"status":"BLOCKED","reasonCode":"NO_EXACT_SPOT_USD_PAIR","detail":"No active HTX/USD spot market on either approved provider"},
-    "hyperliquid": {"status":"BLOCKED","reasonCode":"INSUFFICIENT_YEAR_HIGH_LOOKBACK","detail":"Kraken 242 and Coinbase 234 closed days observed; existing 365-day high/confidence features must WAIT until coverage exists"},
-    "canton-network": {"status":"BLOCKED","reasonCode":"INSUFFICIENT_YEAR_HIGH_LOOKBACK","detail":"Kraken 321 closed days observed; Coinbase no USD spot pair; year-high/confidence require 365"},
-    "okb": {"status":"BLOCKED","reasonCode":"INSUFFICIENT_YEAR_HIGH_LOOKBACK","detail":"Kraken 177 closed days observed; Coinbase no USD spot pair; year-high/confidence require 365"},
-    "aster-2": {"status":"BLOCKED","reasonCode":"INSUFFICIENT_YEAR_HIGH_LOOKBACK","detail":"Kraken 342 closed days observed; Coinbase history not demonstrated; year-high/confidence require 365"},
-    "hedera-hashgraph": {"status":"BLOCKED","reasonCode":"COINGECKO_ID_MISMATCH","detail":"Ticker coin_id hedera differs from frozen hedera-hashgraph; migration proof required"},
-    "crypto-com-chain": {"status":"BLOCKED","reasonCode":"COINGECKO_ID_MISMATCH","detail":"Ticker coin_id cronos differs from frozen crypto-com-chain; migration proof required"},
-    "worldcoin-wld": {"status":"BLOCKED","reasonCode":"COINGECKO_ID_MISMATCH","detail":"Ticker coin_id worldcoin differs from frozen worldcoin-wld; migration proof required"},
-    "injective-protocol": {"status":"BLOCKED","reasonCode":"COINGECKO_ID_MISMATCH","detail":"Ticker coin_id injective differs from frozen injective-protocol; migration proof required"}
-  },
   "excludedRanks": [
     {"rank":3,"symbol":"USDT","id":"tether","reason":"STABLECOIN"},
     {"rank":6,"symbol":"USDC","id":"usd-coin","reason":"STABLECOIN_CASH_ONLY"},

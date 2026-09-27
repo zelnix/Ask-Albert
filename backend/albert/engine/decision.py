@@ -62,7 +62,7 @@ def _apply_sell(base, ctx):
     return True
 
 
-def build_decisions(pid, summary_override=None):
+def build_decisions(pid, summary_override=None, strategy_symbols=None):
     reg = regime_mod.compute_regime()
     regime = reg['regime']
     # M6 blocker #2: when an M5 paper account is the portfolio source, decisions are
@@ -92,7 +92,11 @@ def build_decisions(pid, summary_override=None):
                                              'sma200': round(reg.get('sma200') or 0, 2)})
     pass_ts = datetime.datetime.utcnow().isoformat()
 
-    universe = [s for s in universe_mod.discovery_universe(held.keys()) if s not in STABLES]
+    # Evaluate this saved paper strategy's exact legs through the SAME canonical
+    # engine. Do not globally scan 57 price feeds or insert/reweight other coins.
+    extra = [str(s).upper() for s in (strategy_symbols or []) if str(s).upper() not in STABLES]
+    universe = list(dict.fromkeys([*universe_mod.discovery_universe(held.keys()), *extra]))
+    universe = [s for s in universe if s not in STABLES]
     decisions = []
     for sym in universe:
         sc = scoring_mod.score_asset(sym, regime)

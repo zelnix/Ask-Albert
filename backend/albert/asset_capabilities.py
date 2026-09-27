@@ -12,43 +12,26 @@ from pathlib import Path
 
 from albert.ranking_snapshot import LEGACY_IDS
 
-REGISTRY_VERSION = 'frozen-top50-plus22-v1'
-# Frozen ranking is data, not an authorization switch. Only verifiedAssetIds,
-# added AFTER per-coin provider + execution + synthetic journey verification,
-# may extend the canonical discovery/entry universe. Live rank changes do not.
+REGISTRY_VERSION = 'frozen-top50-simulation-v2'
+# The ranking is frozen for candidate selection, not a live-trading allow-list.
+# CoinGecko IDs bind prices/history to the intended asset. Source availability
+# is transient; a paper strategy may Start on WAIT, but cannot fill without data.
 FROZEN = json.loads(Path(__file__).with_name('frozen_coingecko_universe.json').read_text())
 CANDIDATES = tuple(FROZEN['candidates'])
 CANDIDATES_BY_SYMBOL = {r['symbol']: r for r in CANDIDATES}
 CANDIDATES_BY_ID = {r['id']: r for r in CANDIDATES}
 STUDIO_ASSETS = tuple(r['symbol'] for r in CANDIDATES)
-REQUIRED_CHECKS = ('marketIdentity', 'freshQuote', 'closedDailyHistory', 'ownAssetScoring',
-                   'canonicalDecisions', 'executionPrecision', 'feesSpreadSlippageRisk',
-                   'draftValidateSaveStart', 'reviewAndAutopilot', 'exitsAndAccounting', 'backtest')
-_ATTESTED = FROZEN.get('verification') or {}
-# Adding a ticker or ID to the final registration list ALONE is insufficient.
-VERIFIED_ASSET_IDS = frozenset(
-    ident for ident in (FROZEN.get('verifiedAssetIds') or [])
-    if ident in CANDIDATES_BY_ID and _ATTESTED.get(ident, {}).get('status') == 'VERIFIED'
-    and all(_ATTESTED[ident].get('checks', {}).get(key) is True for key in REQUIRED_CHECKS)
-    and _ATTESTED[ident].get('execution', {}).get('limitsVerified') is True
-    and bool(_ATTESTED[ident].get('providers'))
-    and all(p.get('coinGeckoId') == ident and p.get('identitySource') == 'coingecko_coin_tickers'
-            and p.get('marketId') and p.get('pair') and p.get('base')
-            for p in _ATTESTED[ident]['providers'].values())
-)
-VERIFIED_ASSETS = tuple(r['symbol'] for r in CANDIDATES if r['id'] in VERIFIED_ASSET_IDS)
-# Existing historical holdings still receive canonical evaluation. This does not
-# independently authorize a NEW entry; all BUY gates use VERIFIED_ASSETS.
-ENGINE_DISCOVERY_ASSETS = tuple(dict.fromkeys((
-    'BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'ADA', 'AVAX', 'DOGE', 'LINK', 'DOT', 'LTC', 'TRX',
-    *VERIFIED_ASSETS)))
-# Research/alert pairs are expected hints only, not proof of an active market.
+# Unsolicited discovery remains intentionally small. A paper strategy's own
+# selected symbols are added to canonical analysis at runtime, not globally.
+ENGINE_DISCOVERY_ASSETS = ('BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'ADA', 'AVAX', 'DOGE',
+                           'LINK', 'DOT', 'LTC', 'TRX')
+# Read-only legacy alert hints; these are never simulated execution requirements.
 DAILY_MARKET_PAIRS = {
     sym: [('kraken', f'{sym}/USD'), ('coinbase', f'{sym}/USD')]
     for sym in ('BTC', 'ETH', 'SOL', 'XRP', 'ADA', 'DOGE', 'AVAX', 'LINK', 'DOT', 'LTC',
                 'MATIC', 'ATOM', 'BCH', 'XLM', 'ETC', 'UNI', 'AAVE', 'FIL', 'NEAR', 'APT')
 }
-ENTRY_ASSETS = frozenset(VERIFIED_ASSETS)
+ENTRY_ASSETS = frozenset(STUDIO_ASSETS)
 MAX_STRATEGY_LEGS = 8
 
 
@@ -64,11 +47,8 @@ def provider_bases(symbol):
     item = candidate(symbol)
     if not item:
         return set()
-    # A renamed provider base such as TON for GRAM is accepted ONLY after
-    # per-provider ID evidence has been recorded and the asset fully registered.
-    if item['id'] in VERIFIED_ASSET_IDS:
-        attested = (FROZEN['verification'][item['id']].get('providers') or {}).values()
-        return {str(p['base']).upper() for p in attested if p.get('base')}
+    # Only explicit aliases: legacy MATIC positions are valued as current POL
+    # without rewriting lots, allocations, or joining two historical series.
     return {'POL'} if item['id'] == 'polygon-ecosystem-token' else {item['symbol']}
 
 
@@ -84,51 +64,43 @@ def capability(symbol, mandate=None, data_availability='UNVERIFIED'):
     excluded = {str(x).upper() for x in (m.get('excluded_coins') or [])}
     item = candidate(sym)
     known = item is not None
-    canonical = sym in ENGINE_DISCOVERY_ASSETS  # generic authoritative engine
-    daily = known  # ID-bound closed-candle adapter implemented for every candidate
-    registered = bool(item and item['id'] in VERIFIED_ASSET_IDS and sym != 'MATIC')
-    evidence = (FROZEN.get('verification') or {}).get(item['id'], {}) if item else {}
-    verification = ('VERIFIED_SUPPORTED' if registered else 'BLOCKED' if evidence.get('status') == 'BLOCKED'
-                    else 'IMPLEMENTED_UNVERIFIED' if known else 'NOT_SELECTED')
+    canonical = known and sym != 'MATIC'  # selected symbols enter the same engine on demand
+    data_route = known  # CoinGecko by frozen ID, public CCXT only as optional fallback
     if not known:
         reason = 'NOT_IN_FROZEN_UNIVERSE'
     elif sym == 'MATIC':
         reason = 'RENAMED_TO_POL_NEW_ENTRIES_REQUIRE_REVIEW'
     elif item.get('ambiguousTicker'):
         reason = 'AMBIGUOUS_ASSET_IDENTITY'
-    elif evidence.get('status') == 'BLOCKED':
-        reason = evidence.get('reasonCode') or 'PROVIDER_CAPABILITY_BLOCKED'
-    elif not registered:
-        reason = 'ENTRY_PATH_UNVERIFIED'
-    elif not canonical:
-        reason = 'NO_CANONICAL_ENTRY_DECISION'
     elif sym in excluded:
         reason = 'EXCLUDED_BY_MANDATE'
     elif approved and sym not in approved:
         reason = 'NOT_IN_APPROVED_UNIVERSE'
-    elif data_availability in ('STALE', 'MISSING'):
-        reason = 'MARKET_DATA_UNAVAILABLE'
     else:
         reason = None
+    can_start = reason is None
+    data_reason = 'MARKET_DATA_UNAVAILABLE' if data_availability in ('STALE', 'MISSING') else None
     return {
         'symbol': sym, 'assetId': item['id'] if item else None,
         'originalRank': item.get('rank') if item else None,
         'selectedBy': item.get('selectedBy', 'market_cap') if item else None,
         'legacySymbol': item.get('legacySymbol') if item else None,
         'expectedPairsUnverified': expected_pairs(sym) if item else [],
-        'known': known, 'verificationStatus': verification,
-        'implemented': {'canonicalDecision': canonical, 'dailyScoringRoute': daily,
-                        'paperExecutionProfile': known, 'idBoundSpotAndBacktestFetcher': known},
-        'entrySupported': registered and canonical,
-        'dataAvailability': data_availability,  # FRESH/STALE/MISSING/UNVERIFIED
+        'known': known,
+        'verificationStatus': ('DATA_AVAILABLE' if data_availability == 'FRESH' and can_start else
+                               'DATA_UNAVAILABLE' if data_reason else
+                               'IMPLEMENTED_DATA_UNVERIFIED' if can_start else 'UNAVAILABLE'),
+        'implemented': {'canonicalDecision': canonical, 'dailyScoringRoute': data_route,
+                        'paperSimulation': known, 'idBoundPriceAndHistory': data_route},
+        'entrySupported': can_start,  # not permission to BUY without live data/decision/risk
+        'dataAvailability': data_availability,
         'mandateStatus': ('EXCLUDED' if sym in excluded else 'NOT_APPROVED' if approved and sym not in approved
                           else 'ALLOWED'),
-        'startEligible': bool(registered and canonical and sym not in excluded and
-                              (not approved or sym in approved)),
-        'entryEligible': reason is None and data_availability == 'FRESH',
-        'reasonCode': reason,
-        'missingCapability': evidence.get('detail'),
-        'needsImplementation': evidence.get('status') == 'BLOCKED',
+        'startEligible': can_start,  # WAIT may Start; it cannot place a trade
+        'entryEligible': can_start and data_availability == 'FRESH',
+        'reasonCode': reason or data_reason,
+        'missingCapability': data_reason,
+        'needsImplementation': not known,
     }
 
 
@@ -163,9 +135,7 @@ def validate_assets(draft, canonical_assets, mandate=None):
             errors.append(f'{sym} duplicates the same underlying asset identity; allocations cannot be merged.')
         seen_ids.add(row['assetId'])
         reason = row['reasonCode']
-        if reason == 'ENTRY_PATH_UNVERIFIED':
-            errors.append(f'{sym} cannot start: its provider-to-paper entry path has not completed verification.')
-        elif reason == 'RENAMED_TO_POL_NEW_ENTRIES_REQUIRE_REVIEW':
+        if reason == 'RENAMED_TO_POL_NEW_ENTRIES_REQUIRE_REVIEW':
             errors.append('MATIC is now POL. Existing MATIC holdings and exits remain; request POL explicitly for a new strategy.')
         elif reason == 'NO_CANONICAL_ENTRY_DECISION':
             errors.append(f'{sym} cannot start: the decision engine does not evaluate new entries for it.')

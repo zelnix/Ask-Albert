@@ -2137,6 +2137,9 @@ ONCHAIN_TTL_SEC = 2 * 3600
 _onchain_state = {}
 
 
+COINGECKO_MARKETS_URL = 'https://api.coingecko.com/api/v3/coins/markets'  # existing public provider
+
+
 def _engine_get(url, params=None, headers=None, timeout=12):
     try:
         r = requests.get(url, params=params or {}, headers=headers or {}, timeout=timeout)
@@ -7123,6 +7126,20 @@ from albert.paper import profiles as _paper_profiles  # noqa: E402
 from albert import asset_capabilities as _asset_caps  # noqa: E402
 from albert import market_adapter as _verified_market  # noqa: E402
 
+
+def _simulation_cg_get(path, params):
+    """Reuse the app's existing public CoinGecko endpoint/client; never place orders."""
+    if path == '/coins/markets':
+        url = COINGECKO_MARKETS_URL
+    elif path.startswith('/coins/') and path.endswith('/market_chart'):
+        url = COINGECKO_MARKETS_URL.rsplit('/coins/markets', 1)[0] + path
+    else:
+        raise ValueError('Unsupported public market-data path')
+    return _engine_get(url, params=params)
+
+
+_verified_market.configure_coingecko(_simulation_cg_get)
+
 PAPER_EXEC_PROFILE = {'executionProfileId': _paper_core.EXEC_PROFILE['executionProfileId'],
                       'feeBps': int(_paper_core.EXEC_PROFILE['feeBps']),
                       'spreadBps': int(_paper_core.EXEC_PROFILE['spreadBps']),
@@ -7310,7 +7327,8 @@ def _market_observation(sym):
     ts = data.get('ts')             # timestamp of a successful public quote fetch
     src = data.get('source') or 'ticker'
     fresh = bool(price is not None and price > 0 and data.get('assetId') and
-                 data.get('execution', {}).get('limitsVerified'))
+                 data.get('execution', {}).get('simulationReady') and
+                 float(data.get('retrievalAgeSec') or 0) < 60)
     try:
         import time as _t
         entry = _ticker_cache.get(sym)
@@ -7319,7 +7337,7 @@ def _market_observation(sym):
         fresh = False
     return {'price': price if fresh else None, 'ts': ts,
             'observedAt': data.get('observedAt'),
-            'obsId': '%s:%s:%s' % (sym, src, data.get('observedAt')) if fresh else None,
+            'obsId': '%s:%s:%s' % (sym, src, data.get('observedAt') or ts) if fresh else None,
             'fresh': fresh, 'source': src, 'assetId': data.get('assetId'), 'pair': data.get('pair'),
             'marketId': data.get('marketId'), 'execution': data.get('execution')}
 
@@ -11506,7 +11524,7 @@ studio_idem_col = db['studio_idem']
 
 STUDIO_SUPPORTED = frozenset(_asset_caps.ENTRY_ASSETS)
 STUDIO_MAX_LEGS = _asset_caps.MAX_STRATEGY_LEGS
-STUDIO_BACKTEST_VERSION = 'studio-bt-v3'
+STUDIO_BACKTEST_VERSION = 'studio-bt-v4'
 STUDIO_TRANSITIONS = {
     'REVIEWED': {'assign': 'PAPER_ASSIGNED', 'archive': 'ARCHIVED'},
     'PAPER_ASSIGNED': {'activate': 'PAPER_ACTIVE', 'unassign': 'REVIEWED', 'archive': 'ARCHIVED'},
@@ -11609,13 +11627,17 @@ def _studio_get(sid, pid):
 
 # ---- deterministic historical backtest (wired to ID-bound ccxt daily candles) ----
 _STUDIO_BACKTEST_FAILURES = {}
+_STUDIO_BACKTEST_SOURCES = {}
 def _studio_daily_closes(symbol, limit=200):
     """Timestamp-aligned closed daily candles from an ID-bound public USD market."""
     if not _asset_caps.candidate(symbol):
         return None
     try:
-        obs = _verified_market.daily(symbol, limit=max(limit, _verified_market.MIN_SCORING_CANDLES))
+        obs = _verified_market.daily(symbol, limit=limit)
         _STUDIO_BACKTEST_FAILURES.pop(symbol, None)
+        _STUDIO_BACKTEST_SOURCES[symbol] = {'provider': obs['provider'],
+                                            'priceType': obs.get('priceType', 'OHLCV'),
+                                            'assetId': obs['assetId']}
         return [(int(b[0]), float(b[4])) for b in obs['bars'][-limit:]]
     except _verified_market.MarketUnavailable as exc:
         _STUDIO_BACKTEST_FAILURES[symbol] = {'code': exc.code, 'detail': exc.detail}
@@ -11710,14 +11732,17 @@ def _studio_backtest(contract):
     if bench:
         bpx = [bench[ts] for ts in dates]
         bench_ret = round((bpx[-1] / bpx[0] - 1) * 100, 2)
+    sources = {s: _STUDIO_BACKTEST_SOURCES.get(s, {'provider': 'UNVERIFIED', 'priceType': 'UNKNOWN'})
+               for s in set(syms + ['BTC'])}
     data_hash = _studio_short_hash({'dates': dates, 'prices': {s: [repr(x) for x in px[s]] for s in syms},
-                                    'costs': costs})
+                                    'sources': sources, 'costs': costs})
     return {
         'backtestVersion': STUDIO_BACKTEST_VERSION, 'sampleSizeDays': n,
         'totalReturnPct': total_ret, 'benchmarkReturnPct': bench_ret, 'benchmark': 'BTC buy-and-hold',
         'maxDrawdownPct': round(max_dd, 2), 'feesPaidUsd': round(fees_paid, 2),
         'estimatedTotalFrictionUsd': round(friction_paid, 2),
-        'perAssetExecutionCosts': costs, 'dataCoveragePct': coverage,
+        'perAssetExecutionCosts': costs, 'dataSources': sources,
+        'dataCoveragePct': coverage,
         'assetsWithData': syms, 'finalEquity': curve[-1], 'startEquity': 100000.0,
         'dataHash': data_hash, 'deterministic': True,
     }
@@ -11741,7 +11766,10 @@ def _studio_data_status(sym):
     row = globals().get('_OHLCV_CACHE', {}).get(sym)
     if row:
         age = _time_mod.time() - row[0]
-        return 'FRESH' if age < _OHLCV_TTL and row[1] is not None and len(row[1]) >= 365 else 'STALE'
+        coverage = row[1].attrs.get('coverage') or {} if row[1] is not None else {}
+        if age >= _OHLCV_TTL or coverage.get('lastClosedUtcMs') != coverage.get('expectedLastClosedUtcMs'):
+            return 'STALE'
+        return 'FRESH' if row[1] is not None and len(row[1]) >= 200 else 'PARTIAL'
     failure = globals().get('_SCORING_FAILURES', {}).get(sym)
     return 'MISSING' if failure and _time_mod.time() - failure[0] < _OHLCV_TTL else 'UNVERIFIED'
 
@@ -13041,7 +13069,10 @@ def _albert_decisions(pid, account=None):
     engine's portfolio source is THAT account (blocker #2); otherwise the legacy
     portfolio summary is used (for the read-only decisions endpoint / non-paper UI)."""
     override = _portfolio_summary_from_account(account) if account is not None else None
-    return _albert_decision_mod.build_decisions(pid, summary_override=override)
+    strat = _strategy_for_account(account) if account is not None else None
+    selected = _strategy_syms(strat) if strat else []
+    return _albert_decision_mod.build_decisions(pid, summary_override=override,
+                                                 strategy_symbols=selected)
 
 
 @app.get('/api/v1/albert/regime')
@@ -13397,7 +13428,7 @@ _DISCOVERY_CACHE = {'ts': 0.0, 'core': None, 'building': False}
 
 def _discovery_universe_rows():
     """Provider layer: live top-100 by market cap via the CoinGecko public API."""
-    arr = _engine_get('https://api.coingecko.com/api/v3/coins/markets', params={
+    arr = _engine_get(COINGECKO_MARKETS_URL, params={
         'vs_currency': 'usd', 'order': 'market_cap_desc', 'per_page': 100, 'page': 1,
         'price_change_percentage': '24h,7d,30d'}) or []
     rows, src_ts = [], None
@@ -16570,6 +16601,9 @@ def _daily_ohlcv(symbol, limit=720):
             result = _verified_market.daily(sym, limit)
             df = pd.DataFrame(result['bars'], columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            df.attrs['coverage'] = result['coverage']
+            df.attrs['volumeUnit'] = result.get('volumeUnit', 'BASE')
+            df.attrs['priceType'] = result.get('priceType', 'OHLCV')
             _OHLCV_CACHE[sym] = (now, df)
             _SCORING_FAILURES.pop(sym, None)
             return df

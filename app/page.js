@@ -3242,15 +3242,20 @@ export default function DashboardPage() {
   const [switching, setSwitching] = useState(false);
   // Auth gate: undefined = checking, null = signed out, {user} = signed in.
   const [authUser, setAuthUser] = useState(undefined);
+  const [authError, setAuthError] = useState(false);
+  const [authRetry, setAuthRetry] = useState(0);
   React.useEffect(() => {
     let alive = true;
     fetchMe().then((u) => {
       if (!alive) return;
       if (u) { rememberUser(u); hydrateVoicePrefFromServer(); }
+      setAuthError(false);
       setAuthUser(u || null);
+    }).catch(() => {
+      if (alive) setAuthError(true);
     });
     return () => { alive = false; };
-  }, []);
+  }, [authRetry]);
   // One owner-scoped read set feeds the entire Home, including its global ticker.
   // Keep it mounted on evaluation/research deep links so Back restores the snapshot.
   const oneScreen = useOneScreenData(!!authUser && ['home', 'scenario-evaluation', 'opportunities'].includes(active));
@@ -3284,11 +3289,16 @@ export default function DashboardPage() {
   const firstSym = React.useRef(true);
   const failCount = React.useRef(0);
 
-  // Restore last-picked coin + load the supported coin list.
+  // Restore last-picked coin + load the supported coin list after authentication.
   useEffect(() => {
-    try { const s = (localStorage.getItem('btciq_symbol') || '').toUpperCase(); if (s) setSymbol(s); } catch (e) { /* noop */ }
+    if (!authUser) return;
+    try {
+      const s = (localStorage.getItem('btciq_symbol') || '').toUpperCase();
+      // A shared ?symbol= link takes precedence over this browser's last pick.
+      if (s && !new URLSearchParams(window.location.search).has('symbol')) setSymbol(s);
+    } catch (e) { /* noop */ }
     fetch(`${API_BASE}/v1/compare/coins`).then((r) => r.json()).then((j) => { if (j.coins) setCoins([{ symbol: 'BTC', name: 'Bitcoin' }, ...j.coins.filter((c) => c.symbol !== 'BTC')]); }).catch(() => {});
-  }, []);
+  }, [authUser]);
 
   // --- Deep-linking: shareable URL state (section / symbol / horizon / focus) ---
   // Read the URL once on mount so a shared link opens the exact same view.
@@ -3346,8 +3356,9 @@ export default function DashboardPage() {
 
   // Persist choice + reset the view whenever the coin changes so we never show a stale asset.
   useEffect(() => {
-    try { localStorage.setItem('btciq_symbol', symbol); } catch (e) { /* noop */ }
+    if (!authUser) return; // Don't overwrite the saved coin while checking the session.
     if (firstSym.current) { firstSym.current = false; return; }
+    try { localStorage.setItem('btciq_symbol', symbol); } catch (e) { /* noop */ }
     const btc = symbol === 'BTC';
     setData(btc ? (__dashCache || null) : null);
     setStatus(btc && __dashCache ? 'ready' : 'loading');
@@ -3360,7 +3371,7 @@ export default function DashboardPage() {
     // if the current section is hidden for altcoins, jump back to Overview
     setActive((a) => (!btc && BTC_ONLY_SECTIONS.includes(a) ? 'overview' : a));
     if (btc) setCompareOpen(false);
-  }, [symbol]);
+  }, [symbol, authUser]);
 
   // "Save as strategy" from a chat answer -> build a draft, then open the review modal.
   useEffect(() => {
@@ -3434,10 +3445,11 @@ export default function DashboardPage() {
   }, [loadAlerts, alertFilter]);
 
   useEffect(() => {
+    if (!authUser) return;
     loadAlerts();
     const id = setInterval(loadAlerts, 30000);
     return () => clearInterval(id);
-  }, [loadAlerts]);
+  }, [loadAlerts, authUser]);
 
   // Global (all-coins) notification feed that powers the top-bar bell + sidebar
   // badge, so the unread count stays accurate no matter which coin is selected.
@@ -3481,10 +3493,11 @@ export default function DashboardPage() {
   }, [loadNotif, loadAlerts]);
 
   useEffect(() => {
+    if (!authUser) return;
     loadNotif();
     const id = setInterval(loadNotif, 30000);
     return () => clearInterval(id);
-  }, [loadNotif]);
+  }, [loadNotif, authUser]);
 
   const loadNews = useCallback(async () => {
     try {
@@ -3496,10 +3509,11 @@ export default function DashboardPage() {
   }, [symbol]);
 
   useEffect(() => {
+    if (!authUser) return;
     loadNews();
     const id = setInterval(() => { setNewsStatus((s) => { if (s !== 'ready') loadNews(); return s; }); }, 5000);
     return () => clearInterval(id);
-  }, [loadNews]);
+  }, [loadNews, authUser]);
 
   const handleNewsRefresh = async () => {
     if (symbol !== 'BTC') { loadNews(); return; }
@@ -3528,12 +3542,14 @@ export default function DashboardPage() {
   }, [symbol]);
 
   useEffect(() => {
+    if (!authUser) return;
     load();
     const id = setInterval(() => { setStatus((s) => { if (s !== 'ready') load(); return s; }); }, 4000);
     return () => clearInterval(id);
-  }, [load]);
+  }, [load, authUser]);
 
   useEffect(() => {
+    if (!authUser) return;
     let alive = true;
     const loadTicker = async () => {
       try { const r = await fetch(symbol === 'BTC' ? `${API_BASE}/v1/ticker` : `${API_BASE}/v1/ticker?symbol=${encodeURIComponent(symbol)}`, { cache: 'no-store' }); const j = await r.json(); if (alive && j && j.price) { if (symbol === 'BTC') __tickerCache = j; setTicker(j); } } catch (e) { /* noop */ }
@@ -3542,7 +3558,7 @@ export default function DashboardPage() {
     const t = setInterval(loadTicker, 10000);
     const dref = setInterval(() => load(), 60000);
     return () => { alive = false; clearInterval(t); clearInterval(dref); };
-  }, [load, symbol]);
+  }, [load, symbol, authUser]);
 
   const doRefresh = async (passcode, remember = true, autoClear = false) => {
     setRefreshing(true);
@@ -3613,9 +3629,14 @@ export default function DashboardPage() {
 
   if (authUser === undefined) {
     return (
-      <main className="flex min-h-screen flex-col items-center justify-center gap-3 bg-slate-950">
+      <main className="flex min-h-screen flex-col items-center justify-center gap-3 bg-slate-950 px-6 text-center">
         <img src="/albert.png" alt="Albert" className="h-16 w-16 animate-pulse rounded-full ring-2 ring-sky-500/40" />
-        <p className="text-sm text-slate-400">Waking Albert…</p>
+        {authError ? (
+          <>
+            <p role="alert" className="max-w-sm text-sm text-slate-300">Albert couldn’t connect to check your session. Nothing has changed; please try again.</p>
+            <Button type="button" onClick={() => { setAuthError(false); setAuthRetry((n) => n + 1); }} className="bg-sky-600 text-white hover:bg-sky-500">Retry connection</Button>
+          </>
+        ) : <p role="status" className="text-sm text-slate-400">Waking Albert…</p>}
       </main>
     );
   }
@@ -3623,7 +3644,9 @@ export default function DashboardPage() {
     return <HomePage onAuthed={(u) => { rememberUser(u); hydrateVoicePrefFromServer(); setAuthUser(u); }} />;
   }
 
-  if (!data && (status === 'loading' || status === 'computing')) {
+  // Strategy Studio owns its data. A slow market dashboard must not hide paper
+  // strategy review/validation behind an unrelated analytics skeleton.
+  if (active !== 'strategies' && !data && (status === 'loading' || status === 'computing')) {
     return (
       <>
         <DashboardSkeleton ticker={ticker} />
@@ -3631,7 +3654,7 @@ export default function DashboardPage() {
       </>
     );
   }
-  if (!data && status === 'error') {
+  if (active !== 'strategies' && !data && status === 'error') {
     return (
       <main className="flex min-h-screen flex-col items-center justify-center gap-4 bg-slate-950 px-6">
         <div className="rounded-full bg-red-500/10 p-4"><Activity className="h-8 w-8 text-red-400" /></div>
@@ -3785,7 +3808,7 @@ export default function DashboardPage() {
             <p className="mx-auto max-w-3xl rounded-lg border border-slate-800 bg-slate-900/40 px-4 py-2.5 text-[11px] leading-relaxed text-slate-500">
               Ask Albert provides Bitcoin market analysis, probability-based forecasts and educational information. It does not provide personalised financial advice or guarantee future outcomes.
             </p>
-            <p className="text-xs text-slate-600">Ask Albert — Bitcoin Market Analysis · powered by CryptoCentAI · CryptoMarkAI forecast engine · real data via {d.data_source}</p>
+            <p className="text-xs text-slate-600">Ask Albert — Bitcoin Market Analysis · powered by CryptoCentAI · CryptoMarkAI forecast engine · real data via {d?.data_source || 'public market feeds'}</p>
             <div className="flex justify-center"><PublishStamp publishedAt={d?.created_at} /></div>
           </footer>
         </div>

@@ -35,11 +35,11 @@ getcontext().prec = 34
 # --- precision / rounding rules ------------------------------------------------
 CASH_Q = Decimal('0.01')          # money quantised to cents (ROUND_HALF_UP)
 PRICE_Q = Decimal('0.01')         # BTC/USD price tick
-QTY_Q = Decimal('0.00000001')     # 8dp (satoshi) — buys/sells ROUND_DOWN (never over-fill)
+QTY_Q = Decimal('0.000000000001')  # fractional simulated units; never an exchange step
 PCT_Q = Decimal('0.01')
 MIN_NOTIONAL = Decimal('10')      # minimum simulated order notional
 
-SUPPORTED_ENGINE_VERSIONS = {'albert-decide-v2', 'albert-decide-v3'}
+SUPPORTED_ENGINE_VERSIONS = {'albert-decide-v2', 'albert-decide-v3', 'albert-decide-v4'}
 DECISION_TTL_MIN = 30
 PROPOSAL_TTL_MIN = 30
 
@@ -106,27 +106,11 @@ def qty_dstr(x):
 
 
 def round_tick(value, tick, mode=ROUND_DOWN):
-    """An exchange tick may be 0.05, not just a decimal-place quantum."""
+    """Conservative fractional-paper rounding, never an exchange order rule."""
     v, q = D(value), D(tick)
-    if v is None or q is None or q <= 0:
+    if v is None or q is None or not v.is_finite() or not q.is_finite() or q <= 0:
         return None
     return (v / q).to_integral_value(rounding=mode) * q
-
-
-def execution_limits(qty, fill_px, profile):
-    """Fail closed when a simulated paper fill violates actual provider limits."""
-    if not profile.get('executionVerified'):
-        return 'EXECUTION_MARKET_UNVERIFIED'
-    cost = qty * fill_px
-    for key, val in [('minAmount', qty), ('minCost', cost), ('minPrice', fill_px)]:
-        lower = D(profile.get(key))
-        if lower is not None and val < lower:
-            return key.upper() + '_NOT_MET'
-    for key, val in [('maxAmount', qty), ('maxCost', cost), ('maxPrice', fill_px)]:
-        upper = D(profile.get(key))
-        if upper is not None and val > upper:
-            return key.upper() + '_EXCEEDED'
-    return None
 
 
 def sim_fill(side, ref_px, notional):
@@ -163,18 +147,15 @@ def size_buy(asset, notional, mark_px, *, profile=None, price_q=PRICE_Q):
     the exact notional into a conservative fill/fee/qty. Never enlarges notional."""
     profile = profile or EXEC_PROFILE
     notional = q_cash(notional)
-    if notional is None or notional <= 0:
+    mark = D(mark_px)
+    if notional is None or not notional.is_finite() or notional <= 0:
         return {'reject': 'BELOW_MIN_NOTIONAL', 'trace': []}
-    if not profile.get('executionVerified') and profile is not EXEC_PROFILE:
-        return {'reject': 'EXECUTION_MARKET_UNVERIFIED', 'trace': []}
-    fill_px, fee = sim_fill_p('BUY', mark_px, notional, profile, price_q)
+    if mark is None or not mark.is_finite() or mark <= 0:
+        return {'reject': 'NO_VALID_MARK', 'trace': []}
+    fill_px, fee = sim_fill_p('BUY', mark, notional, profile, price_q)
     qty = round_tick((notional - fee) / fill_px, profile.get('qtyQ') or QTY_Q) if fill_px and fill_px > 0 else None
-    if qty is None or qty <= 0:
+    if qty is None or not qty.is_finite() or qty <= 0:
         return {'reject': 'BELOW_MIN_NOTIONAL', 'trace': []}
-    if profile.get('executionVerified'):
-        blocked = execution_limits(qty, fill_px, profile)
-        if blocked:
-            return {'reject': blocked, 'trace': []}
     return {'reject': None, 'trace': [], 'side': 'BUY', 'asset': (asset or '').upper(),
             'notional': notional, 'fillPx': fill_px, 'fee': fee, 'qty': qty}
 
@@ -182,19 +163,16 @@ def size_buy(asset, notional, mark_px, *, profile=None, price_q=PRICE_Q):
 def size_sell(asset, qty, mark_px, *, profile=None, price_q=PRICE_Q):
     """Build a reduce-only SELL sizing dict for an exact quantity (M5)."""
     profile = profile or EXEC_PROFILE
-    if not profile.get('executionVerified') and profile is not EXEC_PROFILE:
-        return {'reject': 'EXECUTION_MARKET_UNVERIFIED', 'trace': []}
+    mark = D(mark_px)
+    if mark is None or not mark.is_finite() or mark <= 0:
+        return {'reject': 'INVALID_EXIT_PRICE', 'trace': []}
     qty = round_tick(qty, profile.get('qtyQ') or QTY_Q)
-    if qty is None or qty <= 0:
+    if qty is None or not qty.is_finite() or qty <= 0:
         return {'reject': 'BELOW_MIN_NOTIONAL', 'trace': []}
-    gross = qty * D(mark_px)
-    fill_px, fee = sim_fill_p('SELL', mark_px, gross, profile, price_q)
+    gross = qty * mark
+    fill_px, fee = sim_fill_p('SELL', mark, gross, profile, price_q)
     if fill_px is None or fill_px <= 0:
         return {'reject': 'INVALID_EXIT_PRICE', 'trace': []}
-    if profile.get('executionVerified'):
-        blocked = execution_limits(qty, fill_px, profile)
-        if blocked:
-            return {'reject': blocked, 'trace': []}
     return {'reject': None, 'trace': [], 'side': 'SELL', 'asset': (asset or '').upper(),
             'qty': qty, 'fillPx': fill_px, 'fee': fee}
 

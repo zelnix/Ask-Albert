@@ -5,7 +5,7 @@ universe should bump ALBERT_ENGINE_VERSION so that immutable decision snapshots
 remain reproducible.
 """
 
-ALBERT_ENGINE_VERSION = 'albert-decide-v3'  # v3: ID-bound closed daily data and frozen verified-entry universe
+ALBERT_ENGINE_VERSION = 'albert-decide-v4'  # v4: simulation-only source-neutral marks, 200d trend, optional 1y high
 
 # Regime-sensitive BUY entry thresholds (opportunity score must be >= this).
 REGIME_BUY_THRESHOLD = {'BULL': 72, 'RANGE': 78, 'BEAR': 85}

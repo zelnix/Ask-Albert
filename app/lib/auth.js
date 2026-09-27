@@ -4,12 +4,22 @@
 import { API_BASE } from './api';
 
 export async function fetchMe() {
+  // Do not leave the entire app on "Waking Albert" if the preview/backend stalls.
+  // A transient outage is different from a confirmed signed-out session.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
   try {
-    const r = await fetch(`${API_BASE}/auth/me`, { credentials: 'include', cache: 'no-store' });
-    if (!r.ok) return null;
+    const r = await fetch(`${API_BASE}/auth/me`, {
+      credentials: 'include', cache: 'no-store', signal: controller.signal,
+    });
+    if (r.status === 401 || r.status === 403) return null;
+    if (!r.ok) throw new Error('Session check unavailable');
     const d = await r.json();
-    return d && d.id ? d : null;
-  } catch (e) { return null; }
+    if (!d?.id) throw new Error('Invalid session response');
+    return d;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export async function getAuthConfig() {

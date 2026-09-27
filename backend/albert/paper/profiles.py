@@ -128,27 +128,29 @@ _PRICE_Q_OVERRIDE = {
 }
 
 
-def asset_profile(symbol, rank=None, tier=None, market=None):
-    """Conservative fees/spread/slippage/limits PLUS observed provider precision.
-    A tier alone cannot certify market execution; workers require a verified
-    public-market observation for either a BUY or an exit fill.
+def asset_profile(symbol, rank=None, tier=None, market=None, mark_price=None):
+    """Paper-only fractional precision and disclosed cost assumptions.
+
+    Venue fees/limits/permissions are NOT part of simulated eligibility. A fill
+    still requires a real, fresh market mark supplied separately by the caller.
     """
     sym = (symbol or '').upper()
     tier = tier or cap_tier(sym, rank)
     prof = dict(_TIER_EXEC[tier])
     if sym in _PRICE_Q_OVERRIDE:
         prof['priceQ'] = _PRICE_Q_OVERRIDE[sym]
-    prof['executionVerified'] = bool(market and market.get('limitsVerified'))
+    observed = market or {}
+    prof['simulationReady'] = bool(observed.get('simulationReady') or mark_price)
+    prof['qtyQ'] = Decimal('0.000000000001')
+    if observed.get('priceQ'):
+        prof['priceQ'] = Decimal(str(observed['priceQ']))
+    elif mark_price:
+        mark = Decimal(str(mark_price))
+        if mark.is_finite() and mark > 0:
+            prof['priceQ'] = Decimal(1).scaleb(mark.adjusted() - 11)
     prof['costNature'] = 'PAPER_SIMULATION_ASSUMPTION'
-    prof['providerTakerFeeBps'] = market.get('takerFeeBps') if market else None
-    prof['providerObservedSpreadBps'] = market.get('observedSpreadBps') if market else None
-    if prof['executionVerified']:
-        prof['priceQ'] = Decimal(market['priceQ'])
-        prof['qtyQ'] = max(Decimal('0.00000001'), Decimal(market['qtyQ']))
-        prof['feeBps'] = max(prof['feeBps'], Decimal(market.get('takerFeeBps') or '0'))
-        prof['spreadBps'] = max(prof['spreadBps'], Decimal(market.get('observedSpreadBps') or '0'))
-        for key in ('minAmount', 'maxAmount', 'minCost', 'maxCost', 'minPrice', 'maxPrice'):
-            prof[key] = Decimal(market[key]) if market.get(key) is not None else None
+    prof['providerTakerFeeBps'] = None
+    prof['providerObservedSpreadBps'] = None
     prof['tier'] = tier
     prof['symbol'] = sym
     prof['model'] = 'conservative_%s' % tier.lower()
