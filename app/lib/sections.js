@@ -2,12 +2,18 @@ import {
   LayoutDashboard, Target, Scale, BarChart3, Globe, History, Waves, Fish, Landmark,
   Gauge, Newspaper, ShieldAlert, CalendarClock, Trophy, MessageCircle, Bell, Activity,
   Database, Cpu, ShieldCheck, Sparkles, CandlestickChart, ClipboardList, Info, Crosshair, Radar, Users, Stethoscope, FlaskConical,
-  Home, Wrench,
+  Home, Wrench, GitBranch, Microscope,
 } from 'lucide-react';
 
 const SECTIONS = [
-  { id: 'briefing', label: 'Albert\u2019s Morning Brief', icon: Sparkles,
-    blurb: 'Your one-screen executive briefing: market bias, price, Albert’s read, the levels that matter, live sentiment and the decision engine — each card drills into the full analysis.' },
+  { id: 'briefing', label: 'Albert’s Morning Brief', icon: Sparkles,
+    blurb: 'The full, evidence-linked market and portfolio brief behind the one-screen dashboard.' },
+  { id: 'scenarios', label: 'BTC Scenarios', icon: GitBranch,
+    blurb: 'Observed history, conditional bull/bear outcomes, walk-forward validation and the underlying research. Historical ranges are not forecasts.' },
+  { id: 'scenario-evaluation', label: 'Scenario Evaluation', icon: Microscope,
+    blurb: 'Walk-forward report card for the scenario provider: checked outcomes, predictive skill versus no change, and calibration.' },
+  { id: 'opportunities', label: 'Opportunity Research', icon: Radar,
+    blurb: 'Falsifiable research findings with confirmation and invalidation, not trading proposals or fills.' },
   { id: 'ask', label: 'Ask Albert', icon: MessageCircle,
     blurb: 'Chat with Albert, Ask Albert’s HuCentAI Quant Analyst, in plain English — "Why did the score fall?", "What could move Bitcoin next?" — grounded strictly in the live dashboard numbers. He never invents data.' },
   { id: 'strategies', label: 'Trading Strategies', icon: Crosshair,
@@ -107,9 +113,9 @@ const PRIMARY_NAV = [
 // More → Technical Centre categories (spec §9.1). Every existing screen is
 // preserved here — nothing is deleted, only reorganised for advanced users.
 const TECH_GROUPS = [
-  { label: 'Market Intelligence', ids: ['briefing', 'overview', 'forecasts', 'market-intel', 'drivers', 'crossmarket', 'analogs', 'news', 'macro'] },
+  { label: 'Market Intelligence', ids: ['briefing', 'scenarios', 'scenario-evaluation', 'overview', 'forecasts', 'market-intel', 'drivers', 'crossmarket', 'analogs', 'news', 'macro'] },
   { label: 'Portfolio & Risk', ids: ['risk', 'leverage', 'events', 'smartmoney'] },
-  { label: 'Trading Evidence', ids: ['performance', 'paperengine', 'alert-engine'] },
+  { label: 'Trading Evidence', ids: ['opportunities', 'performance', 'paperengine', 'alert-engine'] },
   { label: 'On-chain & Flows', ids: ['whales', 'institutional', 'network', 'timemachine'] },
   { label: 'Data Trust', ids: ['dataaudit', 'alerts'] },
   { label: 'System', ids: ['admin', 'checkup', 'settings'] },
@@ -118,7 +124,7 @@ const TECH_GROUPS = [
 const PRIMARY_IDS = PRIMARY_NAV.map(s => s.id);
 
 // Sections that are Bitcoin-specific and hidden from the nav when an altcoin is selected.
-const BTC_ONLY_SECTIONS = ['smartmoney', 'whales', 'macro', 'events', 'timemachine', 'leverage', 'network', 'dataaudit', 'admin', 'drivers'];
+const BTC_ONLY_SECTIONS = ['smartmoney', 'whales', 'macro', 'events', 'timemachine', 'leverage', 'network', 'dataaudit', 'admin', 'drivers', 'scenarios', 'scenario-evaluation', 'opportunities'];
 // Sections removed from the app entirely (superseded by the global coin picker).
 const REMOVED_SECTIONS = ['compare'];
 

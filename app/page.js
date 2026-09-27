@@ -48,6 +48,10 @@ import MarketDrivers from './components/MarketDrivers';
 import DiagnosticsCheckup from './components/DiagnosticsCheckup';
 import PaperTradingBot from './components/PaperTradingBot';
 import AlbertHome from './components/AlbertHome';
+import OneScreenHome, { HomeTicker } from './components/one-screen/OneScreenHome';
+import GlobalMenu from './components/one-screen/GlobalMenu';
+import useOneScreenData from './components/one-screen/useOneScreenData';
+import { ScenarioEvaluation, OpportunityResearch } from './components/one-screen/DetailScreens';
 import AskAlbert from './components/AskAlbert';
 import StrategyStudio from './components/StrategyStudio';
 import PaperEngineTechnical from './components/PaperEngineTechnical';
@@ -3223,9 +3227,7 @@ export default function DashboardPage() {
   const [ticker, setTicker] = useState(__tickerCache);
   const [active, setActive] = useState('home');
   const [homeParams, setHomeParams] = useState({ horizon: '7D', focus: null, mdHorizon: 'SWING' });
-  const [moreOpen, setMoreOpen] = useState(false);
   const skipUrlPush = React.useRef(false);
-  React.useEffect(() => { if (!PRIMARY_IDS.includes(active)) setMoreOpen(true); }, [active]);
   const [chatStrategy, setChatStrategy] = useState(null); // {draft, symbol} — from "Save as strategy" in chat
   const [chatStrategyBuilding, setChatStrategyBuilding] = useState(false);
   const [showReport, setShowReport] = useState(false);
@@ -3249,6 +3251,17 @@ export default function DashboardPage() {
     });
     return () => { alive = false; };
   }, []);
+  // One owner-scoped read set feeds the entire Home, including its global ticker.
+  // Keep it mounted on evaluation/research deep links so Back restores the snapshot.
+  const oneScreen = useOneScreenData(!!authUser && ['home', 'scenario-evaluation', 'opportunities'].includes(active));
+  const navigate = useCallback((id) => {
+    if (id === 'home') setSymbol('BTC');
+    setActive(id);
+    if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'instant' });
+  }, []);
+  // Home is intentionally the BTC-specific dashboard; retain altcoin deep links
+  // everywhere else, including browser Back/Forward.
+  useEffect(() => { if (active === 'home' && symbol !== 'BTC') setSymbol('BTC'); }, [active, symbol]);
   // Trader Home: no blocking post-sign-in modals. Users land directly on the
   // briefing; the Welcome/Weekly recaps are available inline (WeeklyBriefCard).
   const handleSignOut = React.useCallback(async () => {
@@ -3633,7 +3646,10 @@ export default function DashboardPage() {
   const activeSection = sec(active);
   const visibleSections = SECTIONS.filter((s) => !REMOVED_SECTIONS.includes(s.id) && (symbol === 'BTC' || !BTC_ONLY_SECTIONS.includes(s.id)));
   const renderSection = () => {
-    if (active === 'home') return <AlbertHome onNav={setActive} />;
+    if (active === 'home') return <OneScreenHome d={d} ticker={ticker} news={news} newsStatus={newsStatus} snapshot={oneScreen} onNav={navigate} />;
+    if (active === 'scenarios') return <AlbertHome onNav={navigate} />;
+    if (active === 'scenario-evaluation') return <ScenarioEvaluation snapshot={oneScreen} levels={d?.created_at && (Date.now() - new Date(d.created_at).getTime() < 72 * 3600000) ? d?.chart?.sr_levels : []} onNav={navigate} />;
+    if (active === 'opportunities') return <OpportunityResearch snapshot={oneScreen} onNav={navigate} />;
     if (active === 'briefing') return <ExecutiveSummary d={d} ticker={ticker} news={news} onNav={setActive} homeParams={homeParams} setHomeParams={setHomeParams} />;
     if (active === 'overview') return <OverviewSection d={d} ticker={ticker} />;
     if (active === 'forecasts') return <ForecastsHubSection d={d} />;
@@ -3693,106 +3709,25 @@ export default function DashboardPage() {
       {compareOpen && symbol !== 'BTC' && d && (
         <CompareOverlay coinData={d} coinSymbol={symbol} coinName={(coins.find((c) => c.symbol === symbol) || {}).name || symbol} onClose={() => setCompareOpen(false)} />
       )}
-      <div className="relative flex">
-        {/* Sidebar */}
-        <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-slate-800/80 bg-slate-900/40 p-4 backdrop-blur-sm md:flex">
-          <div className="mb-6 flex flex-col items-center gap-1 px-1">
-            <img src="/ask-albert-logo.png" alt="Ask Albert" className="h-24 w-auto object-contain" />
-            <p className="bg-gradient-to-r from-amber-300 via-yellow-400 to-amber-500 bg-clip-text text-center text-[12px] font-bold uppercase tracking-[0.18em] text-transparent drop-shadow-[0_1px_1px_rgba(0,0,0,0.4)]">Hucentai Crypto IQ</p>
-            <PublishStamp className="pl-0.5" />
-            <EnvBadge />
-          </div>
-          <nav className="flex-1 space-y-1 overflow-y-auto pr-0.5">
-            {/* Primary Albert-first destinations */}
-            {PRIMARY_NAV.map((s) => {
-              const Icon = s.icon;
-              const on = active === s.id;
-              return (
-                <button key={s.id} onClick={() => setActive(s.id)}
-                  className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors ${on ? 'bg-gradient-to-r from-sky-500/20 via-violet-500/12 to-transparent font-semibold text-white ring-1 ring-sky-500/25' : 'text-slate-300 hover:bg-slate-800/60 hover:text-white'}`}>
-                  <Icon className="h-4 w-4" />{s.label}
-                </button>
-              );
-            })}
-
-            {/* More → Technical Centre (advanced; preserves every engine screen) */}
-            <div className="pt-2">
-              <button onClick={() => setMoreOpen((o) => !o)}
-                className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors ${!PRIMARY_IDS.includes(active) ? 'font-semibold text-white' : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'}`}>
-                <SlidersHorizontal className="h-4 w-4" />More
-                <ChevronDown className={`ml-auto h-4 w-4 transition-transform ${moreOpen ? 'rotate-180' : ''}`} />
-              </button>
-              {moreOpen && (
-                <div className="mt-1 space-y-3 border-l border-slate-800/70 pl-2">
-                  <p className="px-2 text-[10px] font-semibold uppercase tracking-wider text-slate-600">Technical Centre</p>
-                  {TECH_GROUPS.map((g) => {
-                    const ids = g.ids.filter((id) => !REMOVED_SECTIONS.includes(id) && (symbol === 'BTC' || !BTC_ONLY_SECTIONS.includes(id)));
-                    if (!ids.length) return null;
-                    return (
-                      <div key={g.label}>
-                        <p className="px-2 pb-1 text-[10px] font-medium uppercase tracking-wider text-slate-500">{g.label}</p>
-                        {ids.map((id) => {
-                          const meta = sec(id);
-                          const Icon = meta.icon || Info;
-                          const on = active === id;
-                          const navUnread = id === 'alerts' ? ((notif && notif.unseen) || 0) : 0;
-                          return (
-                            <button key={id} onClick={() => setActive(id)}
-                              className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[13px] transition-colors ${on ? 'bg-slate-800/70 font-semibold text-white' : 'text-slate-400 hover:bg-slate-800/50 hover:text-slate-200'}`}>
-                              <Icon className="h-3.5 w-3.5" />{meta.label}
-                              {navUnread > 0 && <span className="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-bold text-white">{navUnread > 9 ? '9+' : navUnread}</span>}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </nav>
-          <div className="mt-4 rounded-lg border border-slate-800 bg-slate-950/50 p-3">
-            <div className="flex items-center justify-between"><span className="text-[10px] uppercase text-slate-500">Quant Score</span><span className="text-[10px] text-slate-500">{d.data_source}</span></div>
-            <div className="mt-1 flex items-center gap-2"><span className="text-2xl font-black" style={{ color: scoreColor(d.quant_score) }}>{d.quant_score}</span><span className="text-xs text-slate-400">{d.quant_label}</span></div>
-          </div>
-          <a href="https://askalbert.app" target="_blank" rel="noopener noreferrer" className="mt-3 flex items-center justify-center gap-1 text-[11px] font-semibold text-slate-500 transition-colors hover:text-sky-300">
-            <Globe className="h-3 w-3" />askalbert.app
-          </a>
-        </aside>
-
-        {/* Main */}
-        <div className="min-w-0 flex-1">
-          {/* Top bar */}
-          <div className="sticky top-0 z-10 flex min-w-0 flex-wrap items-center justify-between gap-3 border-b border-slate-800 bg-slate-950/80 px-4 py-3 backdrop-blur md:px-8">
-            <div className="flex items-center gap-2 md:hidden"><img src="/ask-albert-logo.png" alt="Ask Albert" className="h-9 w-auto object-contain" /></div>
-            <CoinPicker coins={coins} symbol={symbol} onSelect={setSymbol} />
-            {symbol !== 'BTC' && (
-              <button onClick={() => setCompareOpen(true)} title="Overlay this coin vs Bitcoin"
-                className="flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-slate-200 transition-colors hover:border-sky-500/50 hover:text-sky-200">
-                <Scale className="h-4 w-4" /><span className="hidden sm:inline">vs Bitcoin</span>
-              </button>
-            )}
-            <div className="order-last hidden min-w-0 w-full flex-wrap items-center gap-2 border-t border-slate-800/60 pt-2 md:flex xl:order-none xl:w-auto xl:border-0 xl:pt-0">
-              <span className="flex items-center gap-1 text-xs font-bold text-emerald-400">
-                <span className="relative flex h-2 w-2"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" /><span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" /></span>LIVE
-              </span>
-              <span className="text-lg font-bold text-white">{fmtUsd(ticker?.price ?? d.last_close)}</span>
-              {ticker?.price_aud && <span className="rounded-md bg-amber-500/10 px-1.5 py-0.5 text-xs font-semibold text-amber-300 ring-1 ring-amber-500/20">≈ {fmtAud(ticker.price_aud)}</span>}
-              <span className={`text-sm font-semibold ${(ticker?.change24h ?? d.day_change_pct) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{ticker?.change24h ?? d.day_change_pct}%</span>
-            </div>
-            <NotificationBell alertsData={notif} onAck={ackNotif} onViewAll={() => setActive('alerts')} onNavSection={(s) => setActive(s || 'strategies')} onOpenBrief={(sym) => { const s = (sym || 'BTC').toUpperCase(); if (s !== symbol) setSymbol(s); setActive('briefing'); }} />
-            <Button onClick={() => setWelcomeOpen(true)} size="sm" variant="outline" title="Re-open today's Welcome Brief"
-              className="gap-1.5 border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800">
-              <Sparkles className="h-4 w-4 text-sky-300" /><span className="hidden sm:inline">Brief</span>
-            </Button>
-            <Button onClick={() => setShowReport(true)} size="sm" variant="outline" title="Shareable daily report"
-              className="gap-1.5 border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800">
-              <ClipboardList className="h-4 w-4" /><span className="hidden sm:inline">Report</span>
-            </Button>
+      <div className="relative">
+        {/* Every screen shares the same global hamburger menu and header. */}
+        <div className="min-w-0">
+          {/* One global header: a shared menu on Home and every detail screen. */}
+          <header className="sticky top-0 z-30 flex min-w-0 flex-wrap items-center gap-2 border-b border-slate-800 bg-slate-950/95 px-3 py-2 md:px-4">
+            <GlobalMenu active={active} symbol={symbol} onNav={navigate} unread={notif?.unseen || 0} onReport={() => setShowReport(true)} onRefresh={handleRefresh} />
+            <a href="/?section=home" onClick={(e) => { e.preventDefault(); navigate('home'); }} aria-label="Ask Albert Home" className="flex shrink-0 items-center gap-1 rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400">
+              <img src="/ask-albert-logo.png" alt="" className="h-9 w-auto max-w-[90px] object-contain" /><span className="hidden text-xs font-bold text-amber-300 sm:inline">Ask Albert</span>
+            </a>
+            <div className="hidden shrink-0 sm:block"><PublishStamp publishedAt={d?.created_at} compact /></div>
+            {active === 'home' ? <HomeTicker d={d} ticker={ticker} snapshot={oneScreen} onNav={navigate} /> : <div className="flex min-w-0 flex-1 items-center gap-2">
+              <CoinPicker coins={coins} symbol={symbol} onSelect={setSymbol} />
+              {symbol !== 'BTC' && <button type="button" onClick={() => setCompareOpen(true)} title="Overlay this coin vs Bitcoin" className="flex items-center gap-1.5 rounded-md border border-slate-700 bg-slate-900 px-2 py-1.5 text-xs font-semibold text-slate-200 hover:border-sky-500/50"><Scale className="h-4 w-4" /><span className="hidden sm:inline">vs Bitcoin</span></button>}
+              <span className="hidden truncate text-sm font-semibold text-white lg:inline">{ticker?.price ? `${fmtUsd(ticker.price)} · ${ticker.change24h ?? '—'}%` : 'Quote unavailable'}</span>
+            </div>}
+            <NotificationBell alertsData={notif} onAck={ackNotif} onViewAll={() => navigate('alerts')} onNavSection={(s) => navigate(s || 'strategies')} onOpenBrief={(sym) => { const s = (sym || 'BTC').toUpperCase(); if (s !== symbol) setSymbol(s); navigate('briefing'); }} />
+            {active !== 'home' && <Button onClick={() => setShowReport(true)} size="sm" variant="outline" title="Shareable daily report" className="hidden gap-1.5 border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800 sm:inline-flex"><ClipboardList className="h-4 w-4" /><span className="hidden lg:inline">Report</span></Button>}
             <div className="relative">
-              <Button onClick={handleRefresh} disabled={refreshing} size="sm" className="gap-2 bg-gradient-to-r from-sky-500 to-violet-600 text-white shadow-lg shadow-violet-500/20 hover:from-sky-400 hover:to-violet-500">
-                <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />{refreshing ? 'Retraining' : 'Retrain'}
-              </Button>
+              {active !== 'home' && <Button onClick={handleRefresh} disabled={refreshing} size="sm" className="hidden gap-1.5 bg-sky-600 text-white hover:bg-sky-500 sm:inline-flex"><RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} /><span className="hidden lg:inline">{refreshing ? 'Retraining' : 'Retrain'}</span></Button>}
               {passPrompt && (
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setPassPrompt(false)} />
@@ -3843,34 +3778,20 @@ export default function DashboardPage() {
               )}
             </div>
             <AccountMenu user={authUser} onSignOut={handleSignOut} />
+          </header>
 
-          </div>
-
-          {/* Mobile nav (narrow-screen fallback — desktop/tablet is the reference layout) */}
-          <div className="flex gap-1 overflow-x-auto border-b border-slate-800 px-3 py-2 md:hidden">
-            {PRIMARY_NAV.map((s) => (
-              <button key={s.id} onClick={() => setActive(s.id)} className={`whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold ${active === s.id ? 'bg-sky-500/15 text-sky-300' : 'text-slate-300'}`}>{s.label}</button>
-            ))}
-            <span className="mx-1 self-center text-slate-700">|</span>
-            {TECH_GROUPS.flatMap((g) => g.ids)
-              .filter((id) => !REMOVED_SECTIONS.includes(id) && (symbol === 'BTC' || !BTC_ONLY_SECTIONS.includes(id)))
-              .map((id) => (
-                <button key={id} onClick={() => setActive(id)} className={`whitespace-nowrap rounded-lg px-3 py-1.5 text-xs ${active === id ? 'bg-sky-500/15 font-semibold text-sky-300' : 'text-slate-400'}`}>{sec(id).label}</button>
-              ))}
-          </div>
-
-          <main className="mx-auto max-w-6xl px-4 py-6 md:px-8"><ErrorBoundary label={activeSection?.label || active} resetKey={active}>{renderSection()}</ErrorBoundary></main>
+          <main className={`mx-auto ${active === 'home' ? 'max-w-[1920px] px-3 py-3 md:px-4' : 'max-w-6xl px-4 py-6 md:px-8'}`}><ErrorBoundary label={activeSection?.label || active} resetKey={active}>{renderSection()}</ErrorBoundary></main>
           <footer className="space-y-2 px-4 pb-8 text-center md:px-8">
             <p className="mx-auto max-w-3xl rounded-lg border border-slate-800 bg-slate-900/40 px-4 py-2.5 text-[11px] leading-relaxed text-slate-500">
               Ask Albert provides Bitcoin market analysis, probability-based forecasts and educational information. It does not provide personalised financial advice or guarantee future outcomes.
             </p>
             <p className="text-xs text-slate-600">Ask Albert — Bitcoin Market Analysis · powered by CryptoCentAI · CryptoMarkAI forecast engine · real data via {d.data_source}</p>
-            <div className="flex justify-center"><PublishStamp /></div>
+            <div className="flex justify-center"><PublishStamp publishedAt={d?.created_at} /></div>
           </footer>
         </div>
       </div>
     </div>
-    <FloatingAlbert active={active} symbol={symbol} onExpand={() => setActive('ask')} />
+    {active !== 'home' && <FloatingAlbert active={active} symbol={symbol} onExpand={() => navigate('ask')} />}
     <WallAlertToaster />
     {showReport && <DailyReportModal d={d} onClose={() => setShowReport(false)} />}
     </SymbolContext.Provider>

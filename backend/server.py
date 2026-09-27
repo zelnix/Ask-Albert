@@ -8210,7 +8210,9 @@ def _paper_dashboard_payload(a):
             'deployed': {'pct': _pct(pe['positionValueTotal']), 'limitPct': str(_band['maxDeployPct'])},
             'btc': {'pct': _pct(btc_val), 'limitPct': str(_prof['btcAllocPct'])},
             'altcoins': {'pct': _pct(pe['altcoinValueTotal']), 'limitPct': str(_band['altCeilingPct'])},
-            'openRisk': {'pct': _pct(pe['openRiskUsd']), 'limitPct': str(_prof['maxCombinedOpenRiskPct'])},
+            'openRisk': {'pct': _pct(pe['openRiskUsd']), 'usd': _s(pe['openRiskUsd']),
+                         'limitPct': str(_prof['maxCombinedOpenRiskPct']),
+                         'limitUsd': _s(_equity * _prof['maxCombinedOpenRiskPct'] / Decimal('100')) if _equity is not None else None},
             'positions': {'count': pe['openPositionsCount'], 'limit': _prof['maxConcurrentPositions']},
             'protectedUsdc': _s(_protected), 'freeUsdc': _s(pe['deployableCash']),
             'regimeDeployCeilingPct': str(_band['maxDeployPct'])}
@@ -12013,9 +12015,10 @@ def paper_overview(user: dict = Depends(get_current_user)):
     REVIEW surface only — there is no setup here; strategies are started from the
     strategy itself."""
     pid = owner_pid(user)
-    strategies, positions, approvals, activity = [], [], [], []
+    strategies, positions, approvals, activity, recent_fills = [], [], [], [], []
     tot_value = Decimal('0'); tot_start = Decimal('0')
-    value_known = True; wallets = 0
+    tot_cash = Decimal('0'); tot_risk = Decimal('0'); tot_risk_limit = Decimal('0')
+    value_known = True; cash_known = True; risk_known = True; wallets = 0
     realized = Decimal('0'); fees = Decimal('0')
     closed_trades = 0; wins = 0
     for doc in strategy_contracts_col.find({'ownerId': pid, 'latest': True}).sort('updatedAt', -1):
@@ -12040,6 +12043,19 @@ def paper_overview(user: dict = Depends(get_current_user)):
                 value_known = False
             else:
                 tot_value += v
+            cash = _paper_core.D(eq.get('cash'))
+            if cash is None:
+                cash_known = False
+            else:
+                tot_cash += cash
+            allocation_risk = (d.get('allocation') or {}).get('openRisk') or {}
+            risk_usd = _paper_core.D(allocation_risk.get('usd'))
+            limit_usd = _paper_core.D(allocation_risk.get('limitUsd'))
+            if risk_usd is None or limit_usd is None or v is None:
+                risk_known = False
+            else:
+                tot_risk += risk_usd
+                tot_risk_limit += limit_usd
             realized += (_paper_core.D(eq.get('realizedPnl')) or Decimal('0'))
             fees += (_paper_core.D(eq.get('fees')) or Decimal('0'))
             closed_trades += int(perf.get('closedTrades') or 0)
@@ -12061,8 +12077,15 @@ def paper_overview(user: dict = Depends(get_current_user)):
             positions += [{**p, **tag} for p in (d.get('positions') or [])]
             approvals += [{**p, **tag} for p in (d.get('pendingProposals') or [])]
             activity += [{**e, **tag} for e in (d.get('recentActivity') or [])]
+            # The activity feed is capped at 20 per wallet. Query the owner's
+            # canonical ledger for fills independently so non-economic pause/
+            # resume events never hide the two latest actual executions.
+            recent_fills += [{**e, **tag} for e in (acct.get('ledger') or [])
+                             if e.get('eventType') == 'FILL' and e.get('side') in ('BUY', 'SELL')
+                             and not e.get('nonEconomic')]
         strategies.append(row)
     activity.sort(key=lambda e: e.get('recordedAt') or e.get('effectiveAt') or '', reverse=True)
+    recent_fills.sort(key=lambda e: e.get('recordedAt') or e.get('effectiveAt') or '', reverse=True)
     live = [s for s in strategies if s.get('paperStatus') == 'LIVE']
     totals = {'wallets': wallets, 'liveStrategies': len(live),
               'savedStrategies': len([s for s in strategies if s.get('paperStatus') == 'SAVED']),
@@ -12079,10 +12102,22 @@ def paper_overview(user: dict = Depends(get_current_user)):
               'winRatePct': round(wins / closed_trades * 100, 1) if closed_trades else None,
               'openPositions': len(positions), 'pendingApprovals': len(approvals),
               'autopilotStrategies': len([s for s in live if s.get('approvalMode') == 'AUTOPILOT'])}
+    combined_usable = bool(wallets and value_known and tot_value > 0)
+    cash_usable = bool(combined_usable and cash_known)
+    risk_usable = bool(combined_usable and risk_known)
     return {'status': 'ready', 'paperOnly': True,
             'asOf': datetime.datetime.utcnow().isoformat(),
             'strategies': strategies, 'totals': totals, 'positions': positions,
-            'pendingApprovals': approvals, 'activity': activity[:25]}
+            'cashAvailable': cash_usable,
+            'cashTotal': _paper_core.dstr(tot_cash) if cash_usable else None,
+            'cashPct': _paper_core.dstr(tot_cash / tot_value * Decimal('100'), _paper_core.PCT_Q) if cash_usable else None,
+            'openRiskAvailable': risk_usable,
+            'openRiskUsd': _paper_core.dstr(tot_risk) if risk_usable else None,
+            'openRiskPct': _paper_core.dstr(tot_risk / tot_value * Decimal('100'), _paper_core.PCT_Q) if risk_usable else None,
+            'openRiskLimitPct': _paper_core.dstr(tot_risk_limit / tot_value * Decimal('100'), _paper_core.PCT_Q) if risk_usable else None,
+            'openRiskLimitSource': 'paper_profile_weighted' if risk_usable else None,
+            'pendingApprovals': approvals, 'activity': activity[:25],
+            'recentFills': _paper_jsonify(recent_fills[:2])}
 
 
 @app.post('/api/v1/albert/studio/strategies/{sid}/{cmd}')
