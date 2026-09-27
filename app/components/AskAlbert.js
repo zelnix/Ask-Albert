@@ -19,6 +19,7 @@ const STARTERS = [
   'What is the market doing, and what does it mean for me?',
   'Why hasn’t anything traded recently?',
   'Show me my strategies and what would make Albert act.',
+  'Does my latest decision follow the engine’s risk rules?',
 ];
 
 // Deterministic client hint: does the message ask to CHANGE the paper account?
@@ -118,7 +119,7 @@ function ScopePanel({ sop, onNav }) {
     <div className="space-y-3">
       <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400"><Info className="h-3.5 w-3.5" />What Albert can and cannot do</p>
       <ul className="space-y-1.5 text-[12.5px] leading-relaxed text-slate-300">
-        <li className="flex gap-2"><ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" />He reads only your own paper-only state of play — never another account.</li>
+        <li className="flex gap-2"><ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" />He reads only your own paper state — never another account — and can check engine rules without showing or changing code.</li>
         <li className="flex gap-2"><ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" />He never invents a number: every figure is quoted from the engine, with evidence.</li>
         <li className="flex gap-2"><ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" />He cannot place, change or approve a trade. Anything that changes your account comes back as a card you confirm.</li>
       </ul>

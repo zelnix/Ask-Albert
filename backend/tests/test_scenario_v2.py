@@ -79,7 +79,7 @@ def _synthetic_daily_closes(start_date, n_days, base_price=50000, volatility=0.0
     If start_date is 'recent', uses today minus n_days to ensure fresh data.
     """
     import random
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timezone
     random.seed(seed)
     
     if start_date == 'recent':

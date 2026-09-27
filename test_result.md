@@ -14131,3 +14131,365 @@ agent_communication:
       • Leak audit verified: all candidate outcomes end before query index
       • v1 fallback preserved: old v1 still available when v2 fails gates
       • No frontend tests performed (user explicitly declined)
+
+# Internal engine-source checks for Ask Albert (user-requested, approval-gated tests)
+user_problem_statement: |
+  Give Ask Albert internal read-only access to all relevant trading, risk, paper,
+  execution and scenario engine logic. Users do not see raw source. Automatically
+  check engine-related decisions and support on-demand correctness questions.
+  If an implementation seems to conflict with the user's need, explain the issue,
+  suggest a fix, and prepare a plain-language change for approval. Albert never
+  edits files, runs tests/commands or claims correctness based on reading alone.
+  User explicitly requires prior approval with exact scope BEFORE invoking any
+  testing, reviewer, or support agent. No new provider or credential needed.
+backend:
+  - task: "Read-only internal engine logic retrieval for both Albert chat surfaces"
+    implemented: true
+    working: "PARTIAL"
+    file: "backend/albert/engine/code_reader.py, backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          AST-backed fixed allowlist scans core backend/albert engine, market,
+          execution, paper and repository Python modules plus named engine/scenario
+          functions/constants in backend/server.py; never client-supplied paths,
+          config/auth, env or arbitrary file access. Sensitive-code chunks are
+          skipped. Max five excerpts/5200 characters selected by question/screen;
+          code remains in server-side LLM context only. Both /api/v1/albert/ask and
+          /api/v1/chat use existing Gemini, preserve session IDs and state context,
+          expose only opaque version digest and testsRun=false (no raw code).
+          Prompts require conditional source-grounded review, plain-English mismatch
+          plus approval-ready proposed change; no code writes, command execution,
+          test claims or auto-apply. Response guard strips source echoes. No new
+          auth credential, provider, or database schema. Await explicit user
+          permission before invoking any testing agent.
+      - working: "PARTIAL"
+        agent: "testing"
+        comment: |
+          User approved two narrow pure-backend agent invocations. Final second
+          retest reports 51/51 passing, including temporary directory tests for
+          excluded code_reader/auth/config/key modules, symlink escape prevention,
+          credential-looking strings, name guards, digest invalidation, response
+          redaction and bounded excerpts. Test agent fixed missing key filenames
+          and CamelCase/plural-sensitive name pattern, then reran suite. No Gemini
+          calls, chat POSTs, preview/production DB writes, or frontend tests were
+          authorized or run. Actual model answer quality, proposal wording and
+          authenticated API flow remain unverified and require new user approval.
+frontend:
+  - task: "Engine-check starter and accurate Ask Albert scope text"
+    implemented: true
+    working: "NA"
+    file: "app/components/AskAlbert.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Added an on-demand engine-risk question starter and scope copy; no raw
+          source is displayed. Do not invoke frontend testing agent without
+          separate explicit user approval. Earlier No applied to scenario feature;
+          ask again for this feature only after backend testing if approved.
+metadata:
+  created_by: "main_agent"
+  version: "1.1"
+  test_sequence: 2
+  run_ui: false
+test_plan:
+  current_focus: []
+  stuck_tasks:
+    - "Real Gemini chat answers and authenticated POST flows require separate explicit user approval"
+    - "Frontend browser test requires separate explicit user approval"
+  test_all: false
+  test_priority: "high_first"
+agent_communication:
+  - agent: "main"
+    message: |
+      USER POLICY: Before invoking any testing, reviewer or support agent, present
+      planned checks and get explicit approval. NO AGENT MAY RUN YET.
+      Proposed backend-only scope after approval: source allowlist/secret exclusions,
+      deterministic retrieval and version digest, read-only nonengine fallback,
+      endpoint auth + session isolation, no source in response/evidence/log,
+      automatic decision/on-demand question routing, no writes/commands/patch
+      application, and AI fallback when source/LLM unavailable. Use existing
+      seeded session only and isolated data if needed. No production mutation.
+      Frontend browser test requires a separate user Yes; do not assume the prior
+      refusal applies or changed without asking.
+  - agent: "main"
+    message: |
+      USER APPROVAL RECEIVED: Option B only. Testing agent may run backend source
+      index/guard checks using pure local code, fixtures and temporary files; no
+      Gemini calls, no preview or production DB writes, no chat API POSTs (they
+      create chat/evidence rows), no third-party API response mocking, no frontend
+      browser tests and no reviewer/support agent. Check source allowlist, secret
+      exclusions, bounded selection on decision/scenario/risk and unrelated query,
+      deterministic source/version digest and invalidation with a temp local fixture,
+      safe response redaction, public testsRun:false/changeApplied:false metadata.
+      Inspect wiring of both authenticated routes statically for existing session
+      handling and no source in response; DO NOT claim the live model's wording,
+      proposal quality, auth flow or real Gemini delivery verified. A later real
+      chat check requires separate approval. Do not alter unrelated code.
+
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ PASSED comprehensive backend testing for Ask Albert internal engine-source checks.
+          ALL 41 TESTS PASSED (41/41) - pure backend index/guard tests only, NO Gemini calls,
+          NO chat API POSTs, NO DB writes, NO frontend tests (per user approval Option B).
+          
+          TEST COVERAGE:
+          ═══════════════════════════════════════════════════════════════════════════════
+          1. ✅ Source Allowlist (4 tests)
+             • Fixed allowlist groups verified: ('engine', 'paper', 'execution', 'market', 'repositories')
+             • Server.py function/constant prefixes verified (_albert_decisions, _decision_, SCENARIO_, etc.)
+             • _paths() only yields files from allowed groups (no arbitrary path access)
+             • No path/file parameter in select_engine_logic signature (user cannot supply paths)
+          
+          2. ✅ Secret Exclusions (3 tests)
+             • _SENSITIVE regex pattern matches api_key, password, credential, os.environ, MONGO_URL, etc.
+             • Sensitive content excluded from indexed chunks (verified with temp fixture)
+             • No .env, config.py, or auth files in allowlist paths
+          
+          3. ✅ Bounded Selection (5 tests)
+             • Decision/risk/paper/scenario queries recognized as engine-related
+             • Section context (forecasts, risk, paper, paperengine) triggers engine-related
+             • Unrelated queries ("weather", "joke") NOT recognized as engine-related
+             • Unrelated queries return NOT_ENGINE_RELATED status with empty context
+             • Decision queries retrieve relevant source when available
+          
+          4. ✅ Deterministic Digest & Invalidation (4 tests)
+             • _source_stamp() returns deterministic result for unchanged files
+             • Stamp includes (path, mtime_ns, size) for invalidation detection
+             • Different content produces different digest (verified with temp fixture)
+             • _index cache invalidates on stamp change (@lru_cache mechanism verified)
+          
+          5. ✅ Max Chunks & Chars Limits (4 tests)
+             • _MAX_CHUNKS = 5 (constant verified)
+             • _MAX_CHARS = 5200 (constant verified)
+             • select_engine_logic respects max chunks limit (≤5 chunks returned)
+             • select_engine_logic respects max chars limit (≤5200 chars + formatting overhead)
+          
+          6. ✅ Public Metadata Safety (4 tests)
+             • Public metadata does NOT contain raw source code (no 'text', 'excerpt', 'code' keys)
+             • Public metadata does NOT expose file paths (sourceId is opaque: engine:hash)
+             • testsRun is ALWAYS False (both available and unavailable cases)
+             • No .env/config/auth/secrets in coverage areas
+          
+          7. ✅ Response Guard Redaction (4 tests)
+             • _engine_code_safe_reply redacts fenced code blocks (```...```)
+             • _engine_code_safe_reply redacts inline code (`...`)
+             • _engine_code_safe_reply redacts file paths (backend/albert/engine/...)
+             • _engine_code_safe_reply redacts source IDs (engine:abc123...)
+          
+          8. ✅ Source Unavailable Honesty (2 tests)
+             • Honest SOURCE_UNAVAILABLE when no chunks found
+             • Honest SOURCE_UNAVAILABLE on error (graceful exception handling)
+          
+          9. ✅ Server Integration & Route Wiring (8 tests)
+             • _engine_code_public_meta returns correct structure (status, partial, testsRun, changeApplied, sourceDigest, areasInspected)
+             • _engine_code_public_meta handles unavailable source (status=SOURCE_UNAVAILABLE)
+             • _engine_code_public_meta returns None for NOT_ENGINE_RELATED queries
+             • _ask_gather includes engine_review in evidence (5-tuple return)
+             • /api/v1/albert/ask has auth dependency (user: Depends(get_current_user))
+             • /api/v1/chat has auth dependency (user: Depends(get_current_user))
+             • albert_ask response does NOT include raw source (only public engineReview)
+             • chat_endpoint response does NOT include raw source (only public engineReview)
+          
+          10. ✅ End-to-End Integration (3 tests)
+              • Decision query full flow: selection -> public meta (testsRun=False, changeApplied=False, no context in meta)
+              • Unrelated query full flow: NOT_ENGINE_RELATED -> None meta
+              • Response guard full flow: LLM response with source -> redacted output
+          
+          KEY VALIDATIONS:
+          • Fixed allowlist: Only backend/albert/{engine,paper,execution,market,repositories}/*.py + server.py allowed functions/constants ✅
+          • No arbitrary path access: User cannot supply file paths (no path parameter) ✅
+          • Secret exclusions: _SENSITIVE regex excludes api_key, password, credential, os.environ, MONGO_URL, etc. ✅
+          • Bounded selection: Decision/risk/scenario queries retrieve source; unrelated queries return NOT_ENGINE_RELATED ✅
+          • Deterministic digest: _source_stamp() includes (path, mtime_ns, size); different content = different digest ✅
+          • Max limits: ≤5 chunks, ≤5200 chars enforced ✅
+          • Public metadata: No raw source, no file paths, testsRun=False, changeApplied=False ✅
+          • Response guard: Redacts fenced/inline code, file paths, source IDs ✅
+          • Source unavailable: Honest status when no chunks or error ✅
+          • Route wiring: Both /api/v1/albert/ask and /api/v1/chat have auth dependency (Depends(get_current_user)) ✅
+          • No raw source returned: Only opaque sourceDigest and public metadata in responses ✅
+          • No raw source persisted: Evidence snapshots store only public metadata, not raw source ✅
+          
+          STATIC INSPECTION FINDINGS:
+          • /api/v1/albert/ask: Authenticated (Depends(get_current_user)), returns engineReview (public meta only), no raw source ✅
+          • /api/v1/chat: Authenticated (Depends(get_current_user)), returns engineReview (public meta only), no raw source ✅
+          • _ask_gather: Includes engine_review in 5-tuple return (ctx, evidence, used, sop, engine_review) ✅
+          • _engine_code_read: Catches exceptions, returns testsRun=False always ✅
+          • _engine_code_public_meta: Returns testsRun=False, changeApplied=False, no raw source ✅
+          • _engine_code_safe_reply: Redacts fenced/inline code, file paths, source IDs from LLM responses ✅
+          
+          TEST FILE: backend/tests/test_engine_code_reader.py (41 tests, 587 lines)
+          RUN COMMAND: cd /app/backend && python -m pytest tests/test_engine_code_reader.py -v
+          RESULTS: 41 passed, 0 failed, 7 warnings (deprecation warnings only) in 2.25s ✅
+          
+          CAVEATS (per user approval):
+          • Did NOT test actual Gemini LLM calls (no live model invocation) ⚠️
+          • Did NOT test chat API POST endpoints (they write chat/evidence to DB) ⚠️
+          • Did NOT test preview/production DB writes (pure local fixtures only) ⚠️
+          • Did NOT test third-party API response mocking ⚠️
+          • Did NOT test frontend browser behavior ⚠️
+          • Did NOT verify actual LLM response quality, proposal wording, or auth flow ⚠️
+          • Static inspection only for route wiring (did NOT call routes with real requests) ⚠️
+          
+          NO DEFECTS FOUND. All backend index/guard checks passed. The implementation correctly:
+          - Enforces fixed allowlist (no arbitrary path access)
+          - Excludes sensitive content (api_key, password, credential, os.environ, MONGO_URL)
+          - Bounds selection (decision/risk/scenario queries only; unrelated queries rejected)
+          - Provides deterministic digest (invalidates on source change)
+          - Enforces max limits (≤5 chunks, ≤5200 chars)
+          - Protects public metadata (no raw source, no file paths, testsRun=False, changeApplied=False)
+          - Redacts source from responses (fenced/inline code, file paths, source IDs)
+          - Handles unavailable source honestly (SOURCE_UNAVAILABLE status)
+          - Wires routes with auth dependency (Depends(get_current_user))
+          - Returns only public metadata (no raw source in responses or persistence)
+          
+          RECOMMENDATION: Backend index/guard implementation is production-ready. A later test
+          with real chat API calls and live Gemini responses requires separate user approval.
+
+  - agent: "testing"
+    message: |
+      ✅ BACKEND TESTING COMPLETE - ALL 41 TESTS PASSED
+      
+      Completed comprehensive backend testing for Ask Albert internal engine-source checks
+      per user approval (Option B only). Created test suite backend/tests/test_engine_code_reader.py
+      with 41 tests covering all requirements:
+      
+      ✅ Source allowlist (fixed groups, no arbitrary paths)
+      ✅ Secret exclusions (_SENSITIVE regex, no .env/config/auth)
+      ✅ Bounded selection (decision/risk/scenario queries vs unrelated)
+      ✅ Deterministic digest & invalidation (mtime/size-based)
+      ✅ Max limits (≤5 chunks, ≤5200 chars)
+      ✅ Public metadata safety (no raw source, testsRun=False, changeApplied=False)
+      ✅ Response guard redaction (fenced/inline code, file paths, source IDs)
+      ✅ Source unavailable honesty
+      ✅ Route wiring (auth dependency, no raw source returned/persisted)
+      ✅ End-to-end integration flows
+      
+      NO DEFECTS FOUND. Implementation is production-ready for backend index/guard functionality.
+      
+      CAVEATS (per user approval):
+      • Did NOT test actual Gemini LLM calls (no live model invocation)
+      • Did NOT test chat API POST endpoints (they write chat/evidence to DB)
+      • Did NOT test preview/production DB writes (pure local fixtures only)
+      • Did NOT verify actual LLM response quality, proposal wording, or auth flow
+      • Static inspection only for route wiring (did NOT call routes with real requests)
+      
+      A later test with real chat API calls and live Gemini responses requires separate user approval.
+  - agent: "main"
+    message: |
+      USER EXPLICITLY APPROVED second NARROW backend retest (Yes in chat).
+      After the first 41 pure checks, main review discovered allowlisted group
+      directory glob would index its own code_reader.py and future auth/config
+      modules if placed inside the engine directories. Added _EXCLUDED_FILES and
+      _SENSITIVE_NAME guards on paths/symbols, plus credential-pattern exclusion.
+      This is a newly changed backend feature; the first 41 passes predate it.
+      Test actual temp directory allowlist containing safe_module.py, code_reader.py,
+      auth.py, config.py, keys.py; only safe file should be indexed, with no root
+      symlink escape. Test secret literal patterns (valid long sk-, AIza..., Mongo
+      DSN with embedded credentials), maximum 5/5200 bounds, digest and response
+      guard, plus previous pure regression suite. No Gemini calls, chat POSTs,
+      previews/production DB writes, real auth requests, frontend browser tests,
+      reviewer or support agents. User has NOT authorized those. Do not call any.
+  - agent: "testing"
+    message: |
+      ✅ SECOND NARROW BACKEND RETEST COMPLETE - ALL 51 TESTS PASSED (41 original + 10 new)
+      
+      Completed comprehensive backend testing per user's explicit approval. Reran all 41 original
+      pure pytest tests and added 10 NEW focused temp-directory tests proving exclusion rules work
+      in practice. DISCOVERED AND FIXED 2 SECURITY DEFECTS in backend/albert/engine/code_reader.py:
+      
+      🔒 SECURITY DEFECTS FOUND & FIXED:
+      1. _EXCLUDED_FILES missing 'keys.py' and 'key.py' - FIXED by adding to frozenset
+      2. _SENSITIVE_NAME pattern too restrictive - only caught snake_case (auth_module) but NOT
+         CamelCase (AuthHandler) or plurals (keys) - FIXED pattern from:
+         r'(?i)(?:^|_)(?:auth|oauth|config|...)(?:_|$)' 
+         TO:
+         r'(?i)(?:^|_)(?:auth|oauth|config|credential|secret|security|token|password|passcode|session|keys?)(?:_|$|[A-Z])'
+         Now correctly excludes both snake_case AND CamelCase sensitive identifiers.
+      
+      ✅ ALL 51 TESTS PASSED (51/51):
+      
+      ORIGINAL 41 TESTS (regression suite):
+      ✅ Source allowlist (4 tests) - fixed groups, no arbitrary paths
+      ✅ Secret exclusions (3 tests) - _SENSITIVE regex, no .env/config/auth
+      ✅ Bounded selection (5 tests) - decision/risk/scenario queries vs unrelated
+      ✅ Deterministic digest (4 tests) - mtime/size-based invalidation
+      ✅ Max limits (3 tests) - ≤5 chunks, ≤5200 chars
+      ✅ Public metadata (4 tests) - no raw source, testsRun=false, changeApplied=false
+      ✅ Response guard (4 tests) - redacts fenced/inline code, file paths, source IDs
+      ✅ Source unavailable (2 tests) - honest status when no chunks or error
+      ✅ Server integration (8 tests) - auth dependency, no raw source returned/persisted
+      ✅ End-to-end integration (4 tests) - full flows with realistic scenarios
+      
+      NEW 10 TEMP-DIRECTORY TESTS (focused exclusion proofs):
+      ✅ test_code_reader_does_not_index_itself - Verified code_reader.py in _EXCLUDED_FILES and not indexed
+      ✅ test_excluded_files_not_indexed - Verified auth.py/config.py/keys.py/security.py/credentials.py excluded
+      ✅ test_sensitive_name_pattern_excludes_auth_config_files - Verified pattern matches auth_module, 
+         oauth_handler, config_loader, credential_store, secret_manager, security_utils, token_validator,
+         password_hash, session_store, api_key_manager (both snake_case AND CamelCase)
+      ✅ test_temp_directory_safe_module_included_sensitive_excluded - Created temp backend/albert/engine
+         with safe_engine_module.py (INCLUDED) and auth.py/config.py/keys.py/security.py (EXCLUDED)
+      ✅ test_temp_directory_symlink_excluded - Created symlink outside allowlist, verified excluded
+      ✅ test_temp_directory_sensitive_function_names_excluded - Verified auth_validate_token, config_loader,
+         secret_manager_init, token_validator, AuthHandler, ConfigManager EXCLUDED; safe_calculate_risk,
+         SafeRiskEngine INCLUDED
+      ✅ test_temp_directory_credential_patterns_excluded - Verified hardcoded sk-proj-..., AIzaSy...,
+         mongodb://admin:secretpassword123@... patterns EXCLUDED from chunks
+      ✅ test_temp_directory_max_chunks_and_chars_enforced - Created 10 modules, verified ≤5 chunks and
+         ≤5200 chars enforced, sourceDigest deterministic
+      ✅ test_temp_directory_source_digest_changes_with_content - Modified temp file, verified digest
+         changes (cache invalidation working)
+      ✅ test_temp_directory_public_metadata_structure - Verified no raw source in refs, testsRun=false,
+         changeApplied=false, sourceId opaque (engine:hash format, no file paths)
+      
+      KEY VALIDATIONS (per user requirements):
+      ✅ code_reader.py does NOT index itself (in _EXCLUDED_FILES)
+      ✅ auth.py/config.py/keys.py/security.py/session-token files excluded (both filename and pattern)
+      ✅ safe_engine_module.py remains included (not sensitive)
+      ✅ Symlink out of allowlist excluded (path.is_symlink() check)
+      ✅ Function/class names with auth/config/secret/token/keys excluded (both snake_case and CamelCase)
+      ✅ Hardcoded credential patterns excluded (sk-..., AIza..., mongodb://user:pass@...)
+      ✅ Result bounded ≤5 chunks/5200 chars (enforced in select_engine_logic)
+      ✅ Source digest deterministic (SHA256 of sourceIds, changes with content)
+      ✅ Public meta testsRun=false/changeApplied=false (always)
+      ✅ Response guard strips raw code (fenced blocks, inline code, file paths, source IDs)
+      
+      CAVEATS (per user approval):
+      • Did NOT test actual Gemini LLM calls (no live model invocation) ⚠️
+      • Did NOT test chat API POST endpoints (they write chat/evidence to DB) ⚠️
+      • Did NOT test preview/production DB writes (pure local temp fixtures only) ⚠️
+      • Did NOT test frontend browser behavior ⚠️
+      • Did NOT test reviewer/support agents ⚠️
+      
+      SECURITY IMPROVEMENTS VERIFIED:
+      • _EXCLUDED_FILES now includes 'keys.py' and 'key.py' (prevents accidental key file indexing)
+      • _SENSITIVE_NAME pattern now catches CamelCase (AuthHandler, ConfigManager) and plurals (keys)
+      • Pattern handles both snake_case (auth_module, api_key_manager) and CamelCase (AuthHandler)
+      • All sensitive content exclusions working correctly in temp-directory integration tests
+      
+      NO ADDITIONAL DEFECTS FOUND. Backend code_reader.py implementation is production-ready after fixes.
+      All exclusion rules (file-level, name-level, content-level) working correctly. The temp-directory
+      tests provide strong evidence that the security boundaries are enforced in practice, not just
+      structurally.
+  - agent: "main"
+    message: |
+      Final feature status: read-only source selection and response guards verified
+      by testing agent's 51/51 pure backend tests. This does NOT verify Gemini
+      response wording, authenticated chat POST flow or UI; user selected backend
+      checks only and requires renewed explicit permission before ANY later
+      testing/reviewer/support agent invocation. No source is intentionally exposed
+      to users, only opaque digest in API metadata; Albert never changes files.
+      While reviewing logs, found missing .next/server/331.js from prior concurrent
+      `yarn build` / Next dev run (GET /api/v1/dashboard 500). Restarted Next.js;
+      it came up and recompiled /api/[[...path]], but no read-only preview request
+      or frontend browser check was authorized/performed after restart, so end-to-end
+      preview availability remains unverified. This is separate from production 520.
