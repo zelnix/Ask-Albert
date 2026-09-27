@@ -175,35 +175,62 @@ export default function AlbertHome({ onNav }) {
   }, []);
 
   /* ---- the scenario, selected ATOMICALLY ---- */
-  const loadOutlook = useCallback(async (a, h) => {
-    const mine = reqRef.current + 1;
-    reqRef.current = mine;
+  const cancelOutlookRef = useRef(null);
+  const loadOutlook = useCallback((a, h) => {
+    // A new selection (or a manual refresh) cancels both the in-flight request and
+    // its retry timer. A stale response can never be displayed under another asset.
+    cancelOutlookRef.current?.();
+    const mine = ++reqRef.current;
     const expected = `${a}|USD|${h}|ASSESSED|`;
-    setOutlook(null); setOutlookErr(''); setOutlookLoading(true);
-    try {
-      const r = await fetch(`${API_BASE}/v1/albert/scenario-outlooks/preview`, {
-        method: 'POST', credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ assetId: a, horizon: h, quoteCurrency: 'USD', phaseMode: 'ASSESSED' }),
-      });
-      if (mine !== reqRef.current) return;         // superseded selection: discard
-      if (r.status === 401 || r.status === 403) { setOutlookErr('Please sign in to see the scenario.'); return; }
-      if (!r.ok) { setOutlookErr('The scenario provider could not be reached.'); return; }
-      const j = await r.json();
-      if (mine !== reqRef.current) return;
-      // The selection key binds asset, quote, horizon and mode. A response that does not
-      // match the current selection is REJECTED rather than shown under the wrong title.
-      const got = String(j.selectionKey || '').split('|').slice(0, 5).join('|');
-      if (got !== expected) {
-        setOutlookErr('That response did not match the current selection, so it was discarded.');
-        return;
+    let cancelled = false;
+    let timer = null;
+    let controller = null;
+    setOutlook((prev) => prev?.selectionKey?.startsWith(expected) ? prev : null);
+    setOutlookErr(''); setOutlookLoading(true);
+
+    const attempt = async (retryCount) => {
+      controller = new AbortController();
+      try {
+        const r = await fetch(`${API_BASE}/v1/albert/scenario-outlooks/preview`, {
+          method: 'POST', credentials: 'include', signal: controller.signal,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ assetId: a, horizon: h, quoteCurrency: 'USD', phaseMode: 'ASSESSED' }),
+        });
+        if (cancelled || mine !== reqRef.current) return;
+        if (r.status === 401 || r.status === 403) { setOutlookErr('Please sign in to see the scenario.'); return; }
+        if (!r.ok) { setOutlookErr('The scenario provider could not be reached.'); return; }
+        const j = await r.json();
+        if (cancelled || mine !== reqRef.current) return;
+        const got = String(j.selectionKey || '').split('|').slice(0, 5).join('|');
+        if (got !== expected) {
+          setOutlookErr('That response did not match the current selection, so it was discarded.');
+          return;
+        }
+        setOutlook(j); // Retain the current response between attempts: no empty-chart flicker.
+        if (j.band?.reasonCode === 'EVALUATION_NOT_COMPUTED_YET') {
+          if (retryCount < 20) {
+            timer = setTimeout(() => attempt(retryCount + 1), 2000);
+          } else {
+            setOutlookErr('Today’s evaluation is taking longer than expected. Please retry.');
+          }
+        }
+      } catch (e) {
+        if (!cancelled && mine === reqRef.current && e?.name !== 'AbortError') {
+          setOutlookErr('Network error loading the scenario.');
+        }
+      } finally {
+        if (!cancelled && mine === reqRef.current) setOutlookLoading(false);
       }
-      setOutlook(j);
-    } catch (e) {
-      if (mine === reqRef.current) setOutlookErr('Network error loading the scenario.');
-    } finally {
-      if (mine === reqRef.current) setOutlookLoading(false);
-    }
+    };
+    const cancel = () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      controller?.abort();
+      if (cancelOutlookRef.current === cancel) cancelOutlookRef.current = null;
+    };
+    cancelOutlookRef.current = cancel;
+    attempt(0);
+    return cancel;
   }, []);
 
   useEffect(() => { loadSop(); loadStreams(false); }, [loadSop, loadStreams]);
@@ -221,7 +248,7 @@ export default function AlbertHome({ onNav }) {
       loadSop();
     }
   }, [streams, sop, loadSop]);
-  useEffect(() => { loadOutlook(asset, horizon); }, [asset, horizon, loadOutlook]);
+  useEffect(() => loadOutlook(asset, horizon), [asset, horizon, loadOutlook]);
 
   // Evidence deep links (/?section=home&evidence=snap_…) open the panel in place.
   useEffect(() => {
@@ -314,7 +341,7 @@ export default function AlbertHome({ onNav }) {
 
           {/* The what-if chart is the dominant visual here, directly below the briefing. */}
           <ScenarioChart outlook={outlook} loading={outlookLoading} error={outlookErr}
-            asset={asset} assets={assets} horizon={horizon}
+            asset={asset} assets={assets} horizon={horizon} onRetry={() => loadOutlook(asset, horizon)}
             onAsset={setAsset} onHorizon={setHorizon}
             onEvidence={onEvidence} onExpand={() => setExpanded(true)}
             onAsk={askAboutBand} chartHeight={310} histCount={45} leadership={leadership} />

@@ -710,10 +710,45 @@ def build_market_intel(quant, forecasts, cycle, dominance, chart):
 # =====================================================================
 # CROSS-MARKET + POLICY & LIQUIDITY + ALERTS (keyless: Yahoo + curated)
 # =====================================================================
-def fetch_yahoo_series(symbol, rng='6mo'):
-    url = f'https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range={rng}'
+def fetch_yahoo_series(symbol, rng='6mo', observations=False, period1=None, period2=None):
+    # Yahoo compresses range=max to MONTHLY even when interval=1d was requested.
+    # Only the dated raw-observation path needs maximum history; existing pandas
+    # callers keep the original range behaviour. Bounded daily windows were
+    # verified against the live provider for 2015-2018 and 2018-2021.
+    if rng == 'max' and observations and period1 is None:
+        meta_url = (f'https://query1.finance.yahoo.com/v8/finance/chart/{symbol}'
+                    '?interval=1d&range=1mo')
+        first = _http_json(meta_url)['chart']['result'][0]['meta'].get('firstTradeDate')
+        if not first:
+            raise ValueError('Yahoo did not provide a first trade date')
+        start = max(datetime.datetime.fromtimestamp(int(first), datetime.timezone.utc).date(),
+                    datetime.date(2013, 1, 1))
+        end = datetime.datetime.now(datetime.timezone.utc).date() + datetime.timedelta(days=1)
+        rows = []
+        while start < end:
+            stop = min(start + datetime.timedelta(days=1000), end)
+            start_ts = int(datetime.datetime.combine(start, datetime.time.min,
+                                                      tzinfo=datetime.timezone.utc).timestamp())
+            stop_ts = int(datetime.datetime.combine(stop, datetime.time.min,
+                                                     tzinfo=datetime.timezone.utc).timestamp())
+            part = fetch_yahoo_series(symbol, rng=rng, observations=True,
+                                      period1=start_ts, period2=stop_ts)
+            if not part:
+                raise ValueError('Yahoo returned an empty bounded daily segment')
+            rows.extend(part)
+            start = stop
+        return rows
+    query = (f'period1={int(period1)}&period2={int(period2)}'
+             if period1 is not None and period2 is not None else f'range={rng}')
+    url = f'https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&{query}'
     d = _http_json(url)['chart']['result'][0]
-    ts = d['timestamp']; cl = d['indicators']['quote'][0]['close']
+    ts = d['timestamp']; quote = d['indicators']['quote'][0]
+    cl = quote['close']
+    if observations:
+        volumes = quote.get('volume') or []
+        return [{'date': datetime.datetime.utcfromtimestamp(t).strftime('%Y-%m-%d'),
+                 'close': c, 'volume': volumes[i] if i < len(volumes) else None}
+                for i, (t, c) in enumerate(zip(ts, cl))]
     s = {}
     for t, c in zip(ts, cl):
         if c is None:
@@ -5423,6 +5458,10 @@ def _startup():
         threading.Thread(target=_refresh_whales_bg, daemon=True).start()
     if etf_col.count_documents({'_id': 'btc'}) == 0:
         threading.Thread(target=_refresh_etf_bg, daemon=True).start()
+    # Non-blocking: warm the default scenario without delaying the API startup.
+    # Preview also starts its own missing evaluation for any other selection/day.
+    threading.Thread(target=_scenario_eval_prewarm, daemon=True).start()
+    threading.Thread(target=_scenario_v2_prewarm_bg, daemon=True).start()
 
 
 @app.get('/api/v1/health')
@@ -18164,11 +18203,16 @@ from albert.market import phase as _mkt_phase        # noqa: E402
 from albert.market import participants as _mkt_parts  # noqa: E402
 from albert.market import sectors as _mkt_sectors    # noqa: E402
 from albert.market import scenario as _mkt_scenario  # noqa: E402
+from albert.market import scenario_v2 as _mkt_scenario_v2  # noqa: E402
+from albert.market import history as _mkt_history    # noqa: E402
 
 from albert.market import research as _mkt_research  # noqa: E402
 
 market_turnover_col = db['market_turnover_daily']
 scenario_evals_col = db['scenario_evaluations']
+scenario_history_snapshots_col = db['scenario_history_snapshots']
+scenario_history_current_col = db['scenario_history_current']
+SCENARIO_V2_CONTRACT_VERSION = 'scenario-outlook-contract-v2'
 # N-C/N-E/N-F: immutable evidence snapshots. Every headline, band figure, validation
 # fact, research finding and Albert conclusion points at ONE row in here, so a claim and
 # the numbers behind it can never drift apart.
@@ -18932,6 +18976,35 @@ def _scenario_long_closes(symbol):
     return [], []
 
 
+def _scenario_canonical_history(asset, *, refresh=True):
+    """Asset-isolated, content-addressed daily record for the v2 candidate model."""
+    symbol = (asset or '').upper()[:12]
+    ticker = SCENARIO_LONG_HISTORY.get(symbol)
+    if not ticker:
+        return {'ok': False, 'assetId': symbol, 'reason': 'UNSUPPORTED_ASSET'}
+    return _mkt_history.load(symbol, ticker, fetch_yahoo_series,
+                             scenario_history_snapshots_col,
+                             scenario_history_current_col, refresh=refresh)
+
+
+@app.get('/api/v1/albert/scenario-history/{asset_id}')
+def albert_scenario_history(asset_id: str, refresh: int = 0,
+                            user: dict = Depends(get_current_user)):
+    """Read the canonical snapshot's provenance; never expose an unvalidated series."""
+    row = _scenario_canonical_history(asset_id, refresh=bool(refresh))
+    if not row.get('ok'):
+        return {'status': 'unavailable', 'assetId': asset_id.upper()[:12],
+                'reasonCode': row.get('reason'), 'policyVersion': _mkt_history.POLICY_VERSION}
+    return {'status': 'ready', 'assetId': row['assetId'],
+            'snapshotId': row['snapshotId'], 'dataHash': row['dataHash'],
+            'policyVersion': row['policyVersion'], 'provider': row['provider'],
+            'providerSymbol': row['providerSymbol'], 'firstDate': row['firstDate'],
+            'lastDate': row['lastDate'], 'observationCount': row['observationCount'],
+            'coverage': row['coverage'], 'retrievedAt': row['retrievedAt'],
+            'freshness': row['freshness'], 'providerStatus': row['providerStatus'],
+            'ageDays': row['ageDays']}
+
+
 def _scenario_series(symbol, days=90):
     """Observed candles for display PLUS the long daily record the model matches against.
 
@@ -18996,6 +19069,15 @@ def _scenario_band_block(asset, horizon, horizon_days, built, baseline, validati
                 'snapshotId': None, 'evidenceDeepLink': None}
     v = validation or {}
     ev = v.get('evaluation') or {}
+    if v.get('bandCalibrated') and built.get('modelVersion') == _mkt_scenario_v2.MODEL_VERSION:
+        exact_key = _mkt_scenario_v2.evaluation_key(asset, horizon,
+                                                     built.get('historyDataHash'))
+        if not built.get('historySnapshotId') or v.get('evaluationKey') != exact_key:
+            return {'available': False, 'reasonCode': 'PROVENANCE_MISMATCH',
+                    'reasonText': 'The evaluated model does not match the frozen history.',
+                    'assetId': asset, 'horizon': horizon, 'horizonDays': horizon_days,
+                    'lowerPct': None, 'upperPct': None, 'medianPct': None,
+                    'snapshotId': None, 'evidenceDeepLink': None}
     lower = round(built['returnPaths']['bearish'][-1] * 100, 1)
     upper = round(built['returnPaths']['bullish'][-1] * 100, 1)
     median = round(built['returnPaths']['median'][-1] * 100, 1)
@@ -19022,7 +19104,13 @@ def _scenario_band_block(asset, horizon, horizon_days, built, baseline, validati
     payload = {
         'assetId': asset, 'horizon': horizon, 'horizonDays': horizon_days,
         'modelVersion': built['modelVersion'],
-        'contractVersion': SCENARIO_CONTRACT_VERSION,
+        'contractVersion': (SCENARIO_V2_CONTRACT_VERSION if built['modelVersion'] ==
+                            _mkt_scenario_v2.MODEL_VERSION else SCENARIO_CONTRACT_VERSION),
+        'evaluationVersion': built.get('evaluationVersion'),
+        'historyPolicyVersion': built.get('historyPolicyVersion'),
+        'canonicalHistorySnapshotId': built.get('historySnapshotId'),
+        'canonicalHistoryDataHash': built.get('historyDataHash'),
+        'evaluationKey': v.get('evaluationKey'),
         'percentiles': built['percentiles'],
         'lowerPct': lower, 'upperPct': upper, 'medianPct': median,
         'lowerPrice': round(anchor * (1 + built['returnPaths']['bearish'][-1]), 2),
@@ -19031,7 +19119,9 @@ def _scenario_band_block(asset, horizon, horizon_days, built, baseline, validati
         'anchorObservedAt': baseline.get('observedAt'),
         'anchorObservationId': baseline.get('observationId'),
         'historySnapshotId': baseline.get('snapshotId'),
-        'matchedDays': built.get('sampleSize'),
+        'matchedDays': built.get('matchedDays', built.get('sampleSize')),
+        'rejectedByDistance': built.get('rejectedByDistance'),
+        'maximumDistance': built.get('maximumDistance'),
         'independentEpisodes': built.get('independentEpisodes'),
         'candidatePool': built.get('candidatePool'),
         'similarity': built.get('similarity'),
@@ -19050,6 +19140,9 @@ def _scenario_band_block(asset, horizon, horizon_days, built, baseline, validati
                        'medianAbsErrorPct': ev.get('medianAbsErrorPct'),
                        'baselineMedianAbsErrorPct': ev.get('baselineMedianAbsErrorPct'),
                        'regimeCoverage': ev.get('regimeCoverage'),
+                       'eraSlices': ev.get('eraSlices'),
+                       'pairedV1': ev.get('pairedV1'),
+                       'leakCheck': ev.get('leakCheck'),
                        'firstEvaluatedAt': ev.get('firstEvaluatedAt'),
                        'lastEvaluatedAt': ev.get('lastEvaluatedAt')},
         'label': 'Historical scenario range — not a forecast',
@@ -19057,16 +19150,21 @@ def _scenario_band_block(asset, horizon, horizon_days, built, baseline, validati
                       % (lower, upper, horizon_days)),
         'medianLabel': 'Historical median path from matched periods',
         'medianPath': median_path,
-        'medianCaveat': ('The middle of the band is the MEDIAN of what matched historical '
-                         'periods did next. It is not a base case, not an expectation and '
-                         'carries no measured skill against assuming no change, which is '
-                         'why it is hidden by default.'),
+        'medianCaveat': (('The middle of the band is a historical median, never a '
+                          'promised outcome; walk-forward skill is reported separately.')
+                         if v.get('predictiveValidation') else
+                         ('The middle of the band is the MEDIAN of what matched historical '
+                          'periods did next. It is not a base case, not an expectation and '
+                          'has not beaten no change materially, so it is hidden by default.')),
     }
+    stable_key = '%s|%s|%s|%s|%s|%s' % (
+        built['modelVersion'], asset, horizon, baseline.get('observedAt'), lower, upper)
+    if built.get('historyDataHash'):
+        stable_key += '|%s|%s' % (built['historyDataHash'], v.get('evaluationKey'))
     sid = _evidence_snapshot_put(
         'scenarioBand', payload, as_of=baseline.get('observedAt'),
         title='%s %d-day historical scenario range' % (asset, horizon_days),
-        stable_key='%s|%s|%s|%s|%s|%s' % (built['modelVersion'], asset, horizon,
-                                          baseline.get('observedAt'), lower, upper))
+        stable_key=stable_key)
     return {
         'available': True, 'reasonCode': None, 'reasonText': None,
         'assetId': asset, 'horizon': horizon, 'horizonDays': horizon_days,
@@ -19097,9 +19195,18 @@ def _scenario_band_block(asset, horizon, horizon_days, built, baseline, validati
         'firstEvaluatedAt': ev.get('firstEvaluatedAt'),
         'lastEvaluatedAt': ev.get('lastEvaluatedAt'),
         'modelVersion': built['modelVersion'],
+        'historyPolicyVersion': built.get('historyPolicyVersion'),
+        'canonicalHistorySnapshotId': built.get('historySnapshotId'),
+        'canonicalHistoryDataHash': built.get('historyDataHash'),
+        'evaluationVersion': built.get('evaluationVersion'),
+        'evaluationKey': v.get('evaluationKey'),
+        'eraSlices': ev.get('eraSlices'),
+        'pairedV1': ev.get('pairedV1'),
+        'leakCheck': ev.get('leakCheck'),
         'snapshotId': sid, 'evidenceDeepLink': _evidence_deep_link(sid),
-        'evaluationLink': ('/api/v1/albert/scenario-outlooks/evaluation?assetId=%s&horizon=%s'
-                           % (asset, horizon)),
+        'evaluationLink': ('/api/v1/albert/scenario-outlooks/%sevaluation?assetId=%s&horizon=%s'
+                           % ('v2/' if built['modelVersion'] == _mkt_scenario_v2.MODEL_VERSION
+                              else '', asset, horizon)),
     }
 
 
@@ -19130,7 +19237,8 @@ def _scenario_band_summary(asset='BTC', horizon='P7D'):
                     'scenarioEval', asset, horizon, built['modelVersion'])
     except Exception:  # noqa
         traceback.print_exc()
-    _SCENARIO_BAND_CACHE[key] = (_time_mod.time(), out)
+    if (out or {}).get('reasonCode') != 'EVALUATION_NOT_COMPUTED_YET':
+        _SCENARIO_BAND_CACHE[key] = (_time_mod.time(), out)
     return out
 
 
@@ -19160,6 +19268,9 @@ def albert_scenario_preview(payload: dict = Body(default={}), user: dict = Depen
                                                     _mkt_meta.MIXED):
         raise HTTPException(status_code=422,
                             detail='phaseOverride must be BTC_LED, ALTCOIN_LED or MIXED.')
+    requested_model = str(body.get('modelVersion') or 'auto').lower()
+    if requested_model not in ('auto', 'v1', 'v2'):
+        raise HTTPException(status_code=422, detail='modelVersion must be auto, v1 or v2.')
 
     uni = _mkt_universe_now()
     ph = _mkt_phase.assess(uni, window='7d')
@@ -19201,14 +19312,40 @@ def albert_scenario_preview(payload: dict = Body(default={}), user: dict = Depen
             # a plausible-looking path with an unmentioned negative skill score is the
             # single most misleading thing this endpoint could ship.
             validation = _scenario_validation(asset, horizon)
+            # No numeric paths are returned while evaluation is pending or failed.
+            # In particular, the first cold preview cannot leak an unevaluated range.
+            if validation.get('bandCalibrated'):
+                scenarios = _scenario_sides(asset, built, baseline, ph, phase_mode, override,
+                                            horizon_days, eval_ref)
+    candidate_v2 = None
+    if history and requested_model != 'v1':
+        v2_built, v2_validation = _scenario_v2_candidate(asset, horizon)
+        candidate_v2 = {'status': v2_validation.get('status'),
+                        'reasonCode': v2_validation.get('reasonCode'),
+                        'modelVersion': _mkt_scenario_v2.MODEL_VERSION}
+        if v2_built and v2_built.get('ok') and v2_validation.get('bandCalibrated'):
+            # An exact model+policy+data-hash evaluation is the ONLY promotion path.
+            built, validation = v2_built, v2_validation
+            model_version = _mkt_scenario_v2.MODEL_VERSION
+            eval_ref = v2_validation['evaluationKey']
             scenarios = _scenario_sides(asset, built, baseline, ph, phase_mode, override,
                                         horizon_days, eval_ref)
+        elif requested_model == 'v2':
+            # Explicit canary requests never silently fall back to v1 figures.
+            built = v2_built if v2_built and v2_built.get('ok') else {
+                'ok': False, 'reason': v2_validation.get('reasonCode') or 'HISTORY_PREPARING',
+                'detail': v2_validation.get('headline') or 'Longer daily history is preparing.'}
+            validation = v2_validation
+            model_version = _mkt_scenario_v2.MODEL_VERSION
+            eval_ref, scenarios = None, []
+            reason, limitation, status = validation.get('reasonCode'), validation.get('headline'), _mkt_meta.MISSING
     band = _scenario_band_block(asset, horizon, horizon_days, built, baseline, validation)
 
     return {'status': 'ready',
             'meta': _mkt_meta.meta('scenarioOutlook', status=status, reason_code=reason,
                                    as_of=(baseline or {}).get('observedAt'),
-                                   rule_version=SCENARIO_CONTRACT_VERSION,
+                                   rule_version=(SCENARIO_V2_CONTRACT_VERSION if model_version ==
+                                                 _mkt_scenario_v2.MODEL_VERSION else SCENARIO_CONTRACT_VERSION),
                                    limitations=[l for l in [limitation] if l] + ([] if not scenarios else [
                                        'These are CONDITIONAL HISTORICAL SCENARIOS, not '
                                        'predictions, targets or probabilities.',
@@ -19219,6 +19356,9 @@ def albert_scenario_preview(payload: dict = Body(default={}), user: dict = Depen
             'selectionKey': selection_key,
             'outlookId': 'so_' + uuid.uuid4().hex[:12],
             'modelVersion': model_version,
+            'contractVersion': (SCENARIO_V2_CONTRACT_VERSION if model_version ==
+                                _mkt_scenario_v2.MODEL_VERSION else SCENARIO_CONTRACT_VERSION),
+            'requestedModel': requested_model, 'candidateV2': candidate_v2,
             'assetId': asset, 'quoteCurrency': quote, 'horizon': horizon,
             'horizonDays': horizon_days,
             'baseline': baseline,
@@ -19243,16 +19383,21 @@ def albert_scenario_preview(payload: dict = Body(default={}), user: dict = Depen
             'scenarios': scenarios,
             'band': band,
             'snapshotId': (band or {}).get('snapshotId'),
+            'canonicalHistorySnapshotId': (band or {}).get('canonicalHistorySnapshotId'),
+            'canonicalHistoryDataHash': (band or {}).get('canonicalHistoryDataHash'),
             'evidenceDeepLink': (band or {}).get('evidenceDeepLink'),
             'sample': ({k: built.get(k) for k in ('sampleSize', 'independentEpisodes',
-                                                  'candidatePool', 'sampleLimitations', 'similarity',
+                                                  'matchedDays', 'candidatePool',
+                                                  'rejectedByDistance', 'maximumDistance',
+                                                  'recencyPolicy', 'sampleLimitations', 'similarity',
                                                   'matchedDates', 'features', 'percentiles',
                                                   'anchorDate')}
-                       if (history and built.get('ok')) else None),
-            'evaluationRef': eval_ref,
+                       if (band or {}).get('available') else None),
+            'evaluationRef': eval_ref if (band or {}).get('available') else None,
             'validation': validation if (history and built.get('ok')) else None,
-            'evaluationLink': ('/api/v1/albert/scenario-outlooks/evaluation?assetId=%s&horizon=%s'
-                               % (asset, horizon)) if eval_ref else None,
+            'evaluationLink': ('/api/v1/albert/scenario-outlooks/%sevaluation?assetId=%s&horizon=%s'
+                               % ('v2/' if model_version == _mkt_scenario_v2.MODEL_VERSION
+                                  else '', asset, horizon)) if eval_ref else None,
             'paperOnly': True}
 
 
@@ -19265,11 +19410,19 @@ def _scenario_validation(asset, horizon):
     row = scenario_evals_col.find_one({'_id': _scenario_eval_key(asset, horizon)}, {'_id': 0})
     res = (row or {}).get('result') or {}
     if not res.get('ok'):
-        return {'predictiveValidation': False, 'status': 'PENDING',
-                'reasonCode': (res.get('reason') or 'EVALUATION_NOT_COMPUTED_YET'),
-                'headline': ('Not yet validated: the walk-forward evaluation for this asset '
-                             'and horizon has not produced a result, so these paths are '
-                             'descriptive history only.'),
+        if row:
+            return {'predictiveValidation': False, 'bandCalibrated': False,
+                    'status': 'FAILED',
+                    'reasonCode': res.get('reason') or 'EVALUATION_FAILED',
+                    'headline': ('The walk-forward evaluation could not validate this '
+                                 'historical range: %s. No range is published.'
+                                 % (res.get('reason') or 'evaluation failed')),
+                    'evaluation': None}
+        _scenario_eval_start(asset, horizon)
+        return {'predictiveValidation': False, 'bandCalibrated': False,
+                'status': 'PENDING', 'reasonCode': 'EVALUATION_NOT_COMPUTED_YET',
+                'headline': ('Preparing today\'s scenario: the walk-forward evaluation '
+                             'is running. No range is published until it completes.'),
                 'evaluation': None}
     skill = res.get('skillVsNoChange')
     pts = res.get('evaluationPoints') or 0
@@ -19374,8 +19527,9 @@ def _scenario_sides(asset, built, baseline, ph, phase_mode, override, horizon_da
                         'returnPct': round(r * 100, 3)})
         pct = built['percentiles'][key]
         out.append({
-            'scenarioId': _mkt_meta.evidence_ref('scenario', asset, side, built['modelVersion'],
-                                                 baseline['observedAt']),
+            'scenarioId': _mkt_meta.evidence_ref(
+                'scenario', asset, side, built['modelVersion'], baseline['observedAt'],
+                *([built['historyDataHash']] if built.get('historyDataHash') else [])),
             'side': side, 'status': _mkt_meta.FRESH, 'reasonCode': None,
             'label': 'What-if: %s case' % side.capitalize(),
             'basis': ('The %dth percentile of what actually happened over the following %d '
@@ -19412,22 +19566,62 @@ def _scenario_eval_key(asset, horizon):
 
 
 _SCENARIO_EVAL_RUNNING = set()
+_SCENARIO_EVAL_LOCK = _threading.Lock()
 
 
-def _scenario_eval_bg(asset, horizon):
+def _scenario_eval_start(asset, horizon):
+    """Shared non-blocking starter. A completed (including failed) row is never rerun
+    on every preview, and the lock prevents simultaneous requests spawning duplicates."""
     key = _scenario_eval_key(asset, horizon)
+    with _SCENARIO_EVAL_LOCK:
+        if key in _SCENARIO_EVAL_RUNNING or scenario_evals_col.find_one({'_id': key}, {'_id': 1}):
+            return False
+        _SCENARIO_EVAL_RUNNING.add(key)
+    try:
+        _threading.Thread(target=_scenario_eval_bg, args=(asset, horizon, key),
+                          daemon=True).start()
+    except Exception:  # noqa
+        with _SCENARIO_EVAL_LOCK:
+            _SCENARIO_EVAL_RUNNING.discard(key)
+        traceback.print_exc()
+        return False
+    return True
+
+
+def _scenario_eval_bg(asset, horizon, key):
     try:
         _candles, dates, closes = _scenario_series(asset, days=60)
         res = _mkt_scenario.evaluate(closes=closes, dates=dates,
                                      horizon=SCENARIO_HORIZONS[horizon])
+    except Exception:  # noqa
+        traceback.print_exc()
+        res = {'ok': False, 'reason': 'EVALUATION_FAILED'}
+    try:
         scenario_evals_col.update_one(
-            {'_id': key}, {'$set': {'_id': key, 'assetId': asset, 'horizon': horizon,
-                                    'computedAt': _mkt_meta.now_iso(), 'result': res}},
-            upsert=True)
+            {'_id': key}, {'$setOnInsert': {'_id': key, 'assetId': asset,
+                                           'horizon': horizon,
+                                           'modelVersion': _mkt_scenario.MODEL_VERSION,
+                                           'computedAt': _mkt_meta.now_iso(),
+                                           'result': res}}, upsert=True)
+        _SCENARIO_BAND_CACHE.pop('%s|%s' % (asset, horizon), None)
     except Exception:  # noqa
         traceback.print_exc()
     finally:
-        _SCENARIO_EVAL_RUNNING.discard(key)
+        with _SCENARIO_EVAL_LOCK:
+            _SCENARIO_EVAL_RUNNING.discard(key)
+
+
+def _scenario_eval_prewarm():
+    try:
+        _scenario_eval_start('BTC', 'P7D')
+    except Exception:  # noqa
+        traceback.print_exc()
+
+
+def _scenario_v2_prewarm_bg():
+    # Give v1's default prewarm a head start; both run without blocking startup.
+    _time_mod.sleep(5)
+    _scenario_v2_history_start('BTC')
 
 
 @app.get('/api/v1/albert/scenario-outlooks/evaluation')
@@ -19448,8 +19642,7 @@ def albert_scenario_evaluation(assetId: str = 'BTC', horizon: str = 'P7D',
         return {'status': 'ready', 'modelVersion': _mkt_scenario.MODEL_VERSION,
                 'contractVersion': SCENARIO_CONTRACT_VERSION, **row}
     if key not in _SCENARIO_EVAL_RUNNING:
-        _SCENARIO_EVAL_RUNNING.add(key)
-        _threading.Thread(target=_scenario_eval_bg, args=(asset, horizon), daemon=True).start()
+        _scenario_eval_start(asset, horizon)
     return {'status': 'computing', 'assetId': asset, 'horizon': horizon,
             'modelVersion': _mkt_scenario.MODEL_VERSION,
             'note': 'Walk-forward evaluation is replaying the model; retry shortly.'}
@@ -19495,3 +19688,206 @@ def albert_scenario_capability(user: dict = Depends(get_current_user)):
                            'another label.',
                            'Output is labelled a conditional historical scenario, never a '
                            'prediction, target or calibrated probability.']}
+
+
+# V2 is a separate, provenance-keyed candidate. V1 rows, snapshots and APIs are
+# retained while the longer-history model is evaluated and calibrated.
+_SCENARIO_V2_RUNNING = set()
+_SCENARIO_V2_HISTORY_RUNNING = set()
+_SCENARIO_V2_RETRY_AFTER = {}
+_SCENARIO_V2_LOCK = _threading.Lock()
+
+
+def _scenario_v2_cached_history(asset):
+    pointer = scenario_history_current_col.find_one({'_id': asset}, {'_id': 0}) or {}
+    sid = pointer.get('snapshotId')
+    row = scenario_history_snapshots_col.find_one({'_id': sid}) if sid else None
+    if not row or row.get('policyVersion') != _mkt_history.POLICY_VERSION:
+        _scenario_v2_history_start(asset)
+        return None
+    try:
+        last_checked = datetime.datetime.fromisoformat(
+            str(pointer.get('lastCheckedAt') or '').replace('Z', '+00:00'))
+        if (datetime.datetime.now(datetime.timezone.utc) - last_checked).total_seconds() > 21600:
+            _scenario_v2_history_start(asset)
+    except (ValueError, TypeError):
+        _scenario_v2_history_start(asset)
+    return _mkt_history._serving(row, datetime.datetime.now(datetime.timezone.utc), 'PERSISTED')
+
+
+def _scenario_v2_history_start(asset):
+    with _SCENARIO_V2_LOCK:
+        if asset in _SCENARIO_V2_HISTORY_RUNNING or _time_mod.time() < _SCENARIO_V2_RETRY_AFTER.get(asset, 0):
+            return False
+        _SCENARIO_V2_HISTORY_RUNNING.add(asset)
+    try:
+        _threading.Thread(target=_scenario_v2_history_bg, args=(asset,), daemon=True).start()
+    except Exception:  # noqa
+        with _SCENARIO_V2_LOCK:
+            _SCENARIO_V2_HISTORY_RUNNING.discard(asset)
+        traceback.print_exc()
+        return False
+    return True
+
+
+def _scenario_v2_history_bg(asset):
+    try:
+        row = _scenario_canonical_history(asset, refresh=True)
+        if not row.get('ok'):
+            _SCENARIO_V2_RETRY_AFTER[asset] = _time_mod.time() + 60
+        elif asset == 'BTC':
+            _scenario_v2_eval_start(asset, 'P7D', row)
+    except Exception:  # noqa
+        traceback.print_exc()
+        _SCENARIO_V2_RETRY_AFTER[asset] = _time_mod.time() + 60
+    finally:
+        with _SCENARIO_V2_LOCK:
+            _SCENARIO_V2_HISTORY_RUNNING.discard(asset)
+
+
+def _scenario_v2_eval_start(asset, horizon, hist):
+    key = _mkt_scenario_v2.evaluation_key(asset, horizon, hist['dataHash'])
+    with _SCENARIO_V2_LOCK:
+        if key in _SCENARIO_V2_RUNNING or scenario_evals_col.find_one({'_id': key}, {'_id': 1}):
+            return False
+        _SCENARIO_V2_RUNNING.add(key)
+    try:
+        # Frozen history is passed to this worker, never re-fetched mid-evaluation.
+        _threading.Thread(target=_scenario_v2_eval_bg, args=(asset, horizon, key, hist),
+                          daemon=True).start()
+    except Exception:  # noqa
+        with _SCENARIO_V2_LOCK:
+            _SCENARIO_V2_RUNNING.discard(key)
+        traceback.print_exc()
+        return False
+    return True
+
+
+def _scenario_v2_eval_bg(asset, horizon, key, hist):
+    try:
+        records = hist['observations']
+        res = _mkt_scenario_v2.evaluate(
+            closes=[r['close'] for r in records], dates=[r['date'] for r in records],
+            horizon=SCENARIO_HORIZONS[horizon], snapshot_id=hist['snapshotId'],
+            data_hash=hist['dataHash'])
+    except Exception:  # noqa
+        traceback.print_exc()
+        res = {'ok': False, 'reason': 'EVALUATION_FAILED'}
+    try:
+        scenario_evals_col.update_one({'_id': key}, {'$setOnInsert': {
+            '_id': key, 'assetId': asset, 'horizon': horizon,
+            'modelVersion': _mkt_scenario_v2.MODEL_VERSION,
+            'evaluationVersion': _mkt_scenario_v2.EVALUATION_VERSION,
+            'historyPolicyVersion': _mkt_history.POLICY_VERSION,
+            'historySnapshotId': hist['snapshotId'], 'historyDataHash': hist['dataHash'],
+            'computedAt': _mkt_meta.now_iso(), 'result': res}}, upsert=True)
+        _SCENARIO_BAND_CACHE.pop('%s|%s' % (asset, horizon), None)
+    except Exception:  # noqa
+        traceback.print_exc()
+    finally:
+        with _SCENARIO_V2_LOCK:
+            _SCENARIO_V2_RUNNING.discard(key)
+
+
+def _scenario_v2_validation(asset, horizon, hist, built):
+    key = _mkt_scenario_v2.evaluation_key(asset, horizon, hist['dataHash'])
+    if hist['ageDays'] > 2:
+        _scenario_v2_history_start(asset)
+        return {'status': 'FAILED', 'reasonCode': 'HISTORY_STALE',
+                'bandCalibrated': False, 'predictiveValidation': False,
+                'headline': 'Daily history is stale; no v2 range is published.'}
+    row = scenario_evals_col.find_one({'_id': key}, {'_id': 0})
+    if not row:
+        _scenario_v2_eval_start(asset, horizon, hist)
+        return {'status': 'PENDING', 'reasonCode': 'EVALUATION_NOT_COMPUTED_YET',
+                'bandCalibrated': False, 'predictiveValidation': False,
+                'headline': 'Preparing today\'s scenario using the frozen daily-history snapshot.'}
+    res = row.get('result') or {}
+    expected = (('modelVersion', built['modelVersion']),
+                ('evaluationVersion', built['evaluationVersion']),
+                ('historyPolicyVersion', hist['policyVersion']),
+                ('historySnapshotId', hist['snapshotId']),
+                ('historyDataHash', hist['dataHash']))
+    if not all(row.get(field) == value for field, value in expected):
+        return {'status': 'FAILED', 'reasonCode': 'PROVENANCE_MISMATCH',
+                'bandCalibrated': False, 'predictiveValidation': False,
+                'headline': 'The stored evaluation does not match this frozen history.'}
+    if not res.get('ok'):
+        return {'status': 'FAILED', 'reasonCode': res.get('reason') or 'EVALUATION_FAILED',
+                'bandCalibrated': False, 'predictiveValidation': False,
+                'headline': 'The v2 walk-forward evaluation did not meet its requirements.'}
+    if not all(res.get(field) == value for field, value in expected) or not (
+            res.get('leakCheck') or {}).get('allCandidateOutcomesBeforeQuery'):
+        return {'status': 'FAILED', 'reasonCode': 'PROVENANCE_MISMATCH',
+                'bandCalibrated': False, 'predictiveValidation': False,
+                'headline': 'Model, evaluation, history or leak-check evidence does not match.'}
+    pts = res.get('evaluationPoints') or 0
+    cov = res.get('intervalCoverageRate')
+    target = res.get('intervalCoverageTarget') or 0.6
+    paired = (res.get('pairedV1') or {}).get('commonPoints') or 0
+    calibrated = bool(pts >= SCENARIO_MIN_EVAL_POINTS and paired >= SCENARIO_MIN_EVAL_POINTS
+                      and cov is not None and abs(cov - target) <= 0.10)
+    skill = res.get('skillVsNoChange')
+    validated = bool(calibrated and skill is not None and skill >= SCENARIO_MIN_SKILL)
+    reason = (None if calibrated else ('INSUFFICIENT_EVALUATION_POINTS' if pts < SCENARIO_MIN_EVAL_POINTS
+              else ('INSUFFICIENT_PAIRED_COMPARISON' if paired < SCENARIO_MIN_EVAL_POINTS
+                    else 'BAND_NOT_CALIBRATED')))
+    headline = ('Historical scenario range — not a forecast. %d chronological checks; '
+                'band coverage %.1f%% against %.0f%% target. %s'
+                % (pts, (cov or 0) * 100, target * 100,
+                   'Median beat no change materially.' if validated else
+                   'The median is not validated as a prediction.'))
+    return {'status': ('VALIDATED' if validated else 'CALIBRATED_NO_MATERIAL_SKILL')
+            if calibrated else 'NOT_CALIBRATED', 'reasonCode': reason,
+            'bandCalibrated': calibrated, 'predictiveValidation': validated,
+            'labelRequirement': ('Walk-forward tested conditional scenario' if validated
+                                 else 'Conditional historical scenario'),
+            'headline': headline, 'evaluationKey': key,
+            'evaluation': {k: res.get(k) for k in (
+                'evaluationPoints', 'firstEvaluatedAt', 'lastEvaluatedAt',
+                'intervalCoverageRate', 'intervalCoverageTarget', 'medianAbsErrorPct',
+                'baselineMedianAbsErrorPct', 'skillVsNoChange', 'regimeCoverage',
+                'medianIntervalWidthPct', 'eraSlices', 'pairedV1', 'leakCheck')}}
+
+
+def _scenario_v2_candidate(asset, horizon):
+    if asset not in SCENARIO_LONG_HISTORY:
+        return None, {'status': 'FAILED', 'reasonCode': 'UNSUPPORTED_ASSET',
+                      'bandCalibrated': False}
+    hist = _scenario_v2_cached_history(asset)
+    if not hist:
+        return None, {'status': 'PENDING', 'reasonCode': 'HISTORY_PREPARING',
+                      'bandCalibrated': False,
+                      'headline': 'Loading trustworthy daily history in the background.'}
+    records = hist['observations']
+    built = _mkt_scenario_v2.build(
+        closes=[r['close'] for r in records], dates=[r['date'] for r in records],
+        horizon=SCENARIO_HORIZONS[horizon], snapshot_id=hist['snapshotId'],
+        data_hash=hist['dataHash'])
+    if not built.get('ok'):
+        return built, {'status': 'FAILED', 'reasonCode': built.get('reason'),
+                       'bandCalibrated': False, 'predictiveValidation': False,
+                       'headline': 'Insufficient independent comparable history for v2.'}
+    return built, _scenario_v2_validation(asset, horizon, hist, built)
+
+
+@app.get('/api/v1/albert/scenario-outlooks/v2/evaluation')
+def albert_scenario_v2_evaluation(assetId: str = 'BTC', horizon: str = 'P7D',
+                                  user: dict = Depends(get_current_user)):
+    asset = (assetId or 'BTC').upper()[:12]
+    if horizon not in SCENARIO_HORIZONS:
+        raise HTTPException(status_code=422, detail='Unsupported horizon.')
+    hist = _scenario_v2_cached_history(asset) if asset in SCENARIO_LONG_HISTORY else None
+    if not hist:
+        return {'status': 'preparing', 'assetId': asset, 'horizon': horizon,
+                'reasonCode': 'HISTORY_PREPARING',
+                'modelVersion': _mkt_scenario_v2.MODEL_VERSION}
+    key = _mkt_scenario_v2.evaluation_key(asset, horizon, hist['dataHash'])
+    row = scenario_evals_col.find_one({'_id': key}, {'_id': 0})
+    if not row:
+        _scenario_v2_eval_start(asset, horizon, hist)
+        return {'status': 'computing', 'assetId': asset, 'horizon': horizon,
+                'historySnapshotId': hist['snapshotId'], 'historyDataHash': hist['dataHash'],
+                'modelVersion': _mkt_scenario_v2.MODEL_VERSION}
+    return {'status': 'ready' if (row.get('result') or {}).get('ok') else 'failed',
+            'contractVersion': SCENARIO_V2_CONTRACT_VERSION, **row}

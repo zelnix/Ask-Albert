@@ -2,7 +2,7 @@
 
 import React, { useMemo, useState } from 'react';
 import {
-  AlertTriangle, Loader2, Maximize2, ChevronDown, MessageCircle, Info, Ban,
+  AlertTriangle, Loader2, Maximize2, ChevronDown, MessageCircle, Info, Ban, RefreshCw,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -173,13 +173,14 @@ function BandChart({ outlook, showMedian, height = 280, histCount = 45 }) {
 
 /* ---------------------------- the hero card ---------------------------- */
 export default function ScenarioChart({
-  outlook, loading, error, asset, assets, horizon, onAsset, onHorizon, onEvidence,
+  outlook, loading, error, asset, assets, horizon, onAsset, onHorizon, onRetry, onEvidence,
   onExpand, onAsk, embedded = false, chartHeight = 300, histCount = 45, leadership,
 }) {
   const [showMedian, setShowMedian] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const band = outlook?.band;
   const available = !!band?.available;
+  const preparing = band?.reasonCode === 'EVALUATION_NOT_COMPUTED_YET';
   const snap = band?.snapshotId;
   const ph = outlook?.phase;
 
@@ -222,6 +223,12 @@ export default function ScenarioChart({
           <p className="flex items-start gap-2 text-[13px] font-semibold text-amber-200">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />{error}
           </p>
+          {onRetry ? (
+            <Button size="sm" type="button" onClick={onRetry}
+              className="mt-3 bg-sky-500 text-white hover:bg-sky-400">
+              <RefreshCw className="mr-1.5 h-4 w-4" />Retry scenario
+            </Button>
+          ) : null}
         </div>
       ) : (
         <>
@@ -245,6 +252,16 @@ export default function ScenarioChart({
                 </span>
                 <EvidenceButton snapshotId={snap} onEvidence={onEvidence} label="Provider snapshot" />
               </p>
+            </div>
+          ) : preparing ? (
+            <div role="status" aria-live="polite" className="mt-3 rounded-xl border border-sky-500/30 bg-sky-500/[0.06] p-4">
+              <p className="flex items-center gap-2 text-[16px] font-bold text-sky-200">
+                <Loader2 className="h-4 w-4 animate-spin" />Preparing today's scenario
+              </p>
+              <p className="mt-1.5 max-w-[80ch] text-[13px] leading-relaxed text-slate-300">
+                Albert is checking the historical range against its walk-forward evaluation. This usually takes less than a minute.
+              </p>
+              <p className="mt-2 text-[12px] text-slate-400">The observed history below is real. No scenario range is shown until the check completes.</p>
             </div>
           ) : (
             <div className="mt-3 rounded-xl border border-slate-700 bg-slate-950/60 p-4">
