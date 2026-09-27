@@ -11,7 +11,7 @@ import time
 from typing import Dict, List, Any
 
 # Base URL from environment
-BASE_URL = "https://quant-features.preview.emergentagent.com/api"
+BASE_URL = "https://what-if-sandbox.preview.emergentagent.com/api"
 
 # IMPORTANT: Use 75+ second timeout for LLM endpoints (can take 20-60s on cache miss)
 LLM_TIMEOUT = 90

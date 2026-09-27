@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 Comprehensive backend test for CQR conformal corridors + Triple-Barrier labels + quant validation engine
-Base URL: https://quant-features.preview.emergentagent.com/api
+Base URL: https://what-if-sandbox.preview.emergentagent.com/api
 """
 
 import requests
 import sys
 
-BASE_URL = "https://quant-features.preview.emergentagent.com/api"
+BASE_URL = "https://what-if-sandbox.preview.emergentagent.com/api"
 
 def test_dashboard_forecasts():
     """
@@ -504,7 +504,7 @@ def main():
     """Run all tests"""
     print("\n" + "="*80)
     print("BITMARKAI FASTAPI QUANT UPGRADES - FINAL VALIDATION")
-    print("Base URL: https://quant-features.preview.emergentagent.com/api")
+    print("Base URL: https://what-if-sandbox.preview.emergentagent.com/api")
     print("="*80)
     
     tests = [

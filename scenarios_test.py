@@ -8,7 +8,7 @@ import requests
 import json
 import sys
 
-BASE_URL = "https://quant-features.preview.emergentagent.com/api"
+BASE_URL = "https://what-if-sandbox.preview.emergentagent.com/api"
 
 def test_dashboard_scenarios_block():
     """

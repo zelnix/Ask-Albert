@@ -8,7 +8,7 @@ import sys
 import json
 
 # Base URL from .env
-BASE_URL = "https://quant-features.preview.emergentagent.com/api"
+BASE_URL = "https://what-if-sandbox.preview.emergentagent.com/api"
 
 def test_drift_endpoint():
     """Test GET /api/v1/drift endpoint"""

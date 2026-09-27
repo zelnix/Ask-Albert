@@ -13,7 +13,7 @@ import requests
 import sys
 import time
 
-BASE_URL = "https://quant-features.preview.emergentagent.com/api"
+BASE_URL = "https://what-if-sandbox.preview.emergentagent.com/api"
 
 def test_composite_price():
     """Test 1: GET /api/v1/composite-price - Composite Spot Price"""

@@ -9,7 +9,7 @@ import requests
 import sys
 import time
 
-BASE_URL = "https://quant-features.preview.emergentagent.com/api"
+BASE_URL = "https://what-if-sandbox.preview.emergentagent.com/api"
 
 def test_leverage_timeframe(timeframe):
     """Test leverage endpoint for a specific timeframe"""

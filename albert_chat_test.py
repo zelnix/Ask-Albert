@@ -15,7 +15,7 @@ import time
 import json
 
 # Base URL from .env
-BASE_URL = "https://quant-features.preview.emergentagent.com/api"
+BASE_URL = "https://what-if-sandbox.preview.emergentagent.com/api"
 
 # Generous timeout for web-search turns (can take several seconds)
 TIMEOUT = 45

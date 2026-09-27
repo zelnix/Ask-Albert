@@ -3772,7 +3772,7 @@ export default function DashboardPage() {
                 <Scale className="h-4 w-4" /><span className="hidden sm:inline">vs Bitcoin</span>
               </button>
             )}
-            <div className="hidden min-w-0 items-center gap-2 xl:flex">
+            <div className="order-last hidden min-w-0 w-full flex-wrap items-center gap-2 border-t border-slate-800/60 pt-2 md:flex xl:order-none xl:w-auto xl:border-0 xl:pt-0">
               <span className="flex items-center gap-1 text-xs font-bold text-emerald-400">
                 <span className="relative flex h-2 w-2"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" /><span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" /></span>LIVE
               </span>

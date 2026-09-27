@@ -10,7 +10,7 @@ import time
 import json
 from typing import Dict, Any
 
-BASE_URL = "https://quant-features.preview.emergentagent.com/api"
+BASE_URL = "https://what-if-sandbox.preview.emergentagent.com/api"
 
 def test_fear_greed():
     """

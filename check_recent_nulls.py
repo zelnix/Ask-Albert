@@ -2,7 +2,7 @@
 """Check if recent-dated items have v=null at far offsets."""
 import requests
 
-BASE_URL = "https://quant-features.preview.emergentagent.com"
+BASE_URL = "https://what-if-sandbox.preview.emergentagent.com"
 
 url = f"{BASE_URL}/api/v1/analogs"
 resp = requests.get(url, timeout=30)

@@ -10,7 +10,7 @@ import time
 from datetime import datetime, timedelta
 
 # External base URL from .env
-BASE_URL = "https://quant-features.preview.emergentagent.com"
+BASE_URL = "https://what-if-sandbox.preview.emergentagent.com"
 
 
 def test_bitmark_dashboard():

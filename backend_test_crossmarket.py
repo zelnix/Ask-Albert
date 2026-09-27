@@ -7,7 +7,7 @@ import requests
 import time
 import sys
 
-BASE_URL = "https://quant-features.preview.emergentagent.com/api/v1"
+BASE_URL = "https://what-if-sandbox.preview.emergentagent.com/api/v1"
 
 def test_btc_markets_1y(max_wait=90):
     """Test 1: BTC markets window=1y - poll computing->ready, validate structure"""

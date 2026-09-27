@@ -9,7 +9,7 @@ import sys
 import time
 
 # Base URL from .env NEXT_PUBLIC_BASE_URL
-BASE_URL = "https://quant-features.preview.emergentagent.com/api"
+BASE_URL = "https://what-if-sandbox.preview.emergentagent.com/api"
 
 # Global state to track created basket IDs for cleanup
 created_basket_ids = []

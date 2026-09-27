@@ -11,7 +11,7 @@ import time
 import sys
 
 # Base URL from .env
-BASE_URL = "https://quant-features.preview.emergentagent.com/api"
+BASE_URL = "https://what-if-sandbox.preview.emergentagent.com/api"
 
 # Generous timeouts for LLM + real exchange calls (60-90s per call as mentioned)
 LLM_TIMEOUT = 90

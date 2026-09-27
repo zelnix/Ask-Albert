@@ -81,12 +81,8 @@ memory/test_credentials.md
 android-sdk/node_modules/@next/swc-linux-arm64-musl/next-swc.linux-arm64-musl.node
 node_modules/@next/swc-linux-arm64-gnu/next-swc.linux-arm64-gnu.node
 node_modules/@next/swc-linux-arm64-musl/next-swc.linux-arm64-musl.node
-# NOTE: .env files are intentionally tracked so the Emergent Kubernetes deploy can
-# inject production values into them. Do NOT re-ignore these — an untracked .env
-# leaves the deployed backend without MONGO_URL/keys and it crashes on boot (Cloudflare 520).
-# .env
-# .env.*
-# *.env
+# Production secrets are supplied through the deployment platform's environment
+# settings. Keep local .env files ignored; .env.example contains names only.
 credentials.json
 *.key
 .credentials
@@ -95,3 +91,4 @@ credentials.json
 .env
 .env.*
 *.env
+!.env.example

@@ -7,7 +7,7 @@ import time
 import uuid
 from typing import Dict, Any
 
-BASE_URL = "https://quant-features.preview.emergentagent.com/api"
+BASE_URL = "https://what-if-sandbox.preview.emergentagent.com/api"
 SEEDED_PID = "u_7693422a-e2c0-4242-8211-e6f1d0eaa320"
 
 # Track test PIDs for cleanup

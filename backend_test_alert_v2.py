@@ -10,7 +10,7 @@ import time
 import sys
 
 # Base URL from .env
-BASE_URL = "https://quant-features.preview.emergentagent.com/api"
+BASE_URL = "https://what-if-sandbox.preview.emergentagent.com/api"
 
 # Timeout for backtest endpoints (can take 30-60s per request due to real ccxt data)
 BACKTEST_TIMEOUT = 60

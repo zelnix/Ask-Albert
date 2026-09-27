@@ -2,14 +2,14 @@
 """
 BitMarkAI Coverage Alerts + Self-Healing Corridor Widen + Model-Health Badge Test
 Tests the latest additions to the BitMarkAI validation system.
-Base URL: https://quant-features.preview.emergentagent.com/api
+Base URL: https://what-if-sandbox.preview.emergentagent.com/api
 IMPORTANT: Do NOT POST to any /api/v1/email/* endpoints. GET only.
 """
 
 import requests
 import sys
 
-BASE_URL = "https://quant-features.preview.emergentagent.com/api"
+BASE_URL = "https://what-if-sandbox.preview.emergentagent.com/api"
 
 def test_validation_endpoint():
     """

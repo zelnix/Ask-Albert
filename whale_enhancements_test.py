@@ -14,7 +14,7 @@ import json
 from datetime import datetime
 
 # External base URL from .env
-BASE_URL = "https://quant-features.preview.emergentagent.com/api"
+BASE_URL = "https://what-if-sandbox.preview.emergentagent.com/api"
 
 def test_etf_full_history():
     """

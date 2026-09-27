@@ -7,7 +7,7 @@ import requests
 import time
 import sys
 
-BASE_URL = "https://quant-features.preview.emergentagent.com/api/v1"
+BASE_URL = "https://what-if-sandbox.preview.emergentagent.com/api/v1"
 
 def test_analogs_endpoint(max_wait=90):
     """Test 1: GET /api/v1/analogs - poll until ready, validate structure"""

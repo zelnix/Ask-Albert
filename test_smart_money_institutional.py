@@ -11,7 +11,7 @@ import time
 from typing import Dict, List, Any
 
 # Base URL from environment
-BASE_URL = "https://quant-features.preview.emergentagent.com/api"
+BASE_URL = "https://what-if-sandbox.preview.emergentagent.com/api"
 
 def print_test_header(test_name: str):
     """Print a formatted test header"""

@@ -9,7 +9,7 @@ import requests
 from datetime import datetime
 
 # Load base URL from .env
-BASE_URL = os.getenv('NEXT_PUBLIC_BASE_URL', 'https://quant-features.preview.emergentagent.com')
+BASE_URL = os.getenv('NEXT_PUBLIC_BASE_URL', 'https://what-if-sandbox.preview.emergentagent.com')
 API_BASE = f"{BASE_URL}/api/v1"
 
 print(f"Testing intelligence layer at: {API_BASE}")

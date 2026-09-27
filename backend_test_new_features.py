@@ -7,7 +7,7 @@ Backend test for FOUR NEW basket features:
 4. Regression / startup health
 
 Test PIDs: u_TESTCHAT1, u_TESTCHAT2
-Base URL: https://quant-features.preview.emergentagent.com/api
+Base URL: https://what-if-sandbox.preview.emergentagent.com/api
 """
 import requests
 import json
@@ -15,7 +15,7 @@ import sys
 import time
 
 # Base URL from .env NEXT_PUBLIC_BASE_URL
-BASE_URL = "https://quant-features.preview.emergentagent.com/api"
+BASE_URL = "https://what-if-sandbox.preview.emergentagent.com/api"
 
 # Test PIDs
 PID1 = "u_TESTCHAT1"

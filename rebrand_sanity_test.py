@@ -11,7 +11,7 @@ import time
 import sys
 
 # Use the external URL with /api prefix (proxied to internal :8001)
-BASE_URL = "https://quant-features.preview.emergentagent.com/api"
+BASE_URL = "https://what-if-sandbox.preview.emergentagent.com/api"
 
 def test_health():
     """Test 1: GET /api/v1/health -> 200"""

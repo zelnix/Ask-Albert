@@ -31,7 +31,7 @@ import time
 import json
 import requests
 
-BASE_URL = "https://quant-features.preview.emergentagent.com/api"
+BASE_URL = "https://what-if-sandbox.preview.emergentagent.com/api"
 TIMEOUT = 90  # seconds
 ADMIN_PASSCODE = "000000"
 

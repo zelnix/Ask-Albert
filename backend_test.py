@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 load_dotenv('/app/.env')
 
 # Configuration
-BASE_URL = os.environ.get('NEXT_PUBLIC_BASE_URL', 'https://quant-features.preview.emergentagent.com')
+BASE_URL = os.environ.get('NEXT_PUBLIC_BASE_URL', 'https://what-if-sandbox.preview.emergentagent.com')
 API_BASE = f"{BASE_URL}/api"
 MONGO_URL = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
 DB_NAME = os.environ.get('DB_NAME', 'btciq')

@@ -603,7 +603,7 @@ backend:
         -working: true
         -agent: "testing"
         -comment: |
-          ✅ PASSED comprehensive Bell Integration backend testing via external URL (https://quant-features.preview.emergentagent.com/api).
+          ✅ PASSED comprehensive Bell Integration backend testing via external URL (https://what-if-sandbox.preview.emergentagent.com/api).
           ALL 5 TESTS PASSED (5/5): Tests A-E as specified in review request.
           
           TEST A - EMPTY PID: ✅ PASSED
@@ -621,7 +621,7 @@ backend:
           • Flip alert lifecycle working correctly (insert -> GET unseen -> ack -> GET seen) ✅
           
           TEST C - PAPER FILL LIFECYCLE: ✅ PASSED
-          • Inserted paper fill: _id=673469d1-2afa-4e3d-835e-eef46d4af499, pid=u_BELL_56f99791, ETH BUY 1.0 @ $2000 ✅
+          • Inserted paper fill: _id=what-if-sandbox, pid=u_BELL_56f99791, ETH BUY 1.0 @ $2000 ✅
           • GET /notifications returned 1 fill alert: id='fill_673469d1-2afa-4e3d-835e-eef46d4af499', category='fill', 
             severity='success', seen=false ✅
           • POST /notifications/ack {pid, ids:['fill_673469d1-2afa-4e3d-835e-eef46d4af499']} successful ✅
@@ -694,7 +694,7 @@ backend:
         -working: true
         -agent: "testing"
         -comment: |
-          ✅ PASSED comprehensive Weekly Brief backend testing via external URL (https://quant-features.preview.emergentagent.com/api).
+          ✅ PASSED comprehensive Weekly Brief backend testing via external URL (https://what-if-sandbox.preview.emergentagent.com/api).
           ALL 3 TESTS PASSED (3/3): Tests A-C as specified in review request.
           
           TEST A - NO PID & FRESH PID: ✅ PASSED (2/2 sub-tests)
@@ -767,7 +767,7 @@ backend:
           
           AUTHENTICATION SETUP: ✅ SUCCESSFUL
           • Cookie injection: albert_session=e2e_test_session_token_albert_0001 (set BEFORE navigation) ✅
-          • localStorage injection: btciq_user_id=7693422a-e2c0-4242-8211-e6f1d0eaa320 (via init script) ✅
+          • localStorage injection: btciq_user_id=what-if-sandbox (via init script) ✅
           • Splash screen handling: NO "Waking Albert..." splash detected - auth resolved immediately ✅
           • Dashboard loaded: Verified dashboard content present (briefing section, drivers, etc.) ✅
           • Auth API: /api/auth/me endpoint working correctly with seeded session ✅
@@ -951,7 +951,7 @@ backend:
         -working: true
         -agent: "testing"
         -comment: |
-          ✅ PASSED comprehensive Phase E backend testing via external URL (https://quant-features.preview.emergentagent.com/api).
+          ✅ PASSED comprehensive Phase E backend testing via external URL (https://what-if-sandbox.preview.emergentagent.com/api).
           ALL 8 TESTS PASSED (8/8): Tests A-H as specified in review request.
           
           TEST A - HAPPY FULL FILL: ✅ PASSED
@@ -1112,7 +1112,7 @@ backend:
         -working: true
         -agent: "testing"
         -comment: |
-          ✅ PASSED comprehensive Phase D2 backend testing via external URL (https://quant-features.preview.emergentagent.com/api).
+          ✅ PASSED comprehensive Phase D2 backend testing via external URL (https://what-if-sandbox.preview.emergentagent.com/api).
           ALL 5 TESTS PASSED (5/5): Test A (Regression), Test B (Immutable Envelope), Test C (Discovery vs Eligibility), 
           Test D (Decision-Change History), Test E (Ask Albert Explain).
           
@@ -1146,23 +1146,23 @@ backend:
             ineligible assets are scored and shown but can NEVER become BUY ✅
           
           TEST D - DECISION-CHANGE HISTORY: ✅ PASSED (4/4 sub-tests)
-          • D1: Initial setup (approved=['BTC','ETH'], hold 0.1 BTC) → BTC decisionId=51385e52-ac4c-4088-8d82-66552390e908, 
+          • D1: Initial setup (approved=['BTC','ETH'], hold 0.1 BTC) → BTC decisionId=what-if-sandbox, 
             action=SELL, reasonCode=RISK_REDUCTION ✅
           • D2: Called /decisions again with NO changes → decisionId STABLE (still 51385e52-...), decision-history count=0 
             (no spam) ✅
-          • D3: Excluded BTC from mandate → NEW decisionId=8fbb56a8-9923-4499-a7f7-d650fe386b50, action=SELL, 
+          • D3: Excluded BTC from mandate → NEW decisionId=what-if-sandbox, action=SELL, 
             reasonCode=EMERGENCY_EXIT (changed from RISK_REDUCTION). decision-history count=1 with event: 
             previousDecisionId=51385e52-..., newDecisionId=8fbb56a8-..., previousSnapshotId & newSnapshotId present 
             (different), changeType='RISK_REDUCTION->EMERGENCY_EXIT', changeReason=['Reason RISK_REDUCTION -> EMERGENCY_EXIT', 
             'Eligibility eligible -> ineligible'] ✅
-          • D4: Removed BTC from excluded_coins → NEW decisionId=77b3a6a3-81b9-4b6b-8641-cd222857bfbc. History chain links 
+          • D4: Removed BTC from excluded_coins → NEW decisionId=what-if-sandbox. History chain links 
             correctly: Event 1 (51385e52-... → 8fbb56a8-...), Event 2 (8fbb56a8-... → 77b3a6a3-...). 
             previousDecisionId of Event 2 matches newDecisionId of Event 1 (audit chain intact) ✅
           • Validated: Genuine identity changes mint new decisionId+snapshotId and write history events; identical refreshes 
             reuse stable IDs and write NO events (no spam) ✅
           
           TEST E - ASK ALBERT EXPLAIN (read-only): ✅ PASSED (4/4 sub-tests)
-          • E1: Setup complete, BTC decisionId=84c445bf-9b23-4b45-b7d5-c6cdcd10b8a6 ✅
+          • E1: Setup complete, BTC decisionId=what-if-sandbox ✅
           • E2: GET /api/v1/albert/decision/{decisionId}?pid= returns HTTP 200, status='ready', decision with 
             decisionId=84c445bf-..., call=SELL, score=84.2, reasonCode=RISK_REDUCTION ✅
           • E3: POST /api/v1/albert/explain-call {pid, decisionId, question='Why this call and what would change it?'} 
@@ -1259,7 +1259,7 @@ backend:
         -working: true
         -agent: "testing"
         -comment: |
-          ✅ PASSED comprehensive Phase D1 backend testing via external URL (https://quant-features.preview.emergentagent.com/api).
+          ✅ PASSED comprehensive Phase D1 backend testing via external URL (https://what-if-sandbox.preview.emergentagent.com/api).
           ALL 12 TESTS PASSED (12/12): 5 Phase A/B/C regression tests + 7 Phase D1 SELL engine tests.
           
           PART 1 — Phase A/B/C REGRESSION (5/5 PASS):
@@ -1410,7 +1410,7 @@ backend:
         -working: true
         -agent: "testing"
         -comment: |
-          ✅ PASSED comprehensive Chat Rebalance testing via external URL (https://quant-features.preview.emergentagent.com/api). All 5 tests passed (5/5): Tests A-E as specified in review request.
+          ✅ PASSED comprehensive Chat Rebalance testing via external URL (https://what-if-sandbox.preview.emergentagent.com/api). All 5 tests passed (5/5): Tests A-E as specified in review request.
           TEST A (No baskets): POST /api/v1/chat {session_id:'cr-a', message:'rebalance my basket', pid:'u_CR_NONE'} -> HTTP 200 ✅, NO basket_rebalance field (null/absent) ✅, text says "You don't have any active baskets to rebalance yet" ✅
           TEST B (Single basket, direct intent): Built+saved ONE basket for pid 'u_CR_ONE' (goal: 'long the majors') -> basket created with title 'Major Caps Momentum & Mean Reversion Basket' (4 legs: BTC 40%, ETH 30%, SOL 20%, BNB 10%) ✅. POST /api/v1/chat {session_id:'cr-b', message:'rebalance my basket', pid:'u_CR_ONE'} -> HTTP 200 ✅, basket_rebalance present with all required fields: basket_id ✅, title='Major Caps Momentum & Mean Reversion Basket' ✅, rationale='Reset to equal weight to reduce single-name concentration' ✅, legs array with 4 items ✅. Each leg has symbol, position, current_weight, suggested_weight ✅. Suggested weights: BTC 40%->25%, ETH 30%->25%, SOL 20%->25%, BNB 10%->25% (sum=100.0%) ✅. POST /api/v1/chat {session_id:'cr-b2', message:'reweight my basket please', pid:'u_CR_ONE'} -> HTTP 200 ✅, basket_rebalance present ✅ (both 'rebalance' and 'reweight' trigger correctly).
           TEST C (Multiple baskets, name match): Built+saved TWO baskets for pid 'u_CR_TWO': (1) 'DeFi Blue-Chip Alpha Rotation' (3 legs: UNI, AAVE, LINK) ✅, (2) 'Large-Cap Beta: BTC/ETH Trend Following' (2 legs: BTC, ETH) ✅. POST /api/v1/chat {session_id:'cr-c1', message:'rebalance my defi basket', pid:'u_CR_TWO'} -> HTTP 200 ✅, basket_rebalance.title='DeFi Blue-Chip Alpha Rotation' ✅ (correctly matched DeFi basket by title token 'defi'). POST /api/v1/chat {session_id:'cr-c2', message:'rebalance my basket', pid:'u_CR_TWO'} (ambiguous, 2 baskets) -> HTTP 200 ✅, NO basket_rebalance ✅, text asks "Which basket should I rebalance? You have: 'Large-Cap Beta: BTC/ETH Trend Following', 'DeFi Blue-Chip Alpha Rotation'." ✅ (correctly lists both basket titles).
@@ -1436,7 +1436,7 @@ backend:
         -working: true
         -agent: "testing"
         -comment: |
-          ✅ PASSED Rotation field testing via external URL (https://quant-features.preview.emergentagent.com/api). TEST D from review request.
+          ✅ PASSED Rotation field testing via external URL (https://what-if-sandbox.preview.emergentagent.com/api). TEST D from review request.
           GET /api/v1/albert/strategy/baskets?pid=u_CR_ONE -> HTTP 200 ✅, status='ready' ✅, active array with 1 basket ✅. Basket: 'Major Caps Momentum & Mean Reversion Basket' ✅.
           ROTATION FIELD VALIDATION: 'rotation' field present ✅, rotation is array with 3 entries ✅. Each entry validated:
           Entry 0: sector='Smart-Contract L1' ✅, strength=4.45 (number) ✅, hot=True (bool) ✅, symbols=['ETH', 'SOL'] (array) ✅
@@ -1485,7 +1485,7 @@ backend:
         -working: true
         -agent: "testing"
         -comment: |
-          ✅ PASSED all 3 sub-tests (3/3) via external URL (https://quant-features.preview.emergentagent.com/api).
+          ✅ PASSED all 3 sub-tests (3/3) via external URL (https://what-if-sandbox.preview.emergentagent.com/api).
           SETUP: Created active basket for u_TESTCHAT1 via POST /api/v1/albert/strategy/basket/build (goal: 'long the majors, small short on a laggard') -> 200 with draft (4 legs: BTC long 35%, ETH long 25%, SOL long 25%, DOT short 15%), then POST /api/v1/albert/strategy/basket {draft, pid:'u_TESTCHAT1'} -> 200 with basket ID=8df38535907b460abb891d77aaf682d5, status='active', title='Major Momentum vs. Structural Laggard' ✅
           TEST 1a: POST /api/v1/chat {session_id:'tc-s1', message:'how are my baskets doing?', pid:'u_TESTCHAT1'} -> HTTP 200 ✅, response text (2067 chars) references the saved basket by title ('Major Momentum vs. Structural Laggard'), mentions P&L (0.01%, $0.08), and discusses basket performance (NOT a generic answer) ✅
           TEST 1b: POST /api/v1/chat {session_id:'tc-s1b', message:'how are my baskets doing?', pid:'u_TESTCHAT2'} -> HTTP 200 ✅, response does NOT reference PID1's specific basket (owner isolation confirmed) ✅. Minor: Albert provides generic market/portfolio commentary based on sector rotation data rather than explicitly saying "you have no baskets", but this is acceptable as PID1's basket is not leaked.
@@ -1518,7 +1518,7 @@ backend:
         -working: true
         -agent: "testing"
         -comment: |
-          ✅ PASSED all 4 sub-tests (4/4) via external URL (https://quant-features.preview.emergentagent.com/api).
+          ✅ PASSED all 4 sub-tests (4/4) via external URL (https://what-if-sandbox.preview.emergentagent.com/api).
           TEST 2a: POST /api/v1/chat {session_id:'tc-s2', message:'build me a basket long the majors, short a laggard', pid:'u_TESTCHAT1'} -> HTTP 200 ✅, response contains NON-NULL basket_draft with 4 legs (BTC long 30%, ETH long 25%, SOL long 25%, DOT short 20%) ✅, each leg has symbol/position/weight_pct ✅, text (595 chars) mentions 'Save & track' ✅, title='Major Momentum vs. Laggard Decay' ✅
           TEST 2b: POST /api/v1/chat {session_id:'tc-s2b', message:'how are my baskets doing?', pid:'u_TESTCHAT1'} -> HTTP 200 ✅, basket_draft is null/absent (correct for STATUS query, not a build request) ✅
           TEST 2c: POST /api/v1/chat {session_id:'tc-s2c', message:'what is BTC doing right now?', pid:'u_TESTCHAT1'} -> HTTP 200 ✅, basket_draft is null/absent (correct for non-basket query) ✅
@@ -1546,7 +1546,7 @@ backend:
         -working: true
         -agent: "testing"
         -comment: |
-          ✅ PASSED all 3 sub-tests (3/3) via external URL (https://quant-features.preview.emergentagent.com/api).
+          ✅ PASSED all 3 sub-tests (3/3) via external URL (https://what-if-sandbox.preview.emergentagent.com/api).
           TEST 3a: GET /api/v1/albert/basket-digest?pid=u_TESTCHAT1&hours=24 -> HTTP 200 ✅, status='ready' ✅, window_hours=24 ✅, generated_at='2026-09-06T08:52:13.403698' (timestamp present) ✅, total_hits=0 (integer, 0 is acceptable since legs haven't hit targets yet) ✅, baskets=[] (array, empty is acceptable) ✅
           TEST 3b: GET /api/v1/albert/basket-digest?pid=u_TESTCHAT1&hours=200 -> HTTP 200 ✅, window_hours=168 (correctly clamped to <=168) ✅
           TEST 3c: GET /api/v1/albert/basket-digest (no pid) -> HTTP 200 ✅, status='ready' ✅ (aggregates all owners correctly) ✅
@@ -1571,7 +1571,7 @@ backend:
         -working: true
         -agent: "testing"
         -comment: |
-          ✅ PASSED regression health checks (2/2) via external URL (https://quant-features.preview.emergentagent.com/api).
+          ✅ PASSED regression health checks (2/2) via external URL (https://what-if-sandbox.preview.emergentagent.com/api).
           This is a scheduled background job (no HTTP endpoint), so testing verifies: (1) backend starts cleanly with no scheduler errors, (2) no regression to other endpoints.
           TEST 4a: GET /api/v1/albert/strategy/baskets?pid=u_TESTCHAT1 -> HTTP 200 ✅, status='ready' ✅, active/history arrays present ✅, each active basket has perf.total_pnl_pct and perf.legs ✅ (2 active baskets, 0 history) ✅
           TEST 4b: GET /api/v1/alerts?limit=5 (health check) -> HTTP 200 ✅, status='ready' ✅ (app is healthy, no 500s) ✅
@@ -1590,7 +1590,7 @@ backend:
         -comment: "New basket endpoints coexisting with single-coin: POST /api/v1/albert/strategy/basket/build {goal?} (Albert picks 2-6 coins, long &/or short, weights ~100, equal-weight fallback) -> {draft}; POST /api/v1/albert/strategy/basket {draft,pid} saves kind='basket' owner=pid, status active; GET /api/v1/albert/strategy/baskets?pid -> {active,history} each with live weighted perf (per-leg pnl + aggregate total_pnl_pct computed on read from spot); POST /api/v1/albert/strategy/basket/{bid}/close. Single-coin eval job + engine-context now exclude kind='basket' (won't break). Direct-tested: build produced BTC/ETH/SOL long + DOT short (weights sum 100), activate returned weighted perf, list owner-isolated (u_BK1=1, u_BK2=0), close works. Also verified TTS now returns real audio (200) after the billing-enabled GEMINI_API_KEY update (Charon/Puck/Fenrir). Please retest: (1) POST /strategy/basket/build {goal:'long majors small short a laggard'} -> 200 draft with >=2 legs each having symbol/position/weight_pct; (2) POST /strategy/basket {draft,pid:'u_BT1'} -> 200 basket with perf.legs + perf.total_pnl_pct; (3) GET /strategy/baskets?pid=u_BT1 active=1, ?pid=u_BT2 active=0 (isolated); (4) POST /strategy/basket/{id}/close -> 200 status closed; (5) regression: single-coin GET /strategies?symbol=BTC&pid=u_BT1 still 200; POST /tts {text:'hi',voice:'Charon'} -> 200 audio_base64 present."
         -working: true
         -agent: "testing"
-        -comment: "✅ PASSED comprehensive multi-coin basket strategy testing via external URL (https://quant-features.preview.emergentagent.com/api). All 8 tests passed (8/8): 5 basket flow tests + 3 regression tests. BASKET FLOW: (1) POST /api/v1/albert/strategy/basket/build {goal:'long the majors, small short on a laggard'} returns HTTP 200 with status='ready', draft with 4 legs (BTC long 35%, ETH long 30%, SOL long 25%, DOT short 10%) ✅, weights sum to 100.0% ✅, each leg has symbol/position/weight_pct/entry_price/targets/stop ✅, title='Major Momentum vs. Structural Laggard Hedge', thesis (500 chars), horizon_days=21 ✅. (2) POST /api/v1/albert/strategy/basket {draft,pid:'u_BT1'} returns HTTP 200 with status='ready', basket.id='d4bdc1d3c54d4c8f892a5574d31ab90c', basket.status='active' ✅, basket.perf.legs: 4 items with symbol/position/weight_pct/entry_price/current_price/pnl_pct/pnl_usd/targets/stop ✅, basket.perf.total_pnl_pct=-0.02 (numeric) ✅, basket.perf.total_pnl_usd=-0.22 (numeric) ✅, basket.perf.days_active=0 ✅. (3) GET /api/v1/albert/strategy/baskets?pid=u_BT1 returns HTTP 200 with status='ready', active: 1 basket ✅, history: [] (empty) ✅. (4) GET /api/v1/albert/strategy/baskets?pid=u_BT2 returns HTTP 200 with status='ready', active: [] (0 baskets) ✅, history: [] (empty) ✅ (per-user isolation confirmed - u_BT2 cannot see u_BT1's basket). (5) POST /api/v1/albert/strategy/basket/d4bdc1d3c54d4c8f892a5574d31ab90c/close {} returns HTTP 200 with status='ready', basket.status='closed' ✅, basket.closed_at present ✅. REGRESSION: (6) GET /api/v1/albert/strategies?symbol=BTC&pid=u_BT1 returns HTTP 200 with status='ready' ✅ (single-coin strategy list still works, baskets are correctly excluded). (7) POST /api/v1/tts {text:'Hello, I am Albert.',voice:'Charon'} returns HTTP 200 with audio_base64 (200,440 chars), mime_type='audio/wav', cached=False ✅ (billing-enabled GEMINI_API_KEY working correctly). (8) POST /api/v1/chat {session_id:'basket-reg',message:'one line btc read',deep:false,symbol:'BTC',pid:'u_BT1'} returns HTTP 200 with non-empty text (1,428 chars), model='gemini-3-flash-preview' ✅. All validations passed. LLM basket draft generation working correctly (Albert picked 4 coins: BTC/ETH/SOL long + DOT short with contextual thesis). Weighted performance calculation working correctly (per-leg pnl_pct + aggregate total_pnl_pct). Per-user isolation working correctly (u_BT1's basket not visible to u_BT2). Basket close working correctly (status='closed', closed_at timestamp set). Single-coin strategy list correctly excludes baskets (kind='basket' filter working). TTS and chat regression tests passed (no breaking changes). Feature is fully functional and production-ready."
+        -comment: "✅ PASSED comprehensive multi-coin basket strategy testing via external URL (https://what-if-sandbox.preview.emergentagent.com/api). All 8 tests passed (8/8): 5 basket flow tests + 3 regression tests. BASKET FLOW: (1) POST /api/v1/albert/strategy/basket/build {goal:'long the majors, small short on a laggard'} returns HTTP 200 with status='ready', draft with 4 legs (BTC long 35%, ETH long 30%, SOL long 25%, DOT short 10%) ✅, weights sum to 100.0% ✅, each leg has symbol/position/weight_pct/entry_price/targets/stop ✅, title='Major Momentum vs. Structural Laggard Hedge', thesis (500 chars), horizon_days=21 ✅. (2) POST /api/v1/albert/strategy/basket {draft,pid:'u_BT1'} returns HTTP 200 with status='ready', basket.id='d4bdc1d3c54d4c8f892a5574d31ab90c', basket.status='active' ✅, basket.perf.legs: 4 items with symbol/position/weight_pct/entry_price/current_price/pnl_pct/pnl_usd/targets/stop ✅, basket.perf.total_pnl_pct=-0.02 (numeric) ✅, basket.perf.total_pnl_usd=-0.22 (numeric) ✅, basket.perf.days_active=0 ✅. (3) GET /api/v1/albert/strategy/baskets?pid=u_BT1 returns HTTP 200 with status='ready', active: 1 basket ✅, history: [] (empty) ✅. (4) GET /api/v1/albert/strategy/baskets?pid=u_BT2 returns HTTP 200 with status='ready', active: [] (0 baskets) ✅, history: [] (empty) ✅ (per-user isolation confirmed - u_BT2 cannot see u_BT1's basket). (5) POST /api/v1/albert/strategy/basket/d4bdc1d3c54d4c8f892a5574d31ab90c/close {} returns HTTP 200 with status='ready', basket.status='closed' ✅, basket.closed_at present ✅. REGRESSION: (6) GET /api/v1/albert/strategies?symbol=BTC&pid=u_BT1 returns HTTP 200 with status='ready' ✅ (single-coin strategy list still works, baskets are correctly excluded). (7) POST /api/v1/tts {text:'Hello, I am Albert.',voice:'Charon'} returns HTTP 200 with audio_base64 (200,440 chars), mime_type='audio/wav', cached=False ✅ (billing-enabled GEMINI_API_KEY working correctly). (8) POST /api/v1/chat {session_id:'basket-reg',message:'one line btc read',deep:false,symbol:'BTC',pid:'u_BT1'} returns HTTP 200 with non-empty text (1,428 chars), model='gemini-3-flash-preview' ✅. All validations passed. LLM basket draft generation working correctly (Albert picked 4 coins: BTC/ETH/SOL long + DOT short with contextual thesis). Weighted performance calculation working correctly (per-leg pnl_pct + aggregate total_pnl_pct). Per-user isolation working correctly (u_BT1's basket not visible to u_BT2). Basket close working correctly (status='closed', closed_at timestamp set). Single-coin strategy list correctly excludes baskets (kind='basket' filter working). TTS and chat regression tests passed (no breaking changes). Feature is fully functional and production-ready."
 
   - task: "Per-user scoping — voice preference + saved strategies keyed to the signed-in account (pid)"
     implemented: true
@@ -1605,7 +1605,7 @@ backend:
         -comment: "Voice pref now keyed per account: GET /api/v1/albert/voice-pref?pid=<id> and POST {pid,...} store under 'cfg:albert_voice:<pid>' (fallback to legacy global). Strategies scoped by owner=pid: POST /api/v1/albert/strategy reads pid from body and stamps strat.owner + closes only the caller's prior active for that coin; GET /api/v1/albert/strategy?symbol&pid and GET /api/v1/albert/strategies?symbol&pid filter by owner. Engine chat-context strategies scoped by pid too. Frontend passes getPid() (='u_'+userId when signed in). Direct-tested: voice u_AAA=Puck vs u_BBB=Fenrir (isolated); strategy activated for u_AAA visible only to u_AAA, u_BBB sees none; test data cleaned up. Please retest isolation: (1) POST voice-pref {pid:'u_T1',voice:'Puck'} & {pid:'u_T2',voice:'Fenrir'}; GET each -> isolated. (2) build a BTC draft (POST /strategy/build {symbol:'BTC'}), activate for pid 'u_T1' (POST /strategy {draft,pid:'u_T1'}); GET /strategies?symbol=BTC&pid=u_T1 -> active present; &pid=u_T2 -> active null/none; then CLOSE the u_T1 strategy (POST /strategy/{id}/close) to clean up."
         -working: true
         -agent: "testing"
-        -comment: "✅ PASSED comprehensive per-user data scoping test via external URL (https://quant-features.preview.emergentagent.com/api). All 9 tests passed (9/9). VOICE PREFERENCE ISOLATION: (1-2) POST /api/v1/albert/voice-pref for u_T1 {pid:'u_T1',engine:'gemini',voice:'Puck'} returns HTTP 200 with voice='Puck' ✅, POST for u_T2 {pid:'u_T2',engine:'gemini',voice:'Fenrir'} returns HTTP 200 with voice='Fenrir' ✅. (3) GET /api/v1/albert/voice-pref?pid=u_T1 returns voice='Puck' ✅, GET ?pid=u_T2 returns voice='Fenrir' ✅, voices differ (isolated) ✅, GET with no pid returns HTTP 200 with default voice ✅. STRATEGY ISOLATION: (4) POST /api/v1/albert/strategy/build {symbol:'BTC'} returns HTTP 200 with status='ready', draft with title='Bullish Trend Rider: Navigating Overbought Distribution', 2 targets, 4 rules ✅. (5) POST /api/v1/albert/strategy {draft,pid:'u_T1'} returns HTTP 200 with status='ready', strategy.status='active', strategy.owner='u_T1', strategy.id='abfc8e49719d4b01b1589845f3f5d4ef', entry_price=79391.4 ✅. (6) GET /api/v1/albert/strategies?symbol=BTC&pid=u_T1 returns HTTP 200 with active strategy present (owner='u_T1') ✅. (7) GET /api/v1/albert/strategies?symbol=BTC&pid=u_T2 returns HTTP 200 with active=null (None) and history=[] (empty, 0 items) ✅ (isolation confirmed - u_T2 cannot see u_T1's strategy). (8) GET /api/v1/albert/strategy?symbol=BTC&pid=u_T2 returns HTTP 200 with status='none' ✅. (9) CLEANUP: POST /api/v1/albert/strategy/abfc8e49719d4b01b1589845f3f5d4ef/close {reason:'test-cleanup'} returns HTTP 200 with strategy.status='closed', close_reason='test-cleanup' ✅. REGRESSION: (10) POST /api/v1/chat {session_id:'scope-reg',message:'one line btc read',deep:false,symbol:'BTC',pid:'u_T1'} returns HTTP 200 with non-empty text (271 chars) ✅. All validations passed. Voice preferences are correctly isolated per pid (u_T1=Puck, u_T2=Fenrir). Strategies are correctly scoped by owner=pid (u_T1's active BTC strategy is visible only to u_T1, u_T2 sees none). Strategy build took ~1s (LLM-generated draft). Cleanup successful (strategy closed). Feature is fully functional and production-ready."
+        -comment: "✅ PASSED comprehensive per-user data scoping test via external URL (https://what-if-sandbox.preview.emergentagent.com/api). All 9 tests passed (9/9). VOICE PREFERENCE ISOLATION: (1-2) POST /api/v1/albert/voice-pref for u_T1 {pid:'u_T1',engine:'gemini',voice:'Puck'} returns HTTP 200 with voice='Puck' ✅, POST for u_T2 {pid:'u_T2',engine:'gemini',voice:'Fenrir'} returns HTTP 200 with voice='Fenrir' ✅. (3) GET /api/v1/albert/voice-pref?pid=u_T1 returns voice='Puck' ✅, GET ?pid=u_T2 returns voice='Fenrir' ✅, voices differ (isolated) ✅, GET with no pid returns HTTP 200 with default voice ✅. STRATEGY ISOLATION: (4) POST /api/v1/albert/strategy/build {symbol:'BTC'} returns HTTP 200 with status='ready', draft with title='Bullish Trend Rider: Navigating Overbought Distribution', 2 targets, 4 rules ✅. (5) POST /api/v1/albert/strategy {draft,pid:'u_T1'} returns HTTP 200 with status='ready', strategy.status='active', strategy.owner='u_T1', strategy.id='abfc8e49719d4b01b1589845f3f5d4ef', entry_price=79391.4 ✅. (6) GET /api/v1/albert/strategies?symbol=BTC&pid=u_T1 returns HTTP 200 with active strategy present (owner='u_T1') ✅. (7) GET /api/v1/albert/strategies?symbol=BTC&pid=u_T2 returns HTTP 200 with active=null (None) and history=[] (empty, 0 items) ✅ (isolation confirmed - u_T2 cannot see u_T1's strategy). (8) GET /api/v1/albert/strategy?symbol=BTC&pid=u_T2 returns HTTP 200 with status='none' ✅. (9) CLEANUP: POST /api/v1/albert/strategy/abfc8e49719d4b01b1589845f3f5d4ef/close {reason:'test-cleanup'} returns HTTP 200 with strategy.status='closed', close_reason='test-cleanup' ✅. REGRESSION: (10) POST /api/v1/chat {session_id:'scope-reg',message:'one line btc read',deep:false,symbol:'BTC',pid:'u_T1'} returns HTTP 200 with non-empty text (271 chars) ✅. All validations passed. Voice preferences are correctly isolated per pid (u_T1=Puck, u_T2=Fenrir). Strategies are correctly scoped by owner=pid (u_T1's active BTC strategy is visible only to u_T1, u_T2 sees none). Strategy build took ~1s (LLM-generated draft). Cleanup successful (strategy closed). Feature is fully functional and production-ready."
 
   - task: "Native Google Sign-In (GIS ID-token) + gated home page + per-user data scoping"
     implemented: true
@@ -1617,10 +1617,10 @@ backend:
     status_history:
         -working: true
         -agent: "main"
-        -comment: "Added native Google sign-in (GIS ID-token flow). Backend: GET /api/auth/config (public: {configured, client_id}); POST /api/auth/google {credential} verifies the Google ID token with google-auth against GOOGLE_CLIENT_ID, upserts user (by google_sub) in users_col, creates a 7-day opaque session in auth_sessions_col, sets httpOnly cookie 'albert_session' (secure, samesite=lax); GET /api/auth/me (Depends get_current_user; 401 without cookie); POST /api/auth/logout (deletes session, clears cookie). Sync pymongo, UUID ids. GOOGLE_CLIENT_ID in /app/.env. Frontend: marketing HomePage with GIS button gates the whole dashboard (page.js authUser gate), sign-out in Admin, getPid() returns 'u_'+userId when signed in so portfolio/watchlist/strategies scope per-user. Manually verified: config=configured:true; me(no cookie)=401; google(bad token)=401; google(empty)=400; logout=200. NOTE: real Google login also requires the app origin (https://quant-features.preview.emergentagent.com) added to Authorized JavaScript origins in Google Cloud Console (user action). Please test the NEGATIVE/structure paths (cannot mint a real Google token): GET /api/auth/config -> 200 configured:true; GET /api/auth/me no-cookie -> 401; GET /api/auth/me with a bogus cookie 'albert_session=xxx' -> 401; POST /api/auth/google {} -> 400; POST /api/auth/google {credential:'bad'} -> 401; POST /api/auth/logout -> 200 ok:true. Also regression: existing /api/v1/dashboard, /api/v1/chat still 200."
+        -comment: "Added native Google sign-in (GIS ID-token flow). Backend: GET /api/auth/config (public: {configured, client_id}); POST /api/auth/google {credential} verifies the Google ID token with google-auth against GOOGLE_CLIENT_ID, upserts user (by google_sub) in users_col, creates a 7-day opaque session in auth_sessions_col, sets httpOnly cookie 'albert_session' (secure, samesite=lax); GET /api/auth/me (Depends get_current_user; 401 without cookie); POST /api/auth/logout (deletes session, clears cookie). Sync pymongo, UUID ids. GOOGLE_CLIENT_ID in /app/.env. Frontend: marketing HomePage with GIS button gates the whole dashboard (page.js authUser gate), sign-out in Admin, getPid() returns 'u_'+userId when signed in so portfolio/watchlist/strategies scope per-user. Manually verified: config=configured:true; me(no cookie)=401; google(bad token)=401; google(empty)=400; logout=200. NOTE: real Google login also requires the app origin (https://what-if-sandbox.preview.emergentagent.com) added to Authorized JavaScript origins in Google Cloud Console (user action). Please test the NEGATIVE/structure paths (cannot mint a real Google token): GET /api/auth/config -> 200 configured:true; GET /api/auth/me no-cookie -> 401; GET /api/auth/me with a bogus cookie 'albert_session=xxx' -> 401; POST /api/auth/google {} -> 400; POST /api/auth/google {credential:'bad'} -> 401; POST /api/auth/logout -> 200 ok:true. Also regression: existing /api/v1/dashboard, /api/v1/chat still 200."
         -working: true
         -agent: "testing"
-        -comment: "✅ PASSED comprehensive Native Google Sign-In backend testing via external URL (https://quant-features.preview.emergentagent.com/api). All 10 tests passed (10/10): 7 auth endpoint tests + 3 regression tests. AUTH ENDPOINTS: (1) GET /api/auth/config returns HTTP 200 with configured=true and client_id='50938428801-7h4k019jhe7ilj2ke1qhol03a80vk4iu.apps.googleusercontent.com' ✅ (2) GET /api/auth/me (no cookie) returns HTTP 401 with detail='Not authenticated' ✅ (3) GET /api/auth/me (bogus cookie 'albert_session=doesnotexist') returns HTTP 401 with detail='Not authenticated' ✅ (4) GET /api/auth/me (bogus Bearer token) returns HTTP 401 with detail='Not authenticated' ✅ (5) POST /api/auth/google {} (empty body) returns HTTP 400 with detail='Missing Google credential' ✅ (6) POST /api/auth/google {credential:'bad.jwt.here'} returns HTTP 401 with detail='Invalid Google token' ✅ (7) POST /api/auth/logout (no cookie) returns HTTP 200 with ok=true ✅. REGRESSION TESTS: (8) GET /api/v1/dashboard returns HTTP 200 with status='ready' and all expected fields ✅ (9) POST /api/v1/chat {session_id:'auth-reg', message:'One line BTC read?', deep:false, symbol:'BTC'} returns HTTP 200 with non-empty text (227 chars) and model='gemini-3-flash-preview' ✅ (10) GET /api/v1/settings/models returns HTTP 200 with status='ready' ✅. All validations passed. Auth endpoints correctly handle negative/structure paths (no real Google token needed). Error responses have correct status codes and detail messages. Regression tests confirm no breaking changes to existing endpoints. Feature is fully functional and production-ready."
+        -comment: "✅ PASSED comprehensive Native Google Sign-In backend testing via external URL (https://what-if-sandbox.preview.emergentagent.com/api). All 10 tests passed (10/10): 7 auth endpoint tests + 3 regression tests. AUTH ENDPOINTS: (1) GET /api/auth/config returns HTTP 200 with configured=true and client_id='50938428801-7h4k019jhe7ilj2ke1qhol03a80vk4iu.apps.googleusercontent.com' ✅ (2) GET /api/auth/me (no cookie) returns HTTP 401 with detail='Not authenticated' ✅ (3) GET /api/auth/me (bogus cookie 'albert_session=doesnotexist') returns HTTP 401 with detail='Not authenticated' ✅ (4) GET /api/auth/me (bogus Bearer token) returns HTTP 401 with detail='Not authenticated' ✅ (5) POST /api/auth/google {} (empty body) returns HTTP 400 with detail='Missing Google credential' ✅ (6) POST /api/auth/google {credential:'bad.jwt.here'} returns HTTP 401 with detail='Invalid Google token' ✅ (7) POST /api/auth/logout (no cookie) returns HTTP 200 with ok=true ✅. REGRESSION TESTS: (8) GET /api/v1/dashboard returns HTTP 200 with status='ready' and all expected fields ✅ (9) POST /api/v1/chat {session_id:'auth-reg', message:'One line BTC read?', deep:false, symbol:'BTC'} returns HTTP 200 with non-empty text (227 chars) and model='gemini-3-flash-preview' ✅ (10) GET /api/v1/settings/models returns HTTP 200 with status='ready' ✅. All validations passed. Auth endpoints correctly handle negative/structure paths (no real Google token needed). Error responses have correct status codes and detail messages. Regression tests confirm no breaking changes to existing endpoints. Feature is fully functional and production-ready."
 
   - task: "Albert Knows the Engines — Alert-Engine edge board, sector rotation, recent signals & active strategies injected into chat context"
     implemented: true
@@ -1635,7 +1635,7 @@ backend:
         -comment: "Added _albert_engine_context(symbol) appended to chat ctx in POST /api/v1/chat. Sources: edge board + sector rotation from a cached snapshot (misc_col _id='albert_engine_snapshot', warmed by new scheduler job _engine_snapshot_job every 3h + ~40s after boot), recent fired signals from smart_alerts_col, and active strategies from strategies_col. New debug endpoint GET /api/v1/albert/engine-brief?symbol=BTC returns the raw context block. CHAT_SYSTEM updated so Albert uses the 'ALBERT'S ENGINES' section for 'best edge setup', 'sector rotation', 'how are my strategies' questions. Smoke-tested: engine-brief 200 with edge board (FIL rsi_overbought score 56.94) + DeFi sector +11.45%; chat correctly cited them. Please verify GET /api/v1/albert/engine-brief returns 200 with a non-empty context (edge board rows + sectors), and POST /api/v1/chat asking 'what is my best edge setup right now and which sectors are rotating in?' returns 200 and references specific coins/detectors/sectors."
         -working: true
         -agent: "testing"
-        -comment: "✅ PASSED comprehensive testing via external URL (https://quant-features.preview.emergentagent.com/api). All 3 tests passed (3/3). STEP B5 - GET /api/v1/albert/engine-brief?symbol=BTC: HTTP 200 (2.4s) ✅, status='ready' ✅, context: 1124 chars (non-empty) ✅. Context includes ALL expected sections: 'ALERT ENGINE' edge board rows (FIL rsi_overbought score 56.94, BCH 28.14, NEAR 28.02, UNI 26.34) ✅, 'SECTOR ROTATION' data (DeFi rotating IN) ✅, 'RECENT SIGNALS' ✅, 'ACTIVE STRATEGIES' ✅. STEP B6 - POST /api/v1/chat asking 'What's my best edge setup right now, and which sectors are rotating in?': HTTP 200 (12.1s) ✅, text: 2286 chars (non-empty) ✅, model='gemini-3-flash-preview' ✅. Response includes specific data: FIL (Filecoin) with RSI Overbought signal and edge score 56.94 ✅, DeFi sector rotating IN ✅. Snapshot is WARM (not cold) - Albert correctly cites specific coins, detectors, edge scores, and sectors (NOT fabricated). STEP B7 - Regression tests: Standard chat HTTP 200 (11.0s) with 1844 chars ✅, Deep chat HTTP 200 (11.9s) with 2340 chars ✅, Insight HTTP 200 (9.7s) status='ready' ✅. All validations passed. Feature is fully functional and production-ready."
+        -comment: "✅ PASSED comprehensive testing via external URL (https://what-if-sandbox.preview.emergentagent.com/api). All 3 tests passed (3/3). STEP B5 - GET /api/v1/albert/engine-brief?symbol=BTC: HTTP 200 (2.4s) ✅, status='ready' ✅, context: 1124 chars (non-empty) ✅. Context includes ALL expected sections: 'ALERT ENGINE' edge board rows (FIL rsi_overbought score 56.94, BCH 28.14, NEAR 28.02, UNI 26.34) ✅, 'SECTOR ROTATION' data (DeFi rotating IN) ✅, 'RECENT SIGNALS' ✅, 'ACTIVE STRATEGIES' ✅. STEP B6 - POST /api/v1/chat asking 'What's my best edge setup right now, and which sectors are rotating in?': HTTP 200 (12.1s) ✅, text: 2286 chars (non-empty) ✅, model='gemini-3-flash-preview' ✅. Response includes specific data: FIL (Filecoin) with RSI Overbought signal and edge score 56.94 ✅, DeFi sector rotating IN ✅. Snapshot is WARM (not cold) - Albert correctly cites specific coins, detectors, edge scores, and sectors (NOT fabricated). STEP B7 - Regression tests: Standard chat HTTP 200 (11.0s) with 1844 chars ✅, Deep chat HTTP 200 (11.9s) with 2340 chars ✅, Insight HTTP 200 (9.7s) status='ready' ✅. All validations passed. Feature is fully functional and production-ready."
   - task: "Model Switcher — per-feature Flash vs Pro selection (GET/POST /api/v1/settings/models)"
     implemented: true
     working: true
@@ -1649,7 +1649,7 @@ backend:
         -comment: "Added _get_model_prefs/_model_for helpers + GET/POST /api/v1/settings/models. Prefs stored in misc_col (_id='ai_model_prefs') for features: chat_standard(flash), chat_deep(pro), insight(flash), brief(flash), strategy(flash), news(flash). Every LLM call site now resolves its model via _model_for(feature): chat (_albert_answer attempts), insight, brief (x2: brief + weekly recap), strategy build, news (x2). Grounded web-search sub-calls still route to Flash in the shim. Smoke-tested: GET returns prefs+models(flash=gemini-3-flash-preview, pro=gemini-3.1-pro-preview)+features; POST {prefs:{chat_standard:'pro'}} persists; invalid values ignored. Please test: GET /api/v1/settings/models -> 200 {prefs, models, features(6 items)}; POST {prefs:{insight:'pro'}} -> 200 and GET reflects insight='pro'; POST invalid {prefs:{insight:'xxx'}} -> ignored (stays 'pro'); RESET all to defaults (chat_standard/insight/brief/strategy/news='flash', chat_deep='pro') at the end."
         -working: true
         -agent: "testing"
-        -comment: "✅ PASSED comprehensive testing via external URL (https://quant-features.preview.emergentagent.com/api). All 4 tests passed (4/4). STEP A1 - GET /api/v1/settings/models: HTTP 200 (0.4s) ✅, status='ready' ✅, prefs: 6 items (chat_standard, chat_deep, insight, brief, strategy, news) ✅, models: flash='gemini-3-flash-preview', pro='gemini-3.1-pro-preview' ✅, features: 6 items with key/label/default ✅. Defaults validated: chat_deep='pro' ✅, all others (chat_standard, insight, brief, strategy, news) = 'flash' ✅. STEP A2 - POST /api/v1/settings/models {prefs:{insight:'pro'}}: HTTP 200 (0.2s) ✅, POST status='ready' ✅, GET confirms insight='pro' (persisted to MongoDB misc_col _id='ai_model_prefs') ✅. STEP A3 - POST invalid value {prefs:{insight:'xxx'}}: HTTP 200 (0.2s) ✅, GET confirms insight='pro' (invalid value 'xxx' correctly ignored, only 'flash' or 'pro' accepted) ✅. STEP A4 - RESET to defaults: POST with all 6 prefs ✅, GET confirms chat_deep='pro' and all others 'flash' ✅. All validations passed. Persistence working correctly (MongoDB misc_col). Invalid value validation working correctly. Feature is fully functional and production-ready."
+        -comment: "✅ PASSED comprehensive testing via external URL (https://what-if-sandbox.preview.emergentagent.com/api). All 4 tests passed (4/4). STEP A1 - GET /api/v1/settings/models: HTTP 200 (0.4s) ✅, status='ready' ✅, prefs: 6 items (chat_standard, chat_deep, insight, brief, strategy, news) ✅, models: flash='gemini-3-flash-preview', pro='gemini-3.1-pro-preview' ✅, features: 6 items with key/label/default ✅. Defaults validated: chat_deep='pro' ✅, all others (chat_standard, insight, brief, strategy, news) = 'flash' ✅. STEP A2 - POST /api/v1/settings/models {prefs:{insight:'pro'}}: HTTP 200 (0.2s) ✅, POST status='ready' ✅, GET confirms insight='pro' (persisted to MongoDB misc_col _id='ai_model_prefs') ✅. STEP A3 - POST invalid value {prefs:{insight:'xxx'}}: HTTP 200 (0.2s) ✅, GET confirms insight='pro' (invalid value 'xxx' correctly ignored, only 'flash' or 'pro' accepted) ✅. STEP A4 - RESET to defaults: POST with all 6 prefs ✅, GET confirms chat_deep='pro' and all others 'flash' ✅. All validations passed. Persistence working correctly (MongoDB misc_col). Invalid value validation working correctly. Feature is fully functional and production-ready."
 
   - task: "LLM migration — Emergent LLM key -> direct Google Gemini (google-genai SDK) across all LLM endpoints"
     implemented: true
@@ -1664,7 +1664,7 @@ backend:
         -comment: "Replaced emergentintegrations LlmChat with a drop-in google-genai shim (class LlmChat) keyed on GEMINI_API_KEY. All ~11 call sites unchanged. Models unchanged: gemini-3-flash-preview (CHAT_MODEL/GEMINI_MODEL for news) and gemini-3.1-pro-preview (ALBERT_CHAT_MODEL). Google Search grounding routes to Flash (Pro preview lacks grounding); sources parsed from response.candidates[].grounding_metadata.grounding_chunks[].web. Readiness gates repointed from EMERGENT_LLM_KEY -> GEMINI_API_KEY (var renamed LLM_READY_KEY). Smoke-tested locally: POST /api/v1/chat (flash) 200, deep chat (pro) 200, GET /api/v1/albert/insight 200, GET /api/v1/albert/brief 200, POST /api/v1/albert/strategy/build 200. Please regression-test the LLM endpoints for 200s, non-empty text, and graceful handling."
         -working: true
         -agent: "testing"
-        -comment: "✅ PASSED comprehensive LLM migration regression test via external URL (https://quant-features.preview.emergentagent.com/api). All 7 tests passed (7/7). STEP 1 - POST /api/v1/chat (standard, BTC): HTTP 200 (6.3s) ✅, text non-empty (230 chars) ✅, model='gemini-3-flash-preview' ✅, no error field ✅. STEP 2 - POST /api/v1/chat (deep, BTC with grounding): HTTP 200 (7.9s) ✅, text non-empty (2205 chars) ✅, model='gemini-3.1-pro-preview' ✅, sources=[] (empty is acceptable) ✅, no error field ✅. STEP 3 - POST /api/v1/chat (ETH altcoin): HTTP 200 (10.3s) ✅, text non-empty (2292 chars) ✅, no error field ✅. STEP 4 - GET /api/v1/albert/insight (overview + leverage): overview: HTTP 200 (7.1s) ✅, status='ready' ✅, text non-empty (755 chars) ✅, model='gemini-3-flash-preview' ✅; leverage: HTTP 200 (6.5s) ✅, status='ready' ✅, text non-empty (822 chars) ✅, model='gemini-3-flash-preview' ✅. STEP 5 - GET /api/v1/albert/brief (BTC + ETH): BTC: HTTP 200 (10.1s) ✅, status='ready' ✅, text non-empty (750 chars) ✅; ETH: HTTP 200 (6.3s) ✅, status='ready' ✅, text non-empty (885 chars) ✅, coin='Ethereum' ✅. STEP 6 - POST /api/v1/albert/strategy/build (BTC + ETH): BTC: HTTP 200 (16.1s) ✅, status='ready' ✅, draft.targets non-empty (2 items) ✅, draft.rules non-empty (3 items) ✅; ETH: HTTP 200 (16.1s) ✅, status='ready' ✅, draft.targets non-empty (2 items) ✅, draft.rules non-empty (3 items) ✅. STEP 7 - GET /api/v1/dashboard (regression): HTTP 200 ✅, status='ready' ✅. KEY VALIDATIONS: ✅ All LLM endpoints return HTTP 200 with non-empty text. ✅ Standard chat uses gemini-3-flash-preview (confirmed in response). ✅ Deep chat uses gemini-3.1-pro-preview (confirmed in response). ✅ Google Search grounding auto-routes to Flash (deep chat with grounding returned pro model, grounded sub-calls route to flash internally). ✅ Insight endpoint uses gemini-3-flash-preview. ✅ Brief endpoint works for BTC and ETH with coin-specific context. ✅ Strategy build generates valid drafts with targets and rules. ✅ Dashboard regression test passed (no breaking changes). PERFORMANCE: ⏱️ All endpoints completed within generous timeouts (6-16s, well under 90s limit). ⏱️ No timeout issues. ⏱️ No 429/quota errors (billing-enabled key working correctly). DATA SOURCES: 🤖 Direct Google Gemini API via google-genai SDK (GEMINI_API_KEY). 🤖 Models: gemini-3-flash-preview (standard/insight/brief/news) and gemini-3.1-pro-preview (deep chat). 🤖 Google Search grounding working correctly (auto-routes to Flash). NO ISSUES FOUND. LLM migration is fully functional and production-ready. All endpoints gracefully handle LLM responses with proper error handling."
+        -comment: "✅ PASSED comprehensive LLM migration regression test via external URL (https://what-if-sandbox.preview.emergentagent.com/api). All 7 tests passed (7/7). STEP 1 - POST /api/v1/chat (standard, BTC): HTTP 200 (6.3s) ✅, text non-empty (230 chars) ✅, model='gemini-3-flash-preview' ✅, no error field ✅. STEP 2 - POST /api/v1/chat (deep, BTC with grounding): HTTP 200 (7.9s) ✅, text non-empty (2205 chars) ✅, model='gemini-3.1-pro-preview' ✅, sources=[] (empty is acceptable) ✅, no error field ✅. STEP 3 - POST /api/v1/chat (ETH altcoin): HTTP 200 (10.3s) ✅, text non-empty (2292 chars) ✅, no error field ✅. STEP 4 - GET /api/v1/albert/insight (overview + leverage): overview: HTTP 200 (7.1s) ✅, status='ready' ✅, text non-empty (755 chars) ✅, model='gemini-3-flash-preview' ✅; leverage: HTTP 200 (6.5s) ✅, status='ready' ✅, text non-empty (822 chars) ✅, model='gemini-3-flash-preview' ✅. STEP 5 - GET /api/v1/albert/brief (BTC + ETH): BTC: HTTP 200 (10.1s) ✅, status='ready' ✅, text non-empty (750 chars) ✅; ETH: HTTP 200 (6.3s) ✅, status='ready' ✅, text non-empty (885 chars) ✅, coin='Ethereum' ✅. STEP 6 - POST /api/v1/albert/strategy/build (BTC + ETH): BTC: HTTP 200 (16.1s) ✅, status='ready' ✅, draft.targets non-empty (2 items) ✅, draft.rules non-empty (3 items) ✅; ETH: HTTP 200 (16.1s) ✅, status='ready' ✅, draft.targets non-empty (2 items) ✅, draft.rules non-empty (3 items) ✅. STEP 7 - GET /api/v1/dashboard (regression): HTTP 200 ✅, status='ready' ✅. KEY VALIDATIONS: ✅ All LLM endpoints return HTTP 200 with non-empty text. ✅ Standard chat uses gemini-3-flash-preview (confirmed in response). ✅ Deep chat uses gemini-3.1-pro-preview (confirmed in response). ✅ Google Search grounding auto-routes to Flash (deep chat with grounding returned pro model, grounded sub-calls route to flash internally). ✅ Insight endpoint uses gemini-3-flash-preview. ✅ Brief endpoint works for BTC and ETH with coin-specific context. ✅ Strategy build generates valid drafts with targets and rules. ✅ Dashboard regression test passed (no breaking changes). PERFORMANCE: ⏱️ All endpoints completed within generous timeouts (6-16s, well under 90s limit). ⏱️ No timeout issues. ⏱️ No 429/quota errors (billing-enabled key working correctly). DATA SOURCES: 🤖 Direct Google Gemini API via google-genai SDK (GEMINI_API_KEY). 🤖 Models: gemini-3-flash-preview (standard/insight/brief/news) and gemini-3.1-pro-preview (deep chat). 🤖 Google Search grounding working correctly (auto-routes to Flash). NO ISSUES FOUND. LLM migration is fully functional and production-ready. All endpoints gracefully handle LLM responses with proper error handling."
 
   - task: "Gemini TTS endpoint (POST /api/v1/tts) — server-side Albert voice via Google AI Studio key"
     implemented: true
@@ -1693,7 +1693,7 @@ backend:
         -comment: "NEW additions to the Alert Engine: (1) GET /api/v1/alert-engine/backtest?symbol=BTC -> {status:'ready', candles(~719), from, to, friction_bps, horizons:[5,10], detectors:{gmma_crossover,dip_buy,squeeze,rsi_oversold,rsi_overbought each with triggers, win_5, avg_5, win_10, avg_10}}. Uses ALL closed daily candles (max ~720), direction-adjusted forward returns net of friction. (2) GET /api/v1/alert-engine/digest -> {status:'ready', count, coins, by_coin, alerts} for last 24h signal alerts (daily scheduler _alert_digest_job at DIGEST_HOUR in DIGEST_TZ pushes a consolidated 'digest' alert). (3) Config now includes filters.btc_rs (default true), corr_cap (3), expiry_candles (2), friction_bps (10), btc_rs_days (7). (4) Look-ahead fix: _daily_ohlcv now drops the still-forming (today UTC) candle so signals/backtests use only CLOSED candles. (5) BTC relative-strength filter: readings/filters for non-BTC coins now include btc_rs (%/7d) + btc_rs_suppress_long; suppresses alt LONGs not outperforming BTC. (6) Correlation cap + alert perishability applied in the fire path. Test: config GET shows the new fields; backtest for BTC and SOL return detectors with numeric win/avg (BTC candles ~700+); digest returns a well-formed object (count may be 0); ETH readings filters include btc_rs. RESET config to defaults at end (btc_rs true, corr_cap 3, expiry_candles 2, friction_bps 10, all signals+filters on, watchlist all 20)."
         -working: true
         -agent: "testing"
-        -comment: "✅ PASSED comprehensive Alert Engine v2 validation via external URL (https://quant-features.preview.emergentagent.com/api). All 7 tests passed (7/7 including cleanup). STEP 1 - GET /api/v1/alert-engine/config: HTTP 200 ✅, status='ready' ✅, NEW v2 fields validated: settings.filters.btc_rs=true ✅, settings.corr_cap=3 ✅, settings.expiry_candles=2 ✅, settings.friction_bps=10 ✅. STEP 2 - GET /api/v1/alert-engine/backtest?symbol=BTC: HTTP 200 (0.3s) ✅, status='ready' ✅, candles=719 (>300, ideally ~700) ✅, from='2024-09-15', to='2026-09-03' ✅, detectors validated: gmma_crossover (triggers=25, win_5=56, avg_5=0.37, win_10=44, avg_10=-0.01) ✅, dip_buy (triggers=23, win_5=26, avg_5=-0.88, win_10=43, avg_10=-0.39) ✅, squeeze (triggers=108, win_5=99, avg_5=3.28, win_10=99, avg_10=4.2) ✅, rsi_oversold (triggers=6, win_5=33, avg_5=-4.82, win_10=17, avg_10=-3.23) ✅, rsi_overbought (triggers=3, win_5=67, avg_5=-0.2, win_10=50, avg_10=-2.67) ✅. All detectors have required keys (triggers, win_5, avg_5, win_10, avg_10) ✅. STEP 3 - GET /api/v1/alert-engine/backtest?symbol=SOL: HTTP 200 (2.6s) ✅, status='ready' ✅, detectors present with 5 items ✅. STEP 4 - GET /api/v1/alert-engine/readings?symbol=ETH: HTTP 200 (2.9s) ✅, status='ready' ✅, NEW v2 btc_rs filter fields validated: filters.btc_rs=-1.4 (number, ETH underperforming BTC by 1.4% over 7d) ✅, filters.btc_rs_suppress_long=true (boolean, correctly suppressing ETH longs) ✅. STEP 5 - GET /api/v1/alert-engine/digest: HTTP 200 ✅, status='ready' ✅, count=0 (acceptable, no signals in last 24h) ✅, coins=0 ✅, by_coin={} (dict) ✅, alerts=[] (list) ✅. STEP 6 - POST /api/v1/alert-engine/config (modify corr_cap): HTTP 200 ✅, POST with {settings:{corr_cap:5}} persists ✅, GET confirms corr_cap=5 ✅. CLEANUP - Reset config to defaults: POST with full default settings (including NEW v2 fields) ✅, GET confirms corr_cap=3, expiry_candles=2, friction_bps=10, filters.btc_rs=true ✅. All validations passed. Data is REAL (ccxt kraken/coinbase daily OHLCV for backtests, direction-adjusted forward returns net of friction). No HTTP 500 errors. Backtest endpoints are FAST (~0.3-2.9s, cached OHLCV). Feature is fully functional and production-ready."
+        -comment: "✅ PASSED comprehensive Alert Engine v2 validation via external URL (https://what-if-sandbox.preview.emergentagent.com/api). All 7 tests passed (7/7 including cleanup). STEP 1 - GET /api/v1/alert-engine/config: HTTP 200 ✅, status='ready' ✅, NEW v2 fields validated: settings.filters.btc_rs=true ✅, settings.corr_cap=3 ✅, settings.expiry_candles=2 ✅, settings.friction_bps=10 ✅. STEP 2 - GET /api/v1/alert-engine/backtest?symbol=BTC: HTTP 200 (0.3s) ✅, status='ready' ✅, candles=719 (>300, ideally ~700) ✅, from='2024-09-15', to='2026-09-03' ✅, detectors validated: gmma_crossover (triggers=25, win_5=56, avg_5=0.37, win_10=44, avg_10=-0.01) ✅, dip_buy (triggers=23, win_5=26, avg_5=-0.88, win_10=43, avg_10=-0.39) ✅, squeeze (triggers=108, win_5=99, avg_5=3.28, win_10=99, avg_10=4.2) ✅, rsi_oversold (triggers=6, win_5=33, avg_5=-4.82, win_10=17, avg_10=-3.23) ✅, rsi_overbought (triggers=3, win_5=67, avg_5=-0.2, win_10=50, avg_10=-2.67) ✅. All detectors have required keys (triggers, win_5, avg_5, win_10, avg_10) ✅. STEP 3 - GET /api/v1/alert-engine/backtest?symbol=SOL: HTTP 200 (2.6s) ✅, status='ready' ✅, detectors present with 5 items ✅. STEP 4 - GET /api/v1/alert-engine/readings?symbol=ETH: HTTP 200 (2.9s) ✅, status='ready' ✅, NEW v2 btc_rs filter fields validated: filters.btc_rs=-1.4 (number, ETH underperforming BTC by 1.4% over 7d) ✅, filters.btc_rs_suppress_long=true (boolean, correctly suppressing ETH longs) ✅. STEP 5 - GET /api/v1/alert-engine/digest: HTTP 200 ✅, status='ready' ✅, count=0 (acceptable, no signals in last 24h) ✅, coins=0 ✅, by_coin={} (dict) ✅, alerts=[] (list) ✅. STEP 6 - POST /api/v1/alert-engine/config (modify corr_cap): HTTP 200 ✅, POST with {settings:{corr_cap:5}} persists ✅, GET confirms corr_cap=5 ✅. CLEANUP - Reset config to defaults: POST with full default settings (including NEW v2 fields) ✅, GET confirms corr_cap=3, expiry_candles=2, friction_bps=10, filters.btc_rs=true ✅. All validations passed. Data is REAL (ccxt kraken/coinbase daily OHLCV for backtests, direction-adjusted forward returns net of friction). No HTTP 500 errors. Backtest endpoints are FAST (~0.3-2.9s, cached OHLCV). Feature is fully functional and production-ready."
   - task: "Alert Engine v3 — Backtest Compare (edge/edge-board), Sector Rotation (sectors), Token-Unlock filter (unlocks, key-gated)"
     implemented: true
     working: true
@@ -1707,7 +1707,7 @@ backend:
         -comment: "NEW Alert Engine v3 endpoints (real ccxt data; allow 60s timeouts). Test: 1) GET /api/v1/alert-engine/sectors -> 200 {status:'ready', sectors:[{sector, strength, hot, members[]}]}. Assert non-empty and each has 'strength' (number or null) + 'hot' bool + 'members'. 2) GET /api/v1/alert-engine/edge?symbol=BTC -> 200 {status:'ready', symbol, ranked:[{detector, win_10, avg_10, score}], best}. Assert ranked non-empty and sorted by score desc; best present. Repeat symbol=SOL. 3) GET /api/v1/alert-engine/edge-board -> 200 {status:'ready', board:[{symbol, best, ranked}]}. Assert board non-empty (may take ~10-20s first call), sorted by best.score desc. 4) GET /api/v1/alert-engine/unlocks?symbol=APT -> 200. Since NO Tokenomist key is set, expect {status:'ready', available:false, note:...}. (Key-gated — this is correct behaviour, NOT a failure.) 5) GET /api/v1/alert-engine/config -> confirm settings.filters now include 'sector' and 'unlock' (true), and settings has auto_prioritise (true), suppress_negative_edge (false), unlock_days (14), unlock_pct (1.0). 6) Regression: GET /api/v1/alert-engine/readings?symbol=ETH still returns readings+filters (btc_rs present); POST /api/v1/alert-engine/scan {\"symbol\":\"BTC\"} still 200. No settings changes needed (read-only tests)."
         -working: true
         -agent: "testing"
-        -comment: "✅ PASSED comprehensive Alert Engine v3 validation via external URL (https://quant-features.preview.emergentagent.com/api). All 6 tests passed (6/6). STEP 1 - GET /api/v1/alert-engine/sectors: HTTP 200 (0.3s) ✅, status='ready' ✅, sectors: 4 items (non-empty) ✅, first sector validated: sector='DeFi' (string) ✅, strength=11.45 (number) ✅, hot=true (bool) ✅, members=['UNI','AAVE','LINK'] (array with 3 items) ✅. STEP 2 - GET /api/v1/alert-engine/edge (BTC+SOL): BTC: HTTP 200 (0.2s) ✅, status='ready' ✅, symbol='BTC' ✅, ranked: 5 items (non-empty) ✅, first item: detector='squeeze', triggers=108, win_10=99, avg_10=4.2, score=8.316 ✅, ranked sorted by score descending: [8.316, -0.009, -0.335, -1.098, -2.67] ✅, best present: {detector:'squeeze', score:8.316} ✅. SOL: HTTP 200 (0.2s) ✅, status='ready' ✅, symbol='SOL' ✅, ranked: 5 items (non-empty) ✅, first item: detector='squeeze', score=18.82 ✅, ranked sorted by score descending: [18.82, 5.41, 1.814, -2.061, -5.584] ✅, best present ✅. STEP 3 - GET /api/v1/alert-engine/edge-board: HTTP 200 (0.1s) ✅, status='ready' ✅, board: 19 items (non-empty) ✅, first item validated: symbol='FIL', best={detector:'rsi_overbought', score:56.94}, ranked: 5 items ✅, board sorted by best.score descending: [56.94, 28.14, 28.02, 26.34, 23.2]... ✅. STEP 4 - GET /api/v1/alert-engine/unlocks (key-gated): HTTP 200 (0.2s) ✅, status='ready' ✅, available=false (correct - no Tokenomist key configured) ✅, note='Add TOKENOMIST_API_KEY to the backend to enable the token-unlock filter.' ✅. STEP 5 - GET /api/v1/alert-engine/config (v3 settings): HTTP 200 ✅, status='ready' ✅, settings.filters.sector=true ✅, settings.filters.unlock=true ✅, settings.auto_prioritise=true ✅, settings.suppress_negative_edge=false ✅, settings.unlock_days=14 ✅, settings.unlock_pct=1.0 ✅. STEP 6 - Regression tests: GET /api/v1/alert-engine/readings?symbol=ETH: HTTP 200 (0.7s) ✅, status='ready' ✅, readings present ✅, filters.btc_rs=-1.4 (present) ✅. POST /api/v1/alert-engine/scan {symbol:'BTC'}: HTTP 200 (0.5s) ✅, status='ready' ✅, scanned=['BTC'] ✅, result present ✅. All validations passed. Data is REAL (ccxt kraken/coinbase daily OHLCV for backtests, sector rotation analysis, edge scoring). No HTTP 500 errors. All endpoints are FAST (~0.1-0.7s, cached OHLCV). Feature is fully functional and production-ready."
+        -comment: "✅ PASSED comprehensive Alert Engine v3 validation via external URL (https://what-if-sandbox.preview.emergentagent.com/api). All 6 tests passed (6/6). STEP 1 - GET /api/v1/alert-engine/sectors: HTTP 200 (0.3s) ✅, status='ready' ✅, sectors: 4 items (non-empty) ✅, first sector validated: sector='DeFi' (string) ✅, strength=11.45 (number) ✅, hot=true (bool) ✅, members=['UNI','AAVE','LINK'] (array with 3 items) ✅. STEP 2 - GET /api/v1/alert-engine/edge (BTC+SOL): BTC: HTTP 200 (0.2s) ✅, status='ready' ✅, symbol='BTC' ✅, ranked: 5 items (non-empty) ✅, first item: detector='squeeze', triggers=108, win_10=99, avg_10=4.2, score=8.316 ✅, ranked sorted by score descending: [8.316, -0.009, -0.335, -1.098, -2.67] ✅, best present: {detector:'squeeze', score:8.316} ✅. SOL: HTTP 200 (0.2s) ✅, status='ready' ✅, symbol='SOL' ✅, ranked: 5 items (non-empty) ✅, first item: detector='squeeze', score=18.82 ✅, ranked sorted by score descending: [18.82, 5.41, 1.814, -2.061, -5.584] ✅, best present ✅. STEP 3 - GET /api/v1/alert-engine/edge-board: HTTP 200 (0.1s) ✅, status='ready' ✅, board: 19 items (non-empty) ✅, first item validated: symbol='FIL', best={detector:'rsi_overbought', score:56.94}, ranked: 5 items ✅, board sorted by best.score descending: [56.94, 28.14, 28.02, 26.34, 23.2]... ✅. STEP 4 - GET /api/v1/alert-engine/unlocks (key-gated): HTTP 200 (0.2s) ✅, status='ready' ✅, available=false (correct - no Tokenomist key configured) ✅, note='Add TOKENOMIST_API_KEY to the backend to enable the token-unlock filter.' ✅. STEP 5 - GET /api/v1/alert-engine/config (v3 settings): HTTP 200 ✅, status='ready' ✅, settings.filters.sector=true ✅, settings.filters.unlock=true ✅, settings.auto_prioritise=true ✅, settings.suppress_negative_edge=false ✅, settings.unlock_days=14 ✅, settings.unlock_pct=1.0 ✅. STEP 6 - Regression tests: GET /api/v1/alert-engine/readings?symbol=ETH: HTTP 200 (0.7s) ✅, status='ready' ✅, readings present ✅, filters.btc_rs=-1.4 (present) ✅. POST /api/v1/alert-engine/scan {symbol:'BTC'}: HTTP 200 (0.5s) ✅, status='ready' ✅, scanned=['BTC'] ✅, result present ✅. All validations passed. Data is REAL (ccxt kraken/coinbase daily OHLCV for backtests, sector rotation analysis, edge scoring). No HTTP 500 errors. All endpoints are FAST (~0.1-0.7s, cached OHLCV). Feature is fully functional and production-ready."
 
   - task: "Alert Engine — daily technical signal detectors + context filters (config/readings/scan/recent + scheduler)"
     implemented: true
@@ -1722,7 +1722,7 @@ backend:
         -comment: "NEW FEATURE. Endpoints: (1) GET /api/v1/alert-engine/config -> {status:'ready', settings{enabled,timeframe,signals{gmma_crossover,dip_buy,squeeze,rsi_exhaustion},filters{volume,funding,netflow,fng},volume_mult,rsi_low,rsi_high,funding_threshold,greed_threshold,fear_threshold,watchlist[]}, coins[20], netflow_note}. (2) POST /api/v1/alert-engine/config {settings:{...partial}} -> merges+persists to insights_col cfg:alert_engine, returns settings. (3) GET /api/v1/alert-engine/readings?symbol=BTC -> {status:'ready', readings{gmma_state,crossover,rsi,squeeze,bb_width_pct,vol_ratio,dip_buy,...}, filters{funding,fng_value,netflow_...}, candidates[]} computed from real daily OHLCV via ccxt (kraken/coinbase). (4) POST /api/v1/alert-engine/scan {symbol?} -> runs a scan (fires in-app alerts via push_alert category 'signal'), returns scanned coins. (5) GET /api/v1/alert-engine/recent -> recent signal alerts. Scheduler _alert_engine_job runs hourly. Dedup via alert_engine_col fired_sigs per (symbol,signal,candle_date,direction). Test: config GET returns 20 coins + defaults; POST toggling a signal or watchlist persists and GET reflects it; readings for BTC and one altcoin (e.g. SOL, ETH) return numeric readings (may be slow ~10-20s due to ccxt, allow long timeout); scan returns scanned list; recent returns array. NOTE: real exchange calls (ccxt/OKX/alternative.me) may occasionally rate-limit — a coin returning error:'no_data' for one alt is acceptable, but BTC+ETH should work. RESET any settings you change back to defaults (enabled:true, all signals on, all filters on, volume_mult 1.5, watchlist all 20) at the end."
         -working: true
         -agent: "testing"
-        -comment: "✅ PASSED comprehensive Alert Engine validation via external URL (https://quant-features.preview.emergentagent.com/api). All 6 tests passed (6/6 including cleanup). STEP 1 - GET /api/v1/alert-engine/config: HTTP 200 ✅, status='ready' ✅, coins: 20 items with symbol+name (e.g., {'symbol':'BTC','name':'Bitcoin'}) ✅, settings.signals contains all required signals (gmma_crossover, dip_buy, squeeze, rsi_exhaustion) ✅, settings.filters contains all required filters (volume, funding, netflow, fng) ✅, settings.volume_mult=1.5 ✅, settings.watchlist is array with 20 items ✅, netflow_note present ✅. STEP 2 - POST /api/v1/alert-engine/config (modify settings): HTTP 200 ✅, POST with {settings:{signals:{squeeze:false},watchlist:['BTC','ETH','SOL']}} persists ✅, GET confirms settings.signals.squeeze==False ✅, settings.watchlist has exactly 3 items ['BTC','ETH','SOL'] ✅. STEP 3 - GET /api/v1/alert-engine/readings (BTC+ETH): BTC: HTTP 200 (0.7s) ✅, status='ready' ✅, readings.gmma_state='bull' (valid in [bull,bear,mixed]) ✅, readings.rsi=72.0 (numeric) ✅, readings.bb_width_pct=30.039 (numeric) ✅, filters.funding present ✅, filters.fng_value present ✅, candidates is list ✅. ETH: HTTP 200 (0.6s) ✅, status='ready' ✅, readings.gmma_state='bull' ✅, readings.rsi=68.4 (numeric) ✅, readings.bb_width_pct=35.518 (numeric) ✅, filters.funding present ✅, filters.fng_value present ✅, candidates is list ✅. STEP 4 - POST /api/v1/alert-engine/scan: HTTP 200 (0.5s) ✅, status='ready' ✅, scanned contains 'BTC' ✅, result field present (dict) ✅. STEP 5 - GET /api/v1/alert-engine/recent: HTTP 200 ✅, status='ready' ✅, alerts is list (0 items, empty is acceptable) ✅. CLEANUP - Reset config to defaults: POST with full default settings ✅, GET confirms settings.signals.squeeze==True ✅, settings.watchlist has 20 items ✅. All validations passed. Data is REAL (ccxt kraken/coinbase daily OHLCV, OKX funding, alternative.me FNG). No HTTP 500 errors. Readings endpoints are fast (~0.5-0.7s, cached OHLCV). Feature is fully functional and production-ready."
+        -comment: "✅ PASSED comprehensive Alert Engine validation via external URL (https://what-if-sandbox.preview.emergentagent.com/api). All 6 tests passed (6/6 including cleanup). STEP 1 - GET /api/v1/alert-engine/config: HTTP 200 ✅, status='ready' ✅, coins: 20 items with symbol+name (e.g., {'symbol':'BTC','name':'Bitcoin'}) ✅, settings.signals contains all required signals (gmma_crossover, dip_buy, squeeze, rsi_exhaustion) ✅, settings.filters contains all required filters (volume, funding, netflow, fng) ✅, settings.volume_mult=1.5 ✅, settings.watchlist is array with 20 items ✅, netflow_note present ✅. STEP 2 - POST /api/v1/alert-engine/config (modify settings): HTTP 200 ✅, POST with {settings:{signals:{squeeze:false},watchlist:['BTC','ETH','SOL']}} persists ✅, GET confirms settings.signals.squeeze==False ✅, settings.watchlist has exactly 3 items ['BTC','ETH','SOL'] ✅. STEP 3 - GET /api/v1/alert-engine/readings (BTC+ETH): BTC: HTTP 200 (0.7s) ✅, status='ready' ✅, readings.gmma_state='bull' (valid in [bull,bear,mixed]) ✅, readings.rsi=72.0 (numeric) ✅, readings.bb_width_pct=30.039 (numeric) ✅, filters.funding present ✅, filters.fng_value present ✅, candidates is list ✅. ETH: HTTP 200 (0.6s) ✅, status='ready' ✅, readings.gmma_state='bull' ✅, readings.rsi=68.4 (numeric) ✅, readings.bb_width_pct=35.518 (numeric) ✅, filters.funding present ✅, filters.fng_value present ✅, candidates is list ✅. STEP 4 - POST /api/v1/alert-engine/scan: HTTP 200 (0.5s) ✅, status='ready' ✅, scanned contains 'BTC' ✅, result field present (dict) ✅. STEP 5 - GET /api/v1/alert-engine/recent: HTTP 200 ✅, status='ready' ✅, alerts is list (0 items, empty is acceptable) ✅. CLEANUP - Reset config to defaults: POST with full default settings ✅, GET confirms settings.signals.squeeze==True ✅, settings.watchlist has 20 items ✅. All validations passed. Data is REAL (ccxt kraken/coinbase daily OHLCV, OKX funding, alternative.me FNG). No HTTP 500 errors. Readings endpoints are fast (~0.5-0.7s, cached OHLCV). Feature is fully functional and production-ready."
   - task: "Albert Trading Strategies — AI-built playbooks with tracker/nudge engine (build/activate/get/list/close + scheduler)"
     implemented: true
     working: true
@@ -1736,7 +1736,7 @@ backend:
         -comment: "NEW FEATURE. Endpoints: (1) POST /api/v1/albert/strategy/build {symbol, goal?} -> {status:'ready', draft:{title,bias,position,thesis,horizon_days,targets[],stop,rules[]}} (LLM via Emergent key; rule-based fallback if LLM down). (2) POST /api/v1/albert/strategy {draft} -> activates, logs paper entry at current spot, returns {status:'ready', strategy:{...,perf}}; MUST supersede/close any existing active strategy for that same coin (one active per coin). (3) GET /api/v1/albert/strategy?symbol=BTC -> active strategy (evaluated live) or {status:'none'}. (4) GET /api/v1/albert/strategies?symbol=BTC -> {active, history[], stats{win_rate,...}}. (5) GET /api/v1/albert/strategy/{id} -> single. (6) POST /api/v1/albert/strategy/{id}/close {reason} -> closes, computes final_pnl. A scheduler job (_strategy_eval_job every 60s) evaluates targets/stop/time/signal rules and pushes in-app 'strategy' alerts via push_alert. Paper-trade P&L only (no real orders). Test: build for BTC and ETH returns a valid draft with >=1 target; activate returns active with entry_price=spot & perf; activating a SECOND strategy for the same coin closes the first (history should then contain the superseded one, active is the new one); GET active returns it; list returns active+history+stats; close moves it to history with final_pnl_pct/outcome set and GET active becomes 'none'. NOTE: LLM build may fall back to a rule-based draft if Emergent LLM key is rate-limited — that's acceptable, just confirm a well-formed draft is returned either way. CLEANUP: delete any strategies you create at the end (collection 'strategies')."
         -working: true
         -agent: "testing"
-        -comment: "✅ PASSED comprehensive Albert Trading Strategies validation via external URL (https://quant-features.preview.emergentagent.com/api). All 10 test flows passed (10/10). FLOW 1 - POST /api/v1/albert/strategy/build (BTC): HTTP 200 ✅, status='ready' ✅, draft object with all required fields (title, bias, position, thesis, horizon_days, targets, rules) ✅, targets: non-empty array with 2 items ✅, rules: non-empty array with 3 items ✅, draft structure: title='BTC Trend Continuation with RSI Caution', bias='bullish', position='long', horizon_days=45 ✅. FLOW 1b - POST /api/v1/albert/strategy/build (ETH with goal='swing long'): HTTP 200 ✅, status='ready' ✅, draft with all required fields ✅, targets: 2 items ✅, rules: 4 items ✅, title='ETH Momentum Swing: Riding the Low-Vol Trend' ✅. FLOW 2 - POST /api/v1/albert/strategy (activate BTC draft): HTTP 200 ✅, status='ready' ✅, strategy object with all required fields ✅, strategy.status='active' ✅, entry_price=80765.8 (> 0) ✅, perf object present ✅, events array contains 'opened' event ✅, strategy ID tracked for cleanup ✅. FLOW 3 - ONE-ACTIVE-PER-COIN: Built and activated second BTC strategy ✅, GET /api/v1/albert/strategies?symbol=BTC returns exactly ONE active strategy (the second one) ✅, first strategy found in history with status='closed' and close_reason='superseded' ✅, one-active-per-coin constraint validated ✅. FLOW 4 - GET /api/v1/albert/strategy?symbol=BTC: HTTP 200 ✅, status='ready' ✅, returns active strategy ✅. FLOW 4b - GET /api/v1/albert/strategies?symbol=BTC: HTTP 200 ✅, status='ready' ✅, response structure validated with active (present), history (1 item), stats (with keys: total, wins, losses, win_rate, avg_pnl_pct) ✅. FLOW 5 - POST /api/v1/albert/strategy/{id}/close (manual): HTTP 200 ✅, strategy.status='closed' ✅, final_pnl_pct present (0.0) ✅, outcome present ('win') ✅. FLOW 5b - GET /api/v1/albert/strategy?symbol=BTC after close: HTTP 200 ✅, status='none' (no active BTC strategy) ✅. FLOW 6 - ETH strategy activate and close: Activated ETH strategy ✅, closed ETH strategy successfully ✅, same flow works for ETH ✅. CLEANUP - MongoDB: Deleted 3 strategies from MongoDB ✅, all created strategies removed from collection ✅, total strategies in collection: 0 (empty) ✅. All validations passed. Data is REAL (LLM-generated drafts via Emergent API with rule-based fallback, live spot prices for entry_price, paper-trade P&L tracking). No HTTP 500 errors. Feature is fully functional and production-ready. NOTE: LLM drafts are being generated successfully (not falling back to rule-based), as evidenced by detailed titles and theses."
+        -comment: "✅ PASSED comprehensive Albert Trading Strategies validation via external URL (https://what-if-sandbox.preview.emergentagent.com/api). All 10 test flows passed (10/10). FLOW 1 - POST /api/v1/albert/strategy/build (BTC): HTTP 200 ✅, status='ready' ✅, draft object with all required fields (title, bias, position, thesis, horizon_days, targets, rules) ✅, targets: non-empty array with 2 items ✅, rules: non-empty array with 3 items ✅, draft structure: title='BTC Trend Continuation with RSI Caution', bias='bullish', position='long', horizon_days=45 ✅. FLOW 1b - POST /api/v1/albert/strategy/build (ETH with goal='swing long'): HTTP 200 ✅, status='ready' ✅, draft with all required fields ✅, targets: 2 items ✅, rules: 4 items ✅, title='ETH Momentum Swing: Riding the Low-Vol Trend' ✅. FLOW 2 - POST /api/v1/albert/strategy (activate BTC draft): HTTP 200 ✅, status='ready' ✅, strategy object with all required fields ✅, strategy.status='active' ✅, entry_price=80765.8 (> 0) ✅, perf object present ✅, events array contains 'opened' event ✅, strategy ID tracked for cleanup ✅. FLOW 3 - ONE-ACTIVE-PER-COIN: Built and activated second BTC strategy ✅, GET /api/v1/albert/strategies?symbol=BTC returns exactly ONE active strategy (the second one) ✅, first strategy found in history with status='closed' and close_reason='superseded' ✅, one-active-per-coin constraint validated ✅. FLOW 4 - GET /api/v1/albert/strategy?symbol=BTC: HTTP 200 ✅, status='ready' ✅, returns active strategy ✅. FLOW 4b - GET /api/v1/albert/strategies?symbol=BTC: HTTP 200 ✅, status='ready' ✅, response structure validated with active (present), history (1 item), stats (with keys: total, wins, losses, win_rate, avg_pnl_pct) ✅. FLOW 5 - POST /api/v1/albert/strategy/{id}/close (manual): HTTP 200 ✅, strategy.status='closed' ✅, final_pnl_pct present (0.0) ✅, outcome present ('win') ✅. FLOW 5b - GET /api/v1/albert/strategy?symbol=BTC after close: HTTP 200 ✅, status='none' (no active BTC strategy) ✅. FLOW 6 - ETH strategy activate and close: Activated ETH strategy ✅, closed ETH strategy successfully ✅, same flow works for ETH ✅. CLEANUP - MongoDB: Deleted 3 strategies from MongoDB ✅, all created strategies removed from collection ✅, total strategies in collection: 0 (empty) ✅. All validations passed. Data is REAL (LLM-generated drafts via Emergent API with rule-based fallback, live spot prices for entry_price, paper-trade P&L tracking). No HTTP 500 errors. Feature is fully functional and production-ready. NOTE: LLM drafts are being generated successfully (not falling back to rule-based), as evidenced by detailed titles and theses."
   - task: "Albert voice picker endpoints — GET /api/v1/tts/voices, GET/POST /api/v1/albert/voice-pref, and voice-aware POST /api/v1/tts"
     implemented: true
     working: true
@@ -1750,7 +1750,7 @@ backend:
         -comment: "New: GET /api/v1/tts/voices returns {status, default, tts_available, voices[]} (12 curated Gemini voices with id/name/desc/gender). GET /api/v1/albert/voice-pref returns saved {engine, voice, browser_voice_uri} (defaults engine=gemini, voice=Charon). POST /api/v1/albert/voice-pref persists to insights_col cfg:albert_voice; validates engine in (gemini,browser) and voice within curated set. POST /api/v1/tts now honours a caller-supplied 'voice' (e.g. Fenrir, Puck). Verify: voices list non-empty & includes Charon; POST voice-pref with {engine:'gemini',voice:'Fenrir'} persists and GET returns it; POST with invalid voice falls back to Charon; POST /api/v1/tts with {text, voice:'Puck'} returns 200 audio (may hit free-tier quota -> 502/503 acceptable, note it)."
         -working: true
         -agent: "testing"
-        -comment: "✅ PASSED all 7 tests via external URL (https://quant-features.preview.emergentagent.com/api). (1) GET /api/v1/tts/voices returns HTTP 200 with status='ready', default='Charon', tts_available=true, voices array with 12 items ✅ Each voice has required fields (id, name, desc, gender) ✅ Voice ids include 'Charon' and 'Fenrir' ✅ (2) GET /api/v1/albert/voice-pref returns HTTP 200 with status='ready', engine='gemini', voice='Charon', browser_voice_uri='' ✅ (3a) POST /api/v1/albert/voice-pref with {engine:'gemini', voice:'Fenrir'} returns HTTP 200 echoing voice='Fenrir', engine='gemini' ✅ GET confirms persistence: voice='Fenrir' ✅ (3b) POST with {engine:'gemini', voice:'NotARealVoice'} returns HTTP 200 with voice='Charon' (invalid voice correctly falls back to default) ✅ (3c) POST with {engine:'browser', browser_voice_uri:'com.apple.voice.x'} returns HTTP 200 with engine='browser' ✅ (4) POST /api/v1/tts with {text:'Hello from Albert', voice:'Puck'} returns HTTP 502 (free-tier quota exhausted, ACCEPTABLE and EXPECTED behavior for Gemini API free tier) ✅ (5) CLEANUP: POST with {engine:'gemini', voice:'Charon'} successfully resets to default ✅ All validations passed. Voice selection, persistence, validation (fallback to Charon for invalid voices), and engine switching (gemini/browser) all working correctly."
+        -comment: "✅ PASSED all 7 tests via external URL (https://what-if-sandbox.preview.emergentagent.com/api). (1) GET /api/v1/tts/voices returns HTTP 200 with status='ready', default='Charon', tts_available=true, voices array with 12 items ✅ Each voice has required fields (id, name, desc, gender) ✅ Voice ids include 'Charon' and 'Fenrir' ✅ (2) GET /api/v1/albert/voice-pref returns HTTP 200 with status='ready', engine='gemini', voice='Charon', browser_voice_uri='' ✅ (3a) POST /api/v1/albert/voice-pref with {engine:'gemini', voice:'Fenrir'} returns HTTP 200 echoing voice='Fenrir', engine='gemini' ✅ GET confirms persistence: voice='Fenrir' ✅ (3b) POST with {engine:'gemini', voice:'NotARealVoice'} returns HTTP 200 with voice='Charon' (invalid voice correctly falls back to default) ✅ (3c) POST with {engine:'browser', browser_voice_uri:'com.apple.voice.x'} returns HTTP 200 with engine='browser' ✅ (4) POST /api/v1/tts with {text:'Hello from Albert', voice:'Puck'} returns HTTP 502 (free-tier quota exhausted, ACCEPTABLE and EXPECTED behavior for Gemini API free tier) ✅ (5) CLEANUP: POST with {engine:'gemini', voice:'Charon'} successfully resets to default ✅ All validations passed. Voice selection, persistence, validation (fallback to Charon for invalid voices), and engine switching (gemini/browser) all working correctly."
   - task: "Coin-specific Morning Brief (GET /api/v1/albert/brief?symbol=BTC|ETH|...&mode=plain|technical&refresh=1)"
     implemented: true
     working: true
@@ -1857,7 +1857,7 @@ backend:
         -comment: "UPDATED per user: NO fabricated/mock data — the four items with no free feed are now INACTIVE (not demo numbers). GET /api/v1/leverage?timeframe=4H (also 1H,1D,7D; default 4H). REAL (OKX): price, open_interest{value_usd,change_tf_pct,state,series}, funding{rate,direction,trend,bias,exchanges(OKX),series}, positioning{long_pct,short_pct,account_ratio,account_ratio_prev,ratio_change_tf,trend,series}. REAL-DERIVED ANALYSIS (interpretations of real data, NOT invented numbers): summary{pressure,pressure_score,bias,squeeze,interpretation}, squeeze{long_risk,short_risk 0-100,labels,explains}, albert_call{impact_label,impact_points -15..15,explanation}, bitmark{observations[5],assessment_title,assessment_text}. INACTIVE (active:false, status:'Inactive', reason): estimated_leverage, liquidations, heatmap, positioning.position_ratio(null, position_ratio_active:false). sources list marks these INACTIVE. Test: all 4 timeframes status='ready' no 500s; real OKX fields present; the 4 inactive blocks have active==false and NO fabricated numeric values."
         -working: true
         -agent: "testing"
-        -comment: "✅ PASSED comprehensive Leverage engine validation via external URL (https://quant-features.preview.emergentagent.com/api). All 6 tests passed (6/6): ALL 4 TIMEFRAMES (1H, 4H, 1D, 7D) + REFRESH + DASHBOARD REGRESSION. TIMEFRAME 1H: status='ready' ✅, timeframe='1H' (echoes request) ✅, price=$64,787.1 (numeric) ✅, open_interest: value_usd=$2.01B (numeric) ✅, change_tf_pct=-0.3% (numeric) ✅, state='Stable' (in [Rising,Falling,Stable]) ✅, series: 60 items with t and oi ✅, funding: rate=0.00089% (numeric) ✅, direction='Positive' (in [Positive,Negative,Flat]) ✅, bias='Neutral' (in [Long Bias,Neutral,Short Bias]) ✅, exchanges contains OKX ✅, series: 60 items ✅, positioning: long_pct=55.0%, short_pct=45.0%, sum=100.0% (≈100 within 1) ✅, account_ratio=1.22 (numeric) ✅, account_ratio_prev=1.2 (numeric) ✅, ratio_change_tf=0.02 (numeric) ✅, trend='Little changed' (string) ✅, series: 60 items ✅, summary: pressure='LOW' (in [LOW,MODERATE,ELEVATED,HIGH,EXTREME]) ✅, pressure_score=21 (0-100) ✅, bias='Long Dominant' (in [Long Dominant,Short Dominant,Balanced]) ✅, squeeze='Long Squeeze Risk' (in [Long Squeeze Risk,Short Squeeze Risk,Neutral]) ✅, interpretation: 261 chars (non-empty) ✅, squeeze: long_risk=28, short_risk=12 (ints 0-100) ✅, long_label='Low', short_label='Low' (in [Low,Moderate,Elevated,High]) ✅, long_explain and short_explain present ✅, estimated_leverage: demo=True (DERIVED/DEMO as expected) ✅, ratio=0.199, percentile=39, status='Normal', series: 24 items ✅, liquidations: demo=True (DERIVED/DEMO as expected) ✅, long_1h=279,567, short_1h=227,079, long_4h=1,118,268, short_4h=908,314, long_24h=6,709,608, short_24h=5,449,885 (all numeric) ✅, net_pressure='Moderate Long Liquidations' (string) ✅, heatmap: demo=True (DERIVED/DEMO as expected) ✅, zones: 8 items with price, side (in [long,short]), intensity, distance_pct ✅, albert_call: impact_points=-3 (int in [-15,15]) ✅, impact_label='Bearish Pressure' (string) ✅, explanation: 170 chars ✅, bitmark: observations: 5 non-empty strings ✅, assessment_title='Elevated Long-Side Risk', assessment_text: 360 chars ✅, sources: 2 items (non-empty list) ✅, disclaimer: 291 chars (present) ✅. TIMEFRAME 4H: status='ready' ✅, timeframe='4H' ✅, price=$64,787.0 ✅, all validations passed (same structure as 1H) ✅, positioning: long_pct=55.0%, short_pct=45.0%, trend='More long-heavy' ✅, summary: pressure='LOW', pressure_score=22 ✅. TIMEFRAME 1D: status='ready' ✅, timeframe='1D' ✅, price=$64,787.1 ✅, all validations passed ✅, open_interest: change_tf_pct=-1.0% ✅, positioning: trend='More long-heavy' ✅. TIMEFRAME 7D: status='ready' ✅, timeframe='7D' ✅, price=$64,787.1 ✅, all validations passed ✅, open_interest: change_tf_pct=+3.2%, state='Rising' ✅, positioning: long_pct=53.7%, short_pct=46.3%, trend='More short-heavy' ✅, summary: pressure='MODERATE', pressure_score=27, bias='Balanced' ✅. REFRESH TEST: GET /api/v1/leverage?timeframe=4H&refresh=1 returns status='ready' (no 500 error) ✅. REGRESSION TEST: GET /api/v1/dashboard returns status='ready' (no breaking changes) ✅. All validations passed. Data is REAL (OKX public API for core metrics: price, open_interest, funding, positioning). DERIVED/DEMO metrics correctly flagged with demo=true (estimated_leverage, liquidations, heatmap, positioning.position_ratio). No HTTP 500 errors. Feature is fully functional and production-ready."
+        -comment: "✅ PASSED comprehensive Leverage engine validation via external URL (https://what-if-sandbox.preview.emergentagent.com/api). All 6 tests passed (6/6): ALL 4 TIMEFRAMES (1H, 4H, 1D, 7D) + REFRESH + DASHBOARD REGRESSION. TIMEFRAME 1H: status='ready' ✅, timeframe='1H' (echoes request) ✅, price=$64,787.1 (numeric) ✅, open_interest: value_usd=$2.01B (numeric) ✅, change_tf_pct=-0.3% (numeric) ✅, state='Stable' (in [Rising,Falling,Stable]) ✅, series: 60 items with t and oi ✅, funding: rate=0.00089% (numeric) ✅, direction='Positive' (in [Positive,Negative,Flat]) ✅, bias='Neutral' (in [Long Bias,Neutral,Short Bias]) ✅, exchanges contains OKX ✅, series: 60 items ✅, positioning: long_pct=55.0%, short_pct=45.0%, sum=100.0% (≈100 within 1) ✅, account_ratio=1.22 (numeric) ✅, account_ratio_prev=1.2 (numeric) ✅, ratio_change_tf=0.02 (numeric) ✅, trend='Little changed' (string) ✅, series: 60 items ✅, summary: pressure='LOW' (in [LOW,MODERATE,ELEVATED,HIGH,EXTREME]) ✅, pressure_score=21 (0-100) ✅, bias='Long Dominant' (in [Long Dominant,Short Dominant,Balanced]) ✅, squeeze='Long Squeeze Risk' (in [Long Squeeze Risk,Short Squeeze Risk,Neutral]) ✅, interpretation: 261 chars (non-empty) ✅, squeeze: long_risk=28, short_risk=12 (ints 0-100) ✅, long_label='Low', short_label='Low' (in [Low,Moderate,Elevated,High]) ✅, long_explain and short_explain present ✅, estimated_leverage: demo=True (DERIVED/DEMO as expected) ✅, ratio=0.199, percentile=39, status='Normal', series: 24 items ✅, liquidations: demo=True (DERIVED/DEMO as expected) ✅, long_1h=279,567, short_1h=227,079, long_4h=1,118,268, short_4h=908,314, long_24h=6,709,608, short_24h=5,449,885 (all numeric) ✅, net_pressure='Moderate Long Liquidations' (string) ✅, heatmap: demo=True (DERIVED/DEMO as expected) ✅, zones: 8 items with price, side (in [long,short]), intensity, distance_pct ✅, albert_call: impact_points=-3 (int in [-15,15]) ✅, impact_label='Bearish Pressure' (string) ✅, explanation: 170 chars ✅, bitmark: observations: 5 non-empty strings ✅, assessment_title='Elevated Long-Side Risk', assessment_text: 360 chars ✅, sources: 2 items (non-empty list) ✅, disclaimer: 291 chars (present) ✅. TIMEFRAME 4H: status='ready' ✅, timeframe='4H' ✅, price=$64,787.0 ✅, all validations passed (same structure as 1H) ✅, positioning: long_pct=55.0%, short_pct=45.0%, trend='More long-heavy' ✅, summary: pressure='LOW', pressure_score=22 ✅. TIMEFRAME 1D: status='ready' ✅, timeframe='1D' ✅, price=$64,787.1 ✅, all validations passed ✅, open_interest: change_tf_pct=-1.0% ✅, positioning: trend='More long-heavy' ✅. TIMEFRAME 7D: status='ready' ✅, timeframe='7D' ✅, price=$64,787.1 ✅, all validations passed ✅, open_interest: change_tf_pct=+3.2%, state='Rising' ✅, positioning: long_pct=53.7%, short_pct=46.3%, trend='More short-heavy' ✅, summary: pressure='MODERATE', pressure_score=27, bias='Balanced' ✅. REFRESH TEST: GET /api/v1/leverage?timeframe=4H&refresh=1 returns status='ready' (no 500 error) ✅. REGRESSION TEST: GET /api/v1/dashboard returns status='ready' (no breaking changes) ✅. All validations passed. Data is REAL (OKX public API for core metrics: price, open_interest, funding, positioning). DERIVED/DEMO metrics correctly flagged with demo=true (estimated_leverage, liquidations, heatmap, positioning.position_ratio). No HTTP 500 errors. Feature is fully functional and production-ready."
 
     implemented: true
     working: true
@@ -1871,7 +1871,7 @@ backend:
         -comment: "NEW Phase 1. GET /api/v1/etf-flows returns REAL US spot Bitcoin ETF daily net flows ($M) scraped from bitbo.io (a Farside mirror; Farside itself is Cloudflare-blocked from this server). Response: {status:'ready', unit:'USD millions', issuers:[13 tickers e.g. IBIT/FBTC/GBTC...], daily:[{date,flows:{ticker:val},total}] (most-recent-first), cumulative:[{date,cum}] (oldest->newest), leaderboard:[{ticker,window_total}] sorted desc, summary:{total,average,maximum,minimum}, net_1d, net_7d, net_30d, source, latest_date, as_of}. Cached in etf_flows collection (TTL 3h), refreshed by scheduler every 3h; first call fills synchronously. ALSO: build_derivatives_engine now injects REAL 'Spot ETF net flow (1d)' and '(7d)' metrics (with sparkline) into the Institutional panel for BTC (no longer 'Inactive'); source string becomes 'OKX (BTC derivatives) · ETF flows (Farside/bitbo)'. ETH still 'Inactive' (no free ETH ETF table). Dashboard route now OVERLAYS live smart_money/institutional panels onto the stored run doc so ETF/derivatives refresh on their own ~2-3h cadence. Test: GET /api/v1/etf-flows returns status='ready' with non-empty daily (each row date YYYY-MM-DD, flows dict, numeric total), net_1d/net_7d/net_30d numeric, leaderboard non-empty, issuers includes 'IBIT'. GET /api/v1/dashboard institutional.metrics contains 'Spot ETF net flow (1d)' NOT marked inactive with a $ value + spark, and source mentions 'Farside/bitbo'. refresh=1 works, no 500s."
         -working: true
         -agent: "testing"
-        -comment: "✅ PASSED comprehensive Phase 1 validation via external URL (https://quant-features.preview.emergentagent.com). All 3 tests passed (3/3): (1) GET /api/v1/etf-flows returns status='ready', unit='USD millions', issuers includes 'IBIT' (13 total issuers) ✅, daily data: 8 entries with date (2026-08-06 format YYYY-MM-DD), flows dict, numeric total (91.7) ✅, net_1d=$91.7M, net_7d=$646.1M, net_30d=$646.1M (all numeric) ✅, cumulative: 8 entries ✅, leaderboard: 13 entries ✅, summary present ✅. (2) GET /api/v1/etf-flows?refresh=1 works without 500 error ✅. (3) GET /api/v1/dashboard institutional panel validated: 'Spot ETF net flow (1d)' metric found, NOT marked inactive ✅, value='$+92M' (matches $...M pattern) ✅, spark array with 8 points ✅, 'Spot ETF net flow (7d)' metric found ✅, source='OKX (BTC derivatives) · ETF flows (Farside/bitbo)' mentions Farside/bitbo ✅. All validations passed. Data is REAL (bitbo.io mirror of Farside). No HTTP 500 errors."
+        -comment: "✅ PASSED comprehensive Phase 1 validation via external URL (https://what-if-sandbox.preview.emergentagent.com). All 3 tests passed (3/3): (1) GET /api/v1/etf-flows returns status='ready', unit='USD millions', issuers includes 'IBIT' (13 total issuers) ✅, daily data: 8 entries with date (2026-08-06 format YYYY-MM-DD), flows dict, numeric total (91.7) ✅, net_1d=$91.7M, net_7d=$646.1M, net_30d=$646.1M (all numeric) ✅, cumulative: 8 entries ✅, leaderboard: 13 entries ✅, summary present ✅. (2) GET /api/v1/etf-flows?refresh=1 works without 500 error ✅. (3) GET /api/v1/dashboard institutional panel validated: 'Spot ETF net flow (1d)' metric found, NOT marked inactive ✅, value='$+92M' (matches $...M pattern) ✅, spark array with 8 points ✅, 'Spot ETF net flow (7d)' metric found ✅, source='OKX (BTC derivatives) · ETF flows (Farside/bitbo)' mentions Farside/bitbo ✅. All validations passed. Data is REAL (bitbo.io mirror of Farside). No HTTP 500 errors."
   - task: "Whale Intelligence Phase 2 — Historical balances + impact (GET /api/v1/whales/history, /api/v1/whales/impact)"
     implemented: true
     working: true
@@ -1913,7 +1913,7 @@ backend:
         -comment: "NEW 4 enhancements to Whale Intelligence. (1) ETF FULL HISTORY: GET /api/v1/etf-flows now returns full Farside history (~660 days from 2024-01-11) via tftc.io scraper, with cumulative net flows (<=180 downsampled points oldest->newest), cum_total (total net inflow since launch ~$52B), history_days, span_from, leaderboard_window=30. (2) WHALE-TX SMART ALERTS: compute_smart_alerts now fires 'whaletx_' alerts for whale moves >=1000 BTC within last 14 days; category='Whale', title='Whale move: N BTC in/out of ENTITY', signal Bullish/Bearish, severity high/warning, link to mempool.space. Triggered by whale-tx refresh background rebuild. (3) EXPANDED WHALE SEED: GET /api/v1/whales now returns ~15 whales (was 10), including NEW labels: 'Coinbase (cold)', 'Poloniex (cold)', 'OKX', 'MicroStrategy / Strategy (attributed)', 'Early mega-whale'. (4) ALBERT WHALE REVIEW: GET /api/v1/albert/insight?section=whales&symbol=BTC returns grounded insight referencing BOTH whale flows/accumulation AND ETF flows (context injects whale impact + ETF net flows). First call ~40s (reconstructs impact), second call cached=true. Test: all 4 features + regression (dashboard, whales/impact, whales/history still 'ready'). No 500s."
         -working: true
         -agent: "testing"
-        -comment: "✅ PASSED comprehensive validation of all 4 NEW Whale Intelligence enhancements via external URL (https://quant-features.preview.emergentagent.com/api). All tests passed (5/5 including regression). TEST 1 - ETF FULL HISTORY: GET /api/v1/etf-flows returns status='ready' ✅, source='tftc.io (Farside full-history data)' ✅, history_days=661 (>=400) ✅, span_from='2024-01-11' ✅, cumulative: 180 points (<=180) oldest->newest with {date,cum} ✅, cum_total=$52,148M (large positive) ✅, net_1d=98.8, net_7d=821.2, net_30d=127.5 (all numeric) ✅, leaderboard: 13 items with leaderboard_window=30 ✅, daily: 661 items ✅, refresh=1 works ✅, GET /api/v1/dashboard institutional.metrics 'Spot ETF net flow (1d)' NOT inactive with value='$+92M' ✅. TEST 2 - WHALE-TX SMART ALERTS: GET /api/v1/whales/transactions?refresh=1 triggered ✅, waited 90s for background rebuild ✅, GET /api/v1/alerts?limit=60 returns 4 whale-tx alerts (id starts with 'whaletx_') ✅, validated first alert: category='Whale' ✅, title='Whale move: 6,765 BTC out of Binance' ✅, signal='Bullish' (in [Bullish,Bearish]) ✅, severity='high' (in [high,warning]) ✅, link contains mempool.space ✅, POST /api/v1/alerts/ack returns ok ✅. TEST 3 - EXPANDED WHALE SEED: GET /api/v1/whales returns 15 whales (~15) ✅, all NEW labels present: 'Coinbase (cold)', 'Poloniex (cold)', 'OKX', 'MicroStrategy / Strategy (attributed)', 'Early mega-whale' ✅, all whales have numeric balance>0 ✅. TEST 4 - ALBERT WHALE REVIEW: GET /api/v1/albert/insight?section=whales&symbol=BTC returns status='ready' ✅, text is non-empty (759 chars) ✅, text references BOTH whale flows/accumulation AND ETF flows ✅, second call returns cached=true ✅. REGRESSION: GET /api/v1/dashboard status='ready' ✅, GET /api/v1/whales/impact status='ready' ✅, GET /api/v1/whales/history?address=1FeexV6bAHb8ybZjqQMjJrcCrHGW9sb6uF status='ready' ✅. All validations passed. Data is REAL (tftc.io Farside full-history, mempool.space whale transactions, Gemini 3 Flash Albert insights). No HTTP 500 errors. Feature is fully functional."
+        -comment: "✅ PASSED comprehensive validation of all 4 NEW Whale Intelligence enhancements via external URL (https://what-if-sandbox.preview.emergentagent.com/api). All tests passed (5/5 including regression). TEST 1 - ETF FULL HISTORY: GET /api/v1/etf-flows returns status='ready' ✅, source='tftc.io (Farside full-history data)' ✅, history_days=661 (>=400) ✅, span_from='2024-01-11' ✅, cumulative: 180 points (<=180) oldest->newest with {date,cum} ✅, cum_total=$52,148M (large positive) ✅, net_1d=98.8, net_7d=821.2, net_30d=127.5 (all numeric) ✅, leaderboard: 13 items with leaderboard_window=30 ✅, daily: 661 items ✅, refresh=1 works ✅, GET /api/v1/dashboard institutional.metrics 'Spot ETF net flow (1d)' NOT inactive with value='$+92M' ✅. TEST 2 - WHALE-TX SMART ALERTS: GET /api/v1/whales/transactions?refresh=1 triggered ✅, waited 90s for background rebuild ✅, GET /api/v1/alerts?limit=60 returns 4 whale-tx alerts (id starts with 'whaletx_') ✅, validated first alert: category='Whale' ✅, title='Whale move: 6,765 BTC out of Binance' ✅, signal='Bullish' (in [Bullish,Bearish]) ✅, severity='high' (in [high,warning]) ✅, link contains mempool.space ✅, POST /api/v1/alerts/ack returns ok ✅. TEST 3 - EXPANDED WHALE SEED: GET /api/v1/whales returns 15 whales (~15) ✅, all NEW labels present: 'Coinbase (cold)', 'Poloniex (cold)', 'OKX', 'MicroStrategy / Strategy (attributed)', 'Early mega-whale' ✅, all whales have numeric balance>0 ✅. TEST 4 - ALBERT WHALE REVIEW: GET /api/v1/albert/insight?section=whales&symbol=BTC returns status='ready' ✅, text is non-empty (759 chars) ✅, text references BOTH whale flows/accumulation AND ETF flows ✅, second call returns cached=true ✅. REGRESSION: GET /api/v1/dashboard status='ready' ✅, GET /api/v1/whales/impact status='ready' ✅, GET /api/v1/whales/history?address=1FeexV6bAHb8ybZjqQMjJrcCrHGW9sb6uF status='ready' ✅. All validations passed. Data is REAL (tftc.io Farside full-history, mempool.space whale transactions, Gemini 3 Flash Albert insights). No HTTP 500 errors. Feature is fully functional."
 
 
     implemented: true
@@ -1928,7 +1928,7 @@ backend:
         -comment: "NEW endpoint. Generates a plain-English, insightful (cause->effect + if-then) narrative per section using Gemini (CHAT_MODEL) grounded in build_chat_context(). Caches result in albert_insights collection keyed by section:latest_run_version. Returns {status:'ready', text, model, cached} on success, or {status:'fallback', reason} when LLM unconfigured/empty/errors (frontend then shows template). Test: GET /api/v1/albert/insight?section=overview should return status ready with non-empty text (may take a few seconds first call, then cached=true on second call). Also test sections forecasts, analysis, performance, chart, cycle, policy. Verify a second identical call returns cached=true quickly. Verify an unknown section still returns ready (generic focus) or fallback gracefully (no 500)."
         -working: false
         -agent: "testing"
-        -comment: "❌ CRITICAL BUG: LLM responses are truncated to ~50-70 characters instead of expected 80-130 words (~400-800 chars). Tested via external URL (https://quant-features.preview.emergentagent.com/api/v1/albert/insight). API STRUCTURE WORKS CORRECTLY: ✅ All 5 tests passed for API behavior: (1) GET /api/v1/albert/insight?section=overview returns HTTP 200, status='ready', section='overview', model='gemini-3-flash-preview', cached=false, latency=5.12s ✅ (2) Second call returns cached=true with improved latency (0.19s) - caching works ✅ (3) All 6 sections (forecasts, analysis, performance, chart, cycle, policy) return status='ready' without 500 errors ✅ (4) Bogus section (section=bogus123) returns HTTP 200 status='ready' gracefully ✅ (5) No section param defaults to overview and returns HTTP 200 ✅. HOWEVER, TEXT CONTENT IS BROKEN: All responses return truncated text (7-12 words instead of 80-130 words). Examples: overview='Hello! I'm Albert. Right now, Bitcoin is in a \"Weak Bear' (56 chars, 11 words), risk='Hello! I'm Albert. Right now, Bitcoin is in a \"' (54 chars). Root cause: emergentintegrations LlmChat library returns truncated string responses. Tested directly: LlmChat.send_message() returns only ~50-70 chars regardless of max_tokens=420 setting. This is NOT a backend code bug - the code correctly stores whatever the LLM returns. The LLM integration itself is broken. IMPACT: Feature is non-functional - users will see incomplete, meaningless text snippets instead of insightful narratives. Requires investigation of emergentintegrations library or switching to direct Gemini API calls."
+        -comment: "❌ CRITICAL BUG: LLM responses are truncated to ~50-70 characters instead of expected 80-130 words (~400-800 chars). Tested via external URL (https://what-if-sandbox.preview.emergentagent.com/api/v1/albert/insight). API STRUCTURE WORKS CORRECTLY: ✅ All 5 tests passed for API behavior: (1) GET /api/v1/albert/insight?section=overview returns HTTP 200, status='ready', section='overview', model='gemini-3-flash-preview', cached=false, latency=5.12s ✅ (2) Second call returns cached=true with improved latency (0.19s) - caching works ✅ (3) All 6 sections (forecasts, analysis, performance, chart, cycle, policy) return status='ready' without 500 errors ✅ (4) Bogus section (section=bogus123) returns HTTP 200 status='ready' gracefully ✅ (5) No section param defaults to overview and returns HTTP 200 ✅. HOWEVER, TEXT CONTENT IS BROKEN: All responses return truncated text (7-12 words instead of 80-130 words). Examples: overview='Hello! I'm Albert. Right now, Bitcoin is in a \"Weak Bear' (56 chars, 11 words), risk='Hello! I'm Albert. Right now, Bitcoin is in a \"' (54 chars). Root cause: emergentintegrations LlmChat library returns truncated string responses. Tested directly: LlmChat.send_message() returns only ~50-70 chars regardless of max_tokens=420 setting. This is NOT a backend code bug - the code correctly stores whatever the LLM returns. The LLM integration itself is broken. IMPACT: Feature is non-functional - users will see incomplete, meaningless text snippets instead of insightful narratives. Requires investigation of emergentintegrations library or switching to direct Gemini API calls."
 
   - task: "FastAPI ML engine - real BTC data fetch (ccxt Kraken primary, Coinbase fallback)"
     implemented: true
@@ -2083,7 +2083,7 @@ backend:
         -comment: "NEW (Pillar 1). New module orderflow.py runs a background thread with asyncio WebSocket consumers for Coinbase spot trades (matches) + Bybit perp trades (publicTrade.BTCUSDT) + Bybit liquidations (allLiquidation.BTCUSDT). NOTE: Binance is geo-blocked (HTTP 451) from this host, so Coinbase+Bybit are used. Trades/liquidations are XADD'd to Redis Streams (of:trades / of:liq, MAXLEN ~100k, approximate) AND kept in an in-memory rolling window. A 1-second aggregator computes CVD (window+session), buy ratio, OFI/s, VPIN (order-flow toxicity), trades/sec, and 1-minute long/short liquidation notional + a 10s cascade flag (>$1M). Snapshot cached in Redis (of:latest) + process memory for sub-ms endpoint responses. Redis installed via apt + supervisor (program:redis on 127.0.0.1:6379). GET /api/v1/orderflow returns {status, venues, redis, last_price, cvd_window_btc, session_cvd_btc, buy_ratio_pct, ofi_btc_per_s, vpin, trades_per_sec, flow_state, liquidations{...}}. VERIFIED MANUALLY: status='live', all 3 venues live, redis=True, ~26 trades/s, CVD/OFI/VPIN populated and varying naturally across polls. NEEDS RETEST via external URL: GET /api/v1/orderflow -> HTTP 200; status should be 'live' or 'connecting' (never 500); when live, numeric fields present and venues map shows coinbase/bybit/bybit_liq. Reconnects automatically."
         -working: true
         -agent: "testing"
-        -comment: "✅ PASSED comprehensive Pillar 1 Real-time Order Flow validation via external URL (https://quant-features.preview.emergentagent.com/api/v1/orderflow). All validations passed (4/4 tests). TEST 1 - GET /api/v1/orderflow FIRST POLL: HTTP 200 (NEVER 500) ✅, status='live' (not 'connecting', fully warmed up) ✅, ALL REQUIRED FIELDS VALIDATED: last_price=$74,681.34 (float) ✅, cvd_window_btc=8.1728 BTC (float) ✅, session_cvd_btc=-46.523 BTC (float) ✅, ofi_btc_per_s=0.1362 BTC/s (float) ✅, vpin=0.676 (float, order-flow toxicity metric) ✅, trades_per_sec=87.63 (float) ✅, buy_ratio_pct=54.3% (float) ✅, flow_state='Balanced' (string, in [Aggressive buying, Aggressive selling, Balanced]) ✅, venues={'coinbase': 'live', 'bybit': 'live', 'bybit_liq': 'live'} (all 3 venues LIVE, Binance intentionally absent due to geo-block) ✅, redis=True (Redis integration working) ✅, liquidations object validated: long_usd_1m=0.0, short_usd_1m=0.0, net_usd_1m=0.0, cascade_10s_usd=0.0, cascade_risk=False (boolean), count_1m=0 (all correct types) ✅. TEST 2 - SECOND POLL (3 seconds later): HTTP 200 ✅, LIVE UPDATES CONFIRMED (proving 1-second aggregator is live-updating): trades_window changed 5258→5044 ✅, trades_per_sec changed 87.63→84.07 ✅, cvd_window_btc changed 8.1728→7.2656 ✅, last_price changed $74,681.34→$74,673.83 ✅. TEST 3 - REGRESSION: GET /api/v1/health returns HTTP 200 ✅. TEST 4 - REGRESSION: GET /api/v1/dashboard returns HTTP 200 with status='ready' ✅. All validations passed. Data is REAL (Coinbase + Bybit WebSocket live trades + liquidations, Redis Streams ingestion, 1-second rolling aggregator). No HTTP 500 errors. Feature is fully functional and production-ready. Order-flow pipeline is LIVE with all 3 venues connected and streaming real-time data."
+        -comment: "✅ PASSED comprehensive Pillar 1 Real-time Order Flow validation via external URL (https://what-if-sandbox.preview.emergentagent.com/api/v1/orderflow). All validations passed (4/4 tests). TEST 1 - GET /api/v1/orderflow FIRST POLL: HTTP 200 (NEVER 500) ✅, status='live' (not 'connecting', fully warmed up) ✅, ALL REQUIRED FIELDS VALIDATED: last_price=$74,681.34 (float) ✅, cvd_window_btc=8.1728 BTC (float) ✅, session_cvd_btc=-46.523 BTC (float) ✅, ofi_btc_per_s=0.1362 BTC/s (float) ✅, vpin=0.676 (float, order-flow toxicity metric) ✅, trades_per_sec=87.63 (float) ✅, buy_ratio_pct=54.3% (float) ✅, flow_state='Balanced' (string, in [Aggressive buying, Aggressive selling, Balanced]) ✅, venues={'coinbase': 'live', 'bybit': 'live', 'bybit_liq': 'live'} (all 3 venues LIVE, Binance intentionally absent due to geo-block) ✅, redis=True (Redis integration working) ✅, liquidations object validated: long_usd_1m=0.0, short_usd_1m=0.0, net_usd_1m=0.0, cascade_10s_usd=0.0, cascade_risk=False (boolean), count_1m=0 (all correct types) ✅. TEST 2 - SECOND POLL (3 seconds later): HTTP 200 ✅, LIVE UPDATES CONFIRMED (proving 1-second aggregator is live-updating): trades_window changed 5258→5044 ✅, trades_per_sec changed 87.63→84.07 ✅, cvd_window_btc changed 8.1728→7.2656 ✅, last_price changed $74,681.34→$74,673.83 ✅. TEST 3 - REGRESSION: GET /api/v1/health returns HTTP 200 ✅. TEST 4 - REGRESSION: GET /api/v1/dashboard returns HTTP 200 with status='ready' ✅. All validations passed. Data is REAL (Coinbase + Bybit WebSocket live trades + liquidations, Redis Streams ingestion, 1-second rolling aggregator). No HTTP 500 errors. Feature is fully functional and production-ready. Order-flow pipeline is LIVE with all 3 venues connected and streaming real-time data."
   - task: "Pillar 3 — FAISS Time Machine analogs (GET /api/v1/time-machine/analogs)"
     implemented: true
     working: true
@@ -2097,7 +2097,7 @@ backend:
         -comment: "NEW (Pillar 3). New module time_machine.py builds a FAISS cosine-similarity index (IndexFlatIP over standardized+L2-normalized 8-feature vectors) across all historical daily bars and, for today's vector, returns the top-K most similar historical days (excluding the most recent 7 + de-duped by 15-day gaps, requiring a full 30d forward window) with each analog's 7d/30d forward return and a 31-point forward price path, plus an aggregate summary (avg 7d/30d return, % higher). GET /api/v1/time-machine/analogs?k=3 (k clamped 1-6). Uses a 1h-cached fetch_ohlcv+build_features DataFrame. VERIFIED MANUALLY: status='ready', engine='faiss', 3 analogs with 0.95+ cosine similarity, forward returns + 31-pt paths, summary computed. NEEDS RETEST via external URL: GET /api/v1/time-machine/analogs?k=3 -> HTTP 200 status='ready', analogs: list (each date/similarity/price_then/ret_7d_pct/ret_30d_pct/path_30d[31]), summary{avg_ret_7d_pct,avg_ret_30d_pct,pct_higher_30d}. First call may take ~1-2s (fetch). Must NOT 500."
         -working: true
         -agent: "testing"
-        -comment: "✅ PASSED comprehensive Pillar 3 FAISS Time Machine validation via external URL (https://quant-features.preview.emergentagent.com/api/v1/time-machine/analogs). All validations passed (3/3 test cases: k=3, k=1, k=5). TEST CASE 1 - k=3: HTTP 200 (NOT 500) ✅, status='ready' ✅, engine='faiss' (FAISS library working) ✅, analogs: 3 items (expected up to 3) ✅, FIRST ANALOG VALIDATED: date='2024-10-18' (YYYY-MM-DD format) ✅, similarity=0.9581 (float ~0-1, high cosine similarity) ✅, price_then=$68,440.30 ✅, ret_7d_pct=-2.68% (7-day forward return) ✅, ret_30d_pct=31.28% (30-day forward return) ✅, path_30d: 31 points with {d, close} structure (complete 31-day forward price path) ✅, SUMMARY VALIDATED: avg_ret_7d_pct=4.61% ✅, avg_ret_30d_pct=19.71% ✅, pct_higher_7d=33% ✅, pct_higher_30d=100% ✅. TEST CASE 2 - k=1: HTTP 200 ✅, status='ready' ✅, engine='faiss' ✅, analogs: 1 item (expected 1) ✅, analog structure validated (date, similarity, price_then, ret_7d_pct, ret_30d_pct, path_30d[31]) ✅, summary validated (avg_ret_7d_pct=-2.68%, avg_ret_30d_pct=31.28%, pct_higher_7d=0%, pct_higher_30d=100%) ✅. TEST CASE 3 - k=5: HTTP 200 ✅, status='ready' ✅, engine='faiss' ✅, analogs: 5 items (expected up to 5) ✅, analog structure validated ✅, summary validated (avg_ret_7d_pct=0.42%, avg_ret_30d_pct=9.62%, pct_higher_7d=20%, pct_higher_30d=80%) ✅. All validations passed. Data is REAL (FAISS cosine-similarity index over standardized 8-feature vectors from historical BTC daily bars, with forward return paths). No HTTP 500 errors. Feature is fully functional and production-ready. Time Machine returns historically similar market conditions with their subsequent outcomes."
+        -comment: "✅ PASSED comprehensive Pillar 3 FAISS Time Machine validation via external URL (https://what-if-sandbox.preview.emergentagent.com/api/v1/time-machine/analogs). All validations passed (3/3 test cases: k=3, k=1, k=5). TEST CASE 1 - k=3: HTTP 200 (NOT 500) ✅, status='ready' ✅, engine='faiss' (FAISS library working) ✅, analogs: 3 items (expected up to 3) ✅, FIRST ANALOG VALIDATED: date='2024-10-18' (YYYY-MM-DD format) ✅, similarity=0.9581 (float ~0-1, high cosine similarity) ✅, price_then=$68,440.30 ✅, ret_7d_pct=-2.68% (7-day forward return) ✅, ret_30d_pct=31.28% (30-day forward return) ✅, path_30d: 31 points with {d, close} structure (complete 31-day forward price path) ✅, SUMMARY VALIDATED: avg_ret_7d_pct=4.61% ✅, avg_ret_30d_pct=19.71% ✅, pct_higher_7d=33% ✅, pct_higher_30d=100% ✅. TEST CASE 2 - k=1: HTTP 200 ✅, status='ready' ✅, engine='faiss' ✅, analogs: 1 item (expected 1) ✅, analog structure validated (date, similarity, price_then, ret_7d_pct, ret_30d_pct, path_30d[31]) ✅, summary validated (avg_ret_7d_pct=-2.68%, avg_ret_30d_pct=31.28%, pct_higher_7d=0%, pct_higher_30d=100%) ✅. TEST CASE 3 - k=5: HTTP 200 ✅, status='ready' ✅, engine='faiss' ✅, analogs: 5 items (expected up to 5) ✅, analog structure validated ✅, summary validated (avg_ret_7d_pct=0.42%, avg_ret_30d_pct=9.62%, pct_higher_7d=20%, pct_higher_30d=80%) ✅. All validations passed. Data is REAL (FAISS cosine-similarity index over standardized 8-feature vectors from historical BTC daily bars, with forward return paths). No HTTP 500 errors. Feature is fully functional and production-ready. Time Machine returns historically similar market conditions with their subsequent outcomes."
   - task: "Pillar 4 — Proactive Alerts (Liquidation Cascade + Basis Reclaim) + cost_basis/leverage_snapshot in dashboard"
     implemented: true
     working: true
@@ -2111,7 +2111,7 @@ backend:
         -comment: "NEW (Pillar 4). compute() adds cost_basis {sth,lth,sth_window:155,lth_window:365,price,sth_reclaimed,lth_reclaimed,method} — keyless volume-weighted price PROXIES for holder cost basis (NOT on-chain realized price, labeled as such) — and leverage_snapshot {funding_rate,funding_bias,funding_dir,oi_change_tf_pct,oi_state,squeeze} from cached OKX get_leverage('4H'). compute_smart_alerts() adds 'Liquidation Risk' (squeeze long/short_risk>=70 AND oi_change_tf_pct>=15) and 'Basis Reclaim' (spot crossing STH cost-basis proxy between runs) alerts — high severity so they auto-email via existing Resend instant pipeline. Regime-Flip message enriched with conviction+weighting. VERIFIED MANUALLY (calm data: no false cascade; synthetic deterministic call fired both alerts correctly). NEEDS RETEST via external URL: GET /api/v1/dashboard returns cost_basis + leverage_snapshot. Do NOT POST /api/v1/refresh; do NOT hit /email endpoints. Event-driven alerts may show none now (expected)."
         -working: true
         -agent: "testing"
-        -comment: "✅ PASSED comprehensive Pillar 4 validation via external URL (https://quant-features.preview.emergentagent.com/api). All validations passed (3/3 tests). TEST 1 - GET /api/v1/dashboard: HTTP 200 ✅, status='ready' ✅, cost_basis block present with all required fields (sth, lth, sth_window, lth_window, price, sth_reclaimed, lth_reclaimed, method) ✅, sth_window=155 ✅, lth_window=365 ✅, all fields have correct types (numbers for sth/lth/price, booleans for reclaimed flags, string for method) ✅, REPORTED VALUES: STH (155-day)=$68,428.46, LTH (365-day)=$81,116.11, Current Price=$75,491.80, STH Reclaimed=True, LTH Reclaimed=False, Method='Volume-weighted average price proxy (keyless) for short/long-term holder cost basis.' ✅, leverage_snapshot block present with all required fields (funding_rate, oi_change_tf_pct, oi_state, squeeze) ✅, all fields have correct types (numbers for funding_rate/oi_change_tf_pct, string for oi_state, object for squeeze) ✅, squeeze object has long_risk and short_risk (both numbers) ✅, REPORTED VALUES: Funding Rate=0.003770%, OI Change=2.70%, OI State='Rising', Squeeze Long Risk=27, Squeeze Short Risk=26 ✅. TEST 2 - Regression: GET /api/v1/health returns HTTP 200 ✅, GET /api/v1/alerts?symbol=BTC returns HTTP 200 with alerts array (24 items) ✅. All validations passed. Data is REAL (OKX derivatives data for leverage_snapshot, volume-weighted price proxy for cost_basis). No HTTP 500 errors. Feature is fully functional and production-ready. No /api/v1/refresh or /email endpoints triggered (as instructed)."
+        -comment: "✅ PASSED comprehensive Pillar 4 validation via external URL (https://what-if-sandbox.preview.emergentagent.com/api). All validations passed (3/3 tests). TEST 1 - GET /api/v1/dashboard: HTTP 200 ✅, status='ready' ✅, cost_basis block present with all required fields (sth, lth, sth_window, lth_window, price, sth_reclaimed, lth_reclaimed, method) ✅, sth_window=155 ✅, lth_window=365 ✅, all fields have correct types (numbers for sth/lth/price, booleans for reclaimed flags, string for method) ✅, REPORTED VALUES: STH (155-day)=$68,428.46, LTH (365-day)=$81,116.11, Current Price=$75,491.80, STH Reclaimed=True, LTH Reclaimed=False, Method='Volume-weighted average price proxy (keyless) for short/long-term holder cost basis.' ✅, leverage_snapshot block present with all required fields (funding_rate, oi_change_tf_pct, oi_state, squeeze) ✅, all fields have correct types (numbers for funding_rate/oi_change_tf_pct, string for oi_state, object for squeeze) ✅, squeeze object has long_risk and short_risk (both numbers) ✅, REPORTED VALUES: Funding Rate=0.003770%, OI Change=2.70%, OI State='Rising', Squeeze Long Risk=27, Squeeze Short Risk=26 ✅. TEST 2 - Regression: GET /api/v1/health returns HTTP 200 ✅, GET /api/v1/alerts?symbol=BTC returns HTTP 200 with alerts array (24 items) ✅. All validations passed. Data is REAL (OKX derivatives data for leverage_snapshot, volume-weighted price proxy for cost_basis). No HTTP 500 errors. Feature is fully functional and production-ready. No /api/v1/refresh or /email endpoints triggered (as instructed)."
   - task: "Breaker Demo Toggle (POST/GET /api/v1/admin/simulate-shock) — admin sim overrides drift+decision live"
     implemented: true
     working: true
@@ -2125,7 +2125,7 @@ backend:
         -comment: "NEW. GET /api/v1/admin/simulate-shock -> {active}. POST {passcode,on} requires ADMIN_PASSCODE (000000) else 401; sets misc 'breaker_sim'. When active, GET /api/v1/drift & /api/v1/dashboard apply a live override (no recompute): circuit_breaker=true/status='breaker'/confidence_level='Low'/model_mode='rule_based'/simulated=true and decision.overall_score shrunk toward 50 with decision.circuit_breaker.active=true. VERIFIED MANUALLY (ON->tripped, OFF->restored, bad passcode->401). NEEDS RETEST via external URL: POST on=true passcode 000000 -> active:true and drift/dashboard show tripped+simulated; POST on=false -> restored; wrong passcode -> 401. IMPORTANT: leave sim OFF at end."
         -working: true
         -agent: "testing"
-        -comment: "✅ PASSED comprehensive Breaker Demo Toggle round-trip validation via external URL (https://quant-features.preview.emergentagent.com/api). All validations passed (6/6 steps + final verification). STEP a) POST /api/v1/admin/simulate-shock with {passcode:'000000', on:true}: HTTP 200 ✅, response {status:'ok', active:true} ✅. STEP b) GET /api/v1/drift (verify breaker active): HTTP 200 ✅, circuit_breaker=true ✅, status='breaker' ✅, simulated=true ✅, confidence_level='Low' ✅. STEP c) GET /api/v1/dashboard (verify decision reflects breaker): HTTP 200 ✅, decision.confidence_level='Low' ✅, decision.circuit_breaker.active=true ✅. STEP d) POST /api/v1/admin/simulate-shock with {passcode:'000000', on:false}: HTTP 200 ✅, response {status:'ok', active:false} ✅. STEP e) GET /api/v1/drift (verify breaker restored): HTTP 200 ✅, circuit_breaker=false (restored) ✅. STEP f) POST /api/v1/admin/simulate-shock with {passcode:'wrong', on:true}: HTTP 401 ✅ (wrong passcode correctly rejected). FINAL VERIFICATION: circuit_breaker=false (OFF) ✅. All validations passed. Toggle correctly overrides drift and decision endpoints when active, restores when deactivated, and rejects unauthorized access. Feature is fully functional and production-ready. Toggle left in OFF state as required."
+        -comment: "✅ PASSED comprehensive Breaker Demo Toggle round-trip validation via external URL (https://what-if-sandbox.preview.emergentagent.com/api). All validations passed (6/6 steps + final verification). STEP a) POST /api/v1/admin/simulate-shock with {passcode:'000000', on:true}: HTTP 200 ✅, response {status:'ok', active:true} ✅. STEP b) GET /api/v1/drift (verify breaker active): HTTP 200 ✅, circuit_breaker=true ✅, status='breaker' ✅, simulated=true ✅, confidence_level='Low' ✅. STEP c) GET /api/v1/dashboard (verify decision reflects breaker): HTTP 200 ✅, decision.confidence_level='Low' ✅, decision.circuit_breaker.active=true ✅. STEP d) POST /api/v1/admin/simulate-shock with {passcode:'000000', on:false}: HTTP 200 ✅, response {status:'ok', active:false} ✅. STEP e) GET /api/v1/drift (verify breaker restored): HTTP 200 ✅, circuit_breaker=false (restored) ✅. STEP f) POST /api/v1/admin/simulate-shock with {passcode:'wrong', on:true}: HTTP 401 ✅ (wrong passcode correctly rejected). FINAL VERIFICATION: circuit_breaker=false (OFF) ✅. All validations passed. Toggle correctly overrides drift and decision endpoints when active, restores when deactivated, and rejects unauthorized access. Feature is fully functional and production-ready. Toggle left in OFF state as required."
 
   - task: "Pillar 2 — Feature Drift Circuit Breaker (GET /api/v1/drift + dashboard.drift + decision.circuit_breaker/confidence_level)"
     implemented: true
@@ -2140,7 +2140,7 @@ backend:
         -comment: "NEW (Pillar 2). New module drift_monitor.py computes: (a) per-feature PSI + two-sample KS (scipy ks_2samp) comparing the recent ~21-bar window vs the preceding ~189-bar window — reported as diagnostics; (b) a robust OUT-OF-DISTRIBUTION test of the LIVE feature vector vs the full training distribution (median/MAD robust z-scores + a multivariate Mahalanobis-distance gate at the chi-square 99.95% quantile). The CIRCUIT BREAKER trips when the live vector is OOD (>=2 features |z|>=5 OR Mahalanobis>gate) OR core data completeness < 95%. Rationale: raw PSI>0.25 on a 21-day window permanently trips on BTC's non-stationary data (normal market evolution), so PSI/KS are kept as descriptive diagnostics while the breaker is driven by a robust OOD test that only fires on genuine anomalies/feed gaps. On trip: decision.overall_score is shrunk toward 50, decision.label recomputed, decision.circuit_breaker={active,model_mode:'rule_based',reasons,fallback_signal,...} set, decision.confidence_level='Low', and the effective directional call falls back to a conservative EMA9/21+MACD rule-based trend signal. check_drift_circuit_alert() sends an edge-triggered admin email (reuses Resend recipient pipeline, 24h cooldown) on stable->breaker transition. GET /api/v1/drift returns the latest run's drift block. VERIFIED MANUALLY via localhost: (1) synthetic stable data 0/200 false-trips; (2) synthetic shock trips with extreme-feature + Mahalanobis reasons; (3) feed-gap (completeness 50%) trips; (4) on REAL BTC data breaker=False, status='watch', confidence_level='Guarded', Mahalanobis 19.98 < 27.87 gate, effective_signal==ml_signal (ML in control); (5) dashboard.decision now carries confidence_level + circuit_breaker. NEEDS RETEST via external URL: GET /api/v1/drift returns status='ready' with keys {circuit_breaker(bool), status, confidence_level, max_psi, per_feature[] (each feature/psi/ks_stat/ks_significant/status), ood{robust_z,mahalanobis,maha_threshold,extreme_features}, data_completeness_pct, model_mode, ml_signal, effective_signal, fallback_signal{signal,confidence,basis}, reasons[]}; and GET /api/v1/dashboard decision has confidence_level + circuit_breaker.active (expected false under normal conditions). Do NOT POST /api/v1/refresh repeatedly (expensive) and do NOT hit /email endpoints."
         -working: true
         -agent: "testing"
-        -comment: "✅ PASSED comprehensive Pillar 2 Feature-Drift Circuit Breaker validation via external URL (https://quant-features.preview.emergentagent.com/api). All 3 tests passed (3/3): TEST 1 - GET /api/v1/drift: HTTP 200 ✅, all required keys present (circuit_breaker, status, confidence_level, max_psi, per_feature, ood, data_completeness_pct, completeness_min, model_mode, ml_signal, effective_signal, fallback_signal, reasons) ✅, circuit_breaker=False (boolean) ✅, status='watch' (valid enum in [stable,watch,breaker]) ✅, confidence_level='Guarded' (valid enum in [Normal,Guarded,Low]) ✅, max_psi=5.9297 (number) ✅, per_feature: list with 8 items ✅, per_feature[0] structure valid: feature='ATR_Pct', label='ATR %', psi=5.9297, ks_stat=0.8413, ks_significant=True, status='drift' ✅, ood.robust_z: dict with 8 features (e.g., 'RSI': 2.48) ✅, ood.mahalanobis=19.98 (number) ✅, ood.maha_threshold=27.87 (number) ✅, ood.extreme_features: list with 0 items ✅, data_completeness_pct=100.0% (number) ✅, completeness_min=95.0 ✅, model_mode='ml' (valid enum in [ml,rule_based]) ✅, ml_signal='DOWN' (string) ✅, effective_signal='DOWN' (string) ✅, fallback_signal: {signal='UP', confidence=60, basis='EMA 9/21 trend + MACD confirmation (conservative rule-based)'} ✅, reasons: list with 0 items ✅. KEY METRICS: circuit_breaker=False (OFF, normal market conditions) ✅, status='watch' (some feature drift detected but ML model still in control) ✅, confidence_level='Guarded' (not Low, so no major anomaly) ✅, mahalanobis=19.98 < threshold=27.87 (live inputs are in-distribution) ✅, data_completeness=100.0% >= 95.0% (all feeds healthy) ✅, model_mode='ml' (ML model in control, not rule-based fallback) ✅, effective_signal='DOWN' == ml_signal='DOWN' (ML model is in control) ✅. TEST 2 - GET /api/v1/dashboard: HTTP 200 ✅, status='ready' ✅, decision.confidence_level='Guarded' (valid enum) ✅, decision.circuit_breaker.active=False (boolean) ✅, decision.circuit_breaker.model_mode='ml' (valid enum) ✅, top-level drift block present ✅, drift.circuit_breaker=False matches decision.circuit_breaker.active ✅, drift.status='watch' (valid enum) ✅, drift.confidence_level='Guarded' matches decision.confidence_level ✅. TEST 3 - REGRESSION: GET /api/v1/validation: HTTP 200, status='ready' ✅, GET /api/v1/scorecard: HTTP 200, status='ready' ✅, GET /api/v1/health: HTTP 200 ✅. All validations passed. Data is REAL (ccxt Kraken BTC/USD daily data, scipy KS test, robust z-scores, Mahalanobis distance). No HTTP 500 errors. Feature is fully functional and production-ready. No /api/v1/refresh or /email endpoints triggered (as instructed)."
+        -comment: "✅ PASSED comprehensive Pillar 2 Feature-Drift Circuit Breaker validation via external URL (https://what-if-sandbox.preview.emergentagent.com/api). All 3 tests passed (3/3): TEST 1 - GET /api/v1/drift: HTTP 200 ✅, all required keys present (circuit_breaker, status, confidence_level, max_psi, per_feature, ood, data_completeness_pct, completeness_min, model_mode, ml_signal, effective_signal, fallback_signal, reasons) ✅, circuit_breaker=False (boolean) ✅, status='watch' (valid enum in [stable,watch,breaker]) ✅, confidence_level='Guarded' (valid enum in [Normal,Guarded,Low]) ✅, max_psi=5.9297 (number) ✅, per_feature: list with 8 items ✅, per_feature[0] structure valid: feature='ATR_Pct', label='ATR %', psi=5.9297, ks_stat=0.8413, ks_significant=True, status='drift' ✅, ood.robust_z: dict with 8 features (e.g., 'RSI': 2.48) ✅, ood.mahalanobis=19.98 (number) ✅, ood.maha_threshold=27.87 (number) ✅, ood.extreme_features: list with 0 items ✅, data_completeness_pct=100.0% (number) ✅, completeness_min=95.0 ✅, model_mode='ml' (valid enum in [ml,rule_based]) ✅, ml_signal='DOWN' (string) ✅, effective_signal='DOWN' (string) ✅, fallback_signal: {signal='UP', confidence=60, basis='EMA 9/21 trend + MACD confirmation (conservative rule-based)'} ✅, reasons: list with 0 items ✅. KEY METRICS: circuit_breaker=False (OFF, normal market conditions) ✅, status='watch' (some feature drift detected but ML model still in control) ✅, confidence_level='Guarded' (not Low, so no major anomaly) ✅, mahalanobis=19.98 < threshold=27.87 (live inputs are in-distribution) ✅, data_completeness=100.0% >= 95.0% (all feeds healthy) ✅, model_mode='ml' (ML model in control, not rule-based fallback) ✅, effective_signal='DOWN' == ml_signal='DOWN' (ML model is in control) ✅. TEST 2 - GET /api/v1/dashboard: HTTP 200 ✅, status='ready' ✅, decision.confidence_level='Guarded' (valid enum) ✅, decision.circuit_breaker.active=False (boolean) ✅, decision.circuit_breaker.model_mode='ml' (valid enum) ✅, top-level drift block present ✅, drift.circuit_breaker=False matches decision.circuit_breaker.active ✅, drift.status='watch' (valid enum) ✅, drift.confidence_level='Guarded' matches decision.confidence_level ✅. TEST 3 - REGRESSION: GET /api/v1/validation: HTTP 200, status='ready' ✅, GET /api/v1/scorecard: HTTP 200, status='ready' ✅, GET /api/v1/health: HTTP 200 ✅. All validations passed. Data is REAL (ccxt Kraken BTC/USD daily data, scipy KS test, robust z-scores, Mahalanobis distance). No HTTP 500 errors. Feature is fully functional and production-ready. No /api/v1/refresh or /email endpoints triggered (as instructed)."
   - task: "Ask Quant chat (POST /api/v1/chat, GET /api/v1/chat/history) - Gemini 3 Flash grounded in live dashboard data"
     implemented: true
     working: true
@@ -2160,7 +2160,7 @@ backend:
         -comment: "UPDATED (Albert Mentor Scope Expansion). CHAT_SYSTEM rewritten from a narrow 'dashboard-only' interpreter into an elite Quant Analyst + Senior Market Strategist mentor persona (candid sounding board; holistic scope covering macro/DXY/yields/CPI/Fed, ETF flows, on-chain structure, cycle/power-law models, cross-asset correlations, other tickers, and DCA/swing/macro strategy playbooks with accumulation/distribution signal frameworks and risk-first position sizing). Interactive /api/v1/chat now uses ALBERT_CHAT_MODEL='gemini-3.1-pro-preview' (verified available; note gemini-3-pro-preview is deprecated by Google → 404) with native Google Search grounding via .with_tools([{'googleSearch':{}}]) + send_message_with_tools for LIVE WEB retrieval, and a graceful fallback to plain send_message on CHAT_MODEL if the tool path returns empty. build_chat_context() now also injects a GLOBAL MARKET FEEDS block (ETF net flows, derivatives funding/OI/pressure, smart-money + institutional on-chain metrics, cross-asset dominance/ETH-BTC/total-mcap, Fear & Greed) so Albert stops saying 'no data' when data exists. Anti-hallucination on dashboard numbers preserved (still says 'no [X] data available' for inactive feeds; must not fabricate dashboard values). NEEDS RETEST: verify (a) HTTP 200 with non-empty text + model likely 'gemini-3.1-pro-preview'; (b) a web-needing question (e.g. 'latest US CPI print and date') returns a grounded current answer; (c) multi-turn memory still works; (d) dashboard-grounded question still cites correct live numbers; (e) empty message still returns friendly error. Do NOT trigger any /email endpoints."
         -working: true
         -agent: "testing"
-        -comment: "✅ PASSED comprehensive validation of UPGRADED Albert Chat via external URL (https://quant-features.preview.emergentagent.com/api). All 8 tests passed (8/8): TEST 1 - BASIC CHAT: POST /api/v1/chat with 'Give me the candid read on Bitcoin right now' returns HTTP 200 ✅, model='gemini-3.1-pro-preview' (NOT falling back to gemini-3-flash-preview) ✅, text length 1530 chars (non-empty, substantial response) ✅, text references dashboard data (score, price, $) ✅, response time 21.23s (web search grounding active) ✅. TEST 2 - LIVE WEB SEARCH: POST /api/v1/chat with 'What was the latest US CPI year-over-year print and on what date was it released?' returns HTTP 200 ✅, model='gemini-3.1-pro-preview' ✅, text contains concrete CPI data: July 2026 CPI 3.4% YoY, released Aug 12, 2026, Core CPI 2.5% YoY ✅, contains numbers, percentages, and dates ✅, response time 13.12s ✅, validates Google Search grounding is working (retrieved live external data not in dashboard) ✅, NO HTTP 500 error ✅. TEST 3 - MULTI-TURN MEMORY: POST /api/v1/chat with follow-up 'And how does that affect Bitcoin over the next week?' reusing session_id from test 1 returns HTTP 200 ✅, model='gemini-3.1-pro-preview' ✅, text length 1034 chars ✅, response is coherent (references week, next, 7d forecast, 56.7% probability) ✅, response time 12.38s ✅, multi-turn memory preserved ✅. TEST 4 - ANTI-HALLUCINATION: POST /api/v1/chat with 'What exact Bitcoin price will we see on Christmas Day, and what is the current Ethereum gas fee in gwei?' returns HTTP 200 ✅, model='gemini-3.1-pro-preview' ✅, text length 1034 chars ✅, Albert correctly declined to give exact future price ('if I could give you the *exact* Bitcoin price...I'd be a time traveler', 'We deal in probabilities, not crystal balls') ✅, framed as probabilities/scenarios (3M/6M base cases, bull/bear scenarios) ✅, did NOT fabricate exact price ✅, response time 17.10s ✅. NOTE: Albert DID provide ETH gas fee (0.05-0.08 Gwei) via live web search, which is CORRECT behavior (used web tool to get live data rather than saying 'no data') ✅. TEST 5 - EMPTY MESSAGE: POST /api/v1/chat with empty message returns HTTP 200 ✅, error='empty message' ✅, text='Please type a question.' ✅, NO HTTP 500 crash ✅. TEST 6 - CHAT HISTORY: GET /api/v1/chat/history?session_id=<session from test 1> returns HTTP 200 ✅, messages array with 2 messages (from tests 1 and 3) ✅, each message has user/assistant/model/created_at fields ✅. TEST 7a - REGRESSION DASHBOARD: GET /api/v1/dashboard returns HTTP 200 ✅, status='ready' ✅, no breaking changes from build_chat_context update ✅. TEST 7b - REGRESSION HEALTH: GET /api/v1/health returns HTTP 200 ✅, status='ok', compute_status='idle', runs=16 ✅. KEY VALIDATIONS CONFIRMED: ✅ Model: gemini-3.1-pro-preview (primary path, NOT fallback) ✅ Google Search grounding: WORKING (validated by CPI question returning concrete recent external data) ✅ Dashboard grounding: WORKING (references live scores, prices, forecasts) ✅ Multi-turn memory: WORKING (coherent follow-up answers) ✅ Anti-hallucination: WORKING (declined exact future price, framed as probabilities) ✅ Web search for unavailable data: WORKING (retrieved ETH gas fee via web search) ✅ Empty message handling: WORKING (friendly error, no crash) ✅ Chat history: WORKING (stores and retrieves conversation) ✅ Regression tests: PASSED (dashboard and health endpoints still working) ✅ NO HTTP 500 ERRORS. All validations passed. Feature is fully functional and production-ready. No email endpoints triggered (as instructed)."
+        -comment: "✅ PASSED comprehensive validation of UPGRADED Albert Chat via external URL (https://what-if-sandbox.preview.emergentagent.com/api). All 8 tests passed (8/8): TEST 1 - BASIC CHAT: POST /api/v1/chat with 'Give me the candid read on Bitcoin right now' returns HTTP 200 ✅, model='gemini-3.1-pro-preview' (NOT falling back to gemini-3-flash-preview) ✅, text length 1530 chars (non-empty, substantial response) ✅, text references dashboard data (score, price, $) ✅, response time 21.23s (web search grounding active) ✅. TEST 2 - LIVE WEB SEARCH: POST /api/v1/chat with 'What was the latest US CPI year-over-year print and on what date was it released?' returns HTTP 200 ✅, model='gemini-3.1-pro-preview' ✅, text contains concrete CPI data: July 2026 CPI 3.4% YoY, released Aug 12, 2026, Core CPI 2.5% YoY ✅, contains numbers, percentages, and dates ✅, response time 13.12s ✅, validates Google Search grounding is working (retrieved live external data not in dashboard) ✅, NO HTTP 500 error ✅. TEST 3 - MULTI-TURN MEMORY: POST /api/v1/chat with follow-up 'And how does that affect Bitcoin over the next week?' reusing session_id from test 1 returns HTTP 200 ✅, model='gemini-3.1-pro-preview' ✅, text length 1034 chars ✅, response is coherent (references week, next, 7d forecast, 56.7% probability) ✅, response time 12.38s ✅, multi-turn memory preserved ✅. TEST 4 - ANTI-HALLUCINATION: POST /api/v1/chat with 'What exact Bitcoin price will we see on Christmas Day, and what is the current Ethereum gas fee in gwei?' returns HTTP 200 ✅, model='gemini-3.1-pro-preview' ✅, text length 1034 chars ✅, Albert correctly declined to give exact future price ('if I could give you the *exact* Bitcoin price...I'd be a time traveler', 'We deal in probabilities, not crystal balls') ✅, framed as probabilities/scenarios (3M/6M base cases, bull/bear scenarios) ✅, did NOT fabricate exact price ✅, response time 17.10s ✅. NOTE: Albert DID provide ETH gas fee (0.05-0.08 Gwei) via live web search, which is CORRECT behavior (used web tool to get live data rather than saying 'no data') ✅. TEST 5 - EMPTY MESSAGE: POST /api/v1/chat with empty message returns HTTP 200 ✅, error='empty message' ✅, text='Please type a question.' ✅, NO HTTP 500 crash ✅. TEST 6 - CHAT HISTORY: GET /api/v1/chat/history?session_id=<session from test 1> returns HTTP 200 ✅, messages array with 2 messages (from tests 1 and 3) ✅, each message has user/assistant/model/created_at fields ✅. TEST 7a - REGRESSION DASHBOARD: GET /api/v1/dashboard returns HTTP 200 ✅, status='ready' ✅, no breaking changes from build_chat_context update ✅. TEST 7b - REGRESSION HEALTH: GET /api/v1/health returns HTTP 200 ✅, status='ok', compute_status='idle', runs=16 ✅. KEY VALIDATIONS CONFIRMED: ✅ Model: gemini-3.1-pro-preview (primary path, NOT fallback) ✅ Google Search grounding: WORKING (validated by CPI question returning concrete recent external data) ✅ Dashboard grounding: WORKING (references live scores, prices, forecasts) ✅ Multi-turn memory: WORKING (coherent follow-up answers) ✅ Anti-hallucination: WORKING (declined exact future price, framed as probabilities) ✅ Web search for unavailable data: WORKING (retrieved ETH gas fee via web search) ✅ Empty message handling: WORKING (friendly error, no crash) ✅ Chat history: WORKING (stores and retrieves conversation) ✅ Regression tests: PASSED (dashboard and health endpoints still working) ✅ NO HTTP 500 ERRORS. All validations passed. Feature is fully functional and production-ready. No email endpoints triggered (as instructed)."
   - task: "Data Trust Layer (dashboard.data_health + decision.data_trust) - feed health monitoring + odds fading"
     implemented: true
     working: true
@@ -2374,7 +2374,7 @@ backend:
         -comment: "✅ PASSED (fwd_path re-test) via external URL. status='ready'. ALL 1176 day_fingerprints have fwd_path = list of exactly 16 {off,v}; off exactly [0,12,...,180] step 12; off=0 always v=100; v number|null; recent dates null at far offsets (expected). Regression: day_fingerprints fields intact, episodes=28 with non-empty path(81 pts)+match, current/norm/signals(8)/current_path(21)/episode_count all present. No 500s. Data REAL (Yahoo Finance)."
         -working: true
         -agent: "testing"
-        -comment: "✅ PASSED comprehensive validation via external URL (https://quant-features.preview.emergentagent.com/api/v1/analogs). Endpoint returned status='ready' immediately (data was already cached). ALL NEW FIELDS VALIDATED: (1) day_fingerprints: 1176 items (expected ~1000+) ✅ Each item validated with required fields: date (YYYY-MM-DD format) ✅, fp (dict with all 8 ANALOG_KEYS: rates_dir, dxy_dir, nasdaq_corr, gold_corr, vol_regime, drawdown, momentum, cycle) ✅, fwd_30/fwd_90/fwd_180 (numbers or null) ✅ Resolved days: 1176/1176 (100.0%) have fwd_90 != null ✅ (2) episodes: 28 items, ALL episodes have non-empty 'path' field ✅ Each episode validated: path is list of {off, v} objects (81 points in top episodes) ✅, match is number 0-100 (range: 48-56) ✅ (3) REGRESSION PASSED: current (dict with 8 keys) ✅, norm (dict with 8 keys) ✅, signals (list with exactly 8 items) ✅, current_path (list with 21 points) ✅, episode_count (28) ✅ No HTTP 500 errors ✅ Data is REAL (Yahoo Finance: BTC-USD, ^NDX, GC=F, DX-Y.NYB, ^TNX over 10 years)."
+        -comment: "✅ PASSED comprehensive validation via external URL (https://what-if-sandbox.preview.emergentagent.com/api/v1/analogs). Endpoint returned status='ready' immediately (data was already cached). ALL NEW FIELDS VALIDATED: (1) day_fingerprints: 1176 items (expected ~1000+) ✅ Each item validated with required fields: date (YYYY-MM-DD format) ✅, fp (dict with all 8 ANALOG_KEYS: rates_dir, dxy_dir, nasdaq_corr, gold_corr, vol_regime, drawdown, momentum, cycle) ✅, fwd_30/fwd_90/fwd_180 (numbers or null) ✅ Resolved days: 1176/1176 (100.0%) have fwd_90 != null ✅ (2) episodes: 28 items, ALL episodes have non-empty 'path' field ✅ Each episode validated: path is list of {off, v} objects (81 points in top episodes) ✅, match is number 0-100 (range: 48-56) ✅ (3) REGRESSION PASSED: current (dict with 8 keys) ✅, norm (dict with 8 keys) ✅, signals (list with exactly 8 items) ✅, current_path (list with 21 points) ✅, episode_count (28) ✅ No HTTP 500 errors ✅ Data is REAL (Yahoo Finance: BTC-USD, ^NDX, GC=F, DX-Y.NYB, ^TNX over 10 years)."
         -working: true
         -agent: "testing"
         -comment: "✅ RE-TEST PASSED - NEW fwd_path FIELD VALIDATED. Tested GET /api/v1/analogs via external URL. Endpoint returned status='ready' immediately (cached). ADDITIVE FIELD fwd_path FULLY VALIDATED: (1) ALL 1176 day_fingerprints have fwd_path field ✅ (2) Each fwd_path is a list of EXACTLY 16 objects {off, v} ✅ (3) Offsets are EXACTLY [0,12,24,36,48,60,72,84,96,108,120,132,144,156,168,180] (step 12) ✅ (4) The off=0 point has v=100 (rebased to 100 at day 0) ✅ (5) v is a number or null ✅ (6) Recent-dated items (April-May 2026) legitimately have v=null at far offsets (108-180 days) due to insufficient forward data - this is EXPECTED behavior ✅ REGRESSION TESTS PASSED: (7) day_fingerprints items still contain date (YYYY-MM-DD) ✅, fp (dict of 8 keys: rates_dir, dxy_dir, nasdaq_corr, gold_corr, vol_regime, drawdown, momentum, cycle) ✅, fwd_30, fwd_90, fwd_180 ✅ (8) episodes non-empty (28 items), each with non-empty path (81 points) and match (0-100) ✅ (9) current (dict with 8 keys) ✅, norm (dict with 8 keys) ✅, signals (list of 8) ✅, current_path (21 points) ✅, episode_count (28) ✅ No HTTP 500 errors at any point ✅ Data is REAL (Yahoo Finance). All validations passed."
@@ -2427,10 +2427,10 @@ frontend:
         -agent: "testing"
         -comment: |
           ✅ PASSED comprehensive Phase D3 Portfolio Command Centre E2E UI test via external URL 
-          (https://quant-features.preview.emergentagent.com). ALL 16 TEST STEPS PASSED (16/16).
+          (https://what-if-sandbox.preview.emergentagent.com). ALL 16 TEST STEPS PASSED (16/16).
           
           AUTH BYPASS: ✅ Cookie (albert_session=e2e_test_session_token_albert_0001) + localStorage 
-          (btciq_user_id=7693422a-e2c0-4242-8211-e6f1d0eaa320) set successfully. Dashboard unlocked.
+          (btciq_user_id=what-if-sandbox) set successfully. Dashboard unlocked.
           
           NAVIGATION: ✅ Navigated to Trading Strategies screen. Portfolio Command Centre card found at top.
           
@@ -2533,13 +2533,13 @@ frontend:
         -comment: "NEW UI across pillars, needs one comprehensive pass. Test surfaces: (1) OVERVIEW/hero: a model-confidence chip appears near the decision hero — normally 'Model: Healthy/Guarded'; when the breaker sim is ON it becomes red '⚠ Circuit breaker · rule-based fallback'. (2) ASK ALBERT screen (nav 'Ask'): new strategy quick-prompt chips (Critique my strategy / cycle distribution signals / Fed & ETF flows / stop-loss & invalidation / etc.) and updated placeholder 'Ask Albert about strategy, macro drivers...'; sending a message returns a response (Gemini 3.1 Pro + web). (3) PERFORMANCE/Scorecard screen: 'Feature-Drift Circuit Breaker' panel renders with confidence badge, model mode, data completeness, Mahalanobis vs gate, and a per-feature PSI/KS/live-z table. (4) FORECASTS screen: 'Projection & Overlays' chart with toggle chips (Conformal cone / TP-invalidation / Cost basis / Analog rhyme) that show/hide overlays; a violet dashed 'analog rhyme' line appears. (5) LEVERAGE screen: 'Live Order Flow' card shows LIVE badge, CVD/OFI/VPIN/trades-per-sec/flow/liquidation tiles, a Session-CVD sparkline, and venue dots (coinbase/bybit/bybit_liq) — values update every ~2.5s. (6) TIME MACHINE screen: 'When did this happen before?' FAISS analogs panel with summary tiles + a forward-path line chart + analog rows. (7) SETTINGS screen: 'Circuit-breaker demo' toggle — enter admin passcode 000000 (localStorage btciq_admin_passcode) then flip it ON; verify the hero chip flips to the red breaker chip and the Performance drift panel shows BREAKER TRIPPED. THEN TURN IT OFF at the end (leave OFF). Verify no console errors / no crashes on any screen."
         -working: false
         -agent: "testing"
-        -comment: "❌ PARTIAL FAILURE - Focused re-test of Feature-Drift Circuit Breaker panel + Breaker demo toggle via external URL (https://quant-features.preview.emergentagent.com). ITEM A (Feature-Drift Circuit Breaker panel): ✅ PASSED - Panel renders correctly on Performance screen with confidence badge 'Confidence: Guarded', all 4 tiles (Model mode=ML, Data completeness=100%, Anomaly Mahalanobis=19.56 vs gate 27.87, Effective signal=DOWN), all 5 table columns (Feature, PSI, KS, Live z, Status), and 8 feature rows (ATR %, Bollinger Width %, EMA 9/21 Ratio, MACD Histogram, RSI (14), Stochastic RSI, Volume Ratio, Volume Z-Score). ITEM B (Circuit-breaker demo toggle full cycle): ❌ CRITICAL BUG - Toggle works in Settings (ON shows 'Simulated shock ACTIVE' red label, OFF shows 'Off (real model state)'), Performance drift panel correctly shows 'BREAKER TRIPPED' badge and 'rule-based' alert box when toggle is ON, BUT the Overview hero chip DOES NOT update to show '⚠ Circuit breaker · rule-based fallback' when toggle is ON - it continues to show 'Model:' chip instead. This means the Overview page is not re-fetching/refreshing the dashboard data after the breaker simulation is activated. The backend is working correctly (Performance page shows BREAKER TRIPPED), but the Overview hero is not reflecting the circuit breaker state. Toggle left in OFF state as required. No console errors. Screenshots: drift_panel_found.png (shows panel with Confidence: Guarded), toggle_on.png (shows toggle ON with red label), overview_with_breaker.png (shows Overview NOT showing breaker chip), drift_panel_tripped.png (shows BREAKER TRIPPED on Performance), toggle_off.png (shows toggle OFF)."
+        -comment: "❌ PARTIAL FAILURE - Focused re-test of Feature-Drift Circuit Breaker panel + Breaker demo toggle via external URL (https://what-if-sandbox.preview.emergentagent.com). ITEM A (Feature-Drift Circuit Breaker panel): ✅ PASSED - Panel renders correctly on Performance screen with confidence badge 'Confidence: Guarded', all 4 tiles (Model mode=ML, Data completeness=100%, Anomaly Mahalanobis=19.56 vs gate 27.87, Effective signal=DOWN), all 5 table columns (Feature, PSI, KS, Live z, Status), and 8 feature rows (ATR %, Bollinger Width %, EMA 9/21 Ratio, MACD Histogram, RSI (14), Stochastic RSI, Volume Ratio, Volume Z-Score). ITEM B (Circuit-breaker demo toggle full cycle): ❌ CRITICAL BUG - Toggle works in Settings (ON shows 'Simulated shock ACTIVE' red label, OFF shows 'Off (real model state)'), Performance drift panel correctly shows 'BREAKER TRIPPED' badge and 'rule-based' alert box when toggle is ON, BUT the Overview hero chip DOES NOT update to show '⚠ Circuit breaker · rule-based fallback' when toggle is ON - it continues to show 'Model:' chip instead. This means the Overview page is not re-fetching/refreshing the dashboard data after the breaker simulation is activated. The backend is working correctly (Performance page shows BREAKER TRIPPED), but the Overview hero is not reflecting the circuit breaker state. Toggle left in OFF state as required. No console errors. Screenshots: drift_panel_found.png (shows panel with Confidence: Guarded), toggle_on.png (shows toggle ON with red label), overview_with_breaker.png (shows Overview NOT showing breaker chip), drift_panel_tripped.png (shows BREAKER TRIPPED on Performance), toggle_off.png (shows toggle OFF)."
         -working: true
         -agent: "main"
         -comment: "FIX APPLIED for ITEM B (Circuit-breaker demo toggle). Root cause: Overview hero chip (ModelConfidenceChip) was using stale cached dashboard data and not re-fetching when breaker state changed. Solution: ModelConfidenceChip now self-polls GET /api/v1/drift every 5 seconds (setInterval 5000ms) with cache:'no-store' to stay live even when the cached dashboard payload is stale. The chip reads circuit_breaker + confidence_level directly from the drift endpoint and updates automatically. When breaker=true, shows red '⚠ Circuit breaker · rule-based fallback' chip; when breaker=false, shows normal 'Model: Guarded/Healthy' chip. NEEDS RETEST: full cycle (Settings → toggle ON → Overview wait ~6s → verify red chip → Settings → toggle OFF → Overview wait ~6s → verify normal chip → leave toggle OFF)."
         -working: true
         -agent: "testing"
-        -comment: "✅ PASSED - Circuit-breaker demo toggle FULL CYCLE RE-TEST via external URL (https://quant-features.preview.emergentagent.com). Main agent's fix (ModelConfidenceChip self-polling /v1/drift every 5s) is WORKING CORRECTLY. All test steps passed (9/9): (1) Navigated to Settings, entered admin passcode 000000, clicked Save ✅. (2) Clicked breaker-demo-toggle to turn ON, label changed to 'Simulated shock ACTIVE' (red text) ✅, red alert box 'Breaker tripped (simulated)' appeared ✅. (3) Navigated to Overview, waited 6 seconds for chip to poll ✅. (4) RED BREAKER CHIP FOUND: '⚠ Circuit breaker · rule-based fallback' ✅ ✅ ✅ (CRITICAL FIX VERIFIED). (5) Navigated back to Settings, clicked toggle to turn OFF, label changed to 'Off (real model state)' ✅. (6) Navigated to Overview, waited 6 seconds ✅. (7) Red breaker chip is GONE ✅, normal chip 'Model: Guarded' FOUND ✅ ✅ ✅ (REVERT VERIFIED). (8) Final verification: toggle is OFF ✅. (9) Console errors: only 1 non-critical WebSocket HMR error (expected) ✅. SUMMARY: Toggle ON → Red breaker chip appears within ~6s ✅ PASS. Toggle OFF → Normal chip appears within ~6s ✅ PASS. Final state: Toggle OFF ✅. Screenshots: breaker_toggle_ON_settings.png, breaker_chip_RED_visible.png, breaker_toggle_OFF_settings.png, breaker_chip_NORMAL_visible.png, breaker_toggle_final_state.png. The self-polling fix resolves the previous issue where the Overview page wasn't refreshing. Feature is now fully functional and production-ready."
+        -comment: "✅ PASSED - Circuit-breaker demo toggle FULL CYCLE RE-TEST via external URL (https://what-if-sandbox.preview.emergentagent.com). Main agent's fix (ModelConfidenceChip self-polling /v1/drift every 5s) is WORKING CORRECTLY. All test steps passed (9/9): (1) Navigated to Settings, entered admin passcode 000000, clicked Save ✅. (2) Clicked breaker-demo-toggle to turn ON, label changed to 'Simulated shock ACTIVE' (red text) ✅, red alert box 'Breaker tripped (simulated)' appeared ✅. (3) Navigated to Overview, waited 6 seconds for chip to poll ✅. (4) RED BREAKER CHIP FOUND: '⚠ Circuit breaker · rule-based fallback' ✅ ✅ ✅ (CRITICAL FIX VERIFIED). (5) Navigated back to Settings, clicked toggle to turn OFF, label changed to 'Off (real model state)' ✅. (6) Navigated to Overview, waited 6 seconds ✅. (7) Red breaker chip is GONE ✅, normal chip 'Model: Guarded' FOUND ✅ ✅ ✅ (REVERT VERIFIED). (8) Final verification: toggle is OFF ✅. (9) Console errors: only 1 non-critical WebSocket HMR error (expected) ✅. SUMMARY: Toggle ON → Red breaker chip appears within ~6s ✅ PASS. Toggle OFF → Normal chip appears within ~6s ✅ PASS. Final state: Toggle OFF ✅. Screenshots: breaker_toggle_ON_settings.png, breaker_chip_RED_visible.png, breaker_toggle_OFF_settings.png, breaker_chip_NORMAL_visible.png, breaker_toggle_final_state.png. The self-polling fix resolves the previous issue where the Overview page wasn't refreshing. Feature is now fully functional and production-ready."
 
   - task: "Leverage screen UI (nav 'Leverage', timeframe + LONG/SHORT toggles, all cards, inactive 'No data available' states)"
     implemented: true
@@ -2554,7 +2554,7 @@ frontend:
         -comment: "NEW Leverage screen (LeverageSection). Nav item 'Leverage' (BTC-only). Header: BTC price + 24h change + updated time; timeframe selector 1H/4H/1D/7D (default 4H, refetches); LONG|SHORT emphasis toggle (switches squeeze explanation). REAL cards: Leverage Market Summary (Pressure/Bias/Squeeze + interpretation), Long vs Short Positioning (split bar + account ratio; position ratio shows 'No data available'), Open Interest (value + change + state + price/OI chart), Funding Rates (rate/direction/bias + bar chart + OKX exchange chip), Squeeze Risk (two semicircle gauges), BitMarkAI Leverage Intelligence (observations + assessment), Impact on Albert's Call (impact_points), data sources + disclaimer. INACTIVE cards rendered as 'No data available' placeholders (Lock icon + reason), NOT fabricated numbers: Estimated Leverage, Liquidations, Liquidation Heatmap, and the L/S Position Ratio cell. Compiles clean. Test: nav to Leverage; verify all cards render; toggles work (timeframe refetch changes values; LONG/SHORT changes squeeze text); the 4 inactive items clearly say 'No data available' with NO numbers; no console errors."
         -working: true
         -agent: "testing"
-        -comment: "✅ PASSED comprehensive Leverage screen UI test via external URL (https://quant-features.preview.emergentagent.com). All 12 sections validated + 2 interaction tests passed. RESULTS: (1) HEADER: BTC price=$64,867 with 24h % change ✅, 'Updated' time label ✅, timeframe selector with all 4 buttons (1H/4H/1D/7D) ✅, 4H selected by default ✅, LONG/SHORT toggle buttons ✅. (2) LEVERAGE MARKET SUMMARY: Three tiles (Leverage Pressure='LOW' score 13/100, Market Bias='Long Dominant', Squeeze Risk='Long Squeeze Risk') ✅, interpretation paragraph ✅. (3) LONG VS SHORT POSITIONING: Green/red split bar with Long 55% / Short 45% ✅, L/S Account Ratio=1.22 ✅, L/S Position Ratio shows 'No data available' ✅. (4) OPEN INTEREST: Dollar value=$2.01B ✅, % change=-0.7% ✅, state tag='Stable' ✅, price/OI chart ✅, interpretation text ✅. (5) FUNDING RATES: Rate=+0.00067% ✅, direction='Positive' ✅, bias='Neutral' ✅, bar chart ✅, OKX exchange chip ✅. (6) ESTIMATED LEVERAGE: 'No data available' placeholder with Lock icon ✅, NO fabricated numbers ✅. (7) LIQUIDATIONS: 'No data available' placeholder ✅, NO dollar values ✅. (8) LIQUIDATION HEATMAP: 'No data available' placeholder ✅, NO price zones ✅. (9) SQUEEZE RISK: Two gauges (Long Low 28, Short Low 12) ✅, explanation text ✅. (10) BITMARKAI LEVERAGE INTELLIGENCE: 5 observations ✅, 'Overall Leverage Assessment' title='Elevated Long-Side Risk' ✅. (11) IMPACT ON ALBERT'S CALL: Impact label='Bearish Pressure -3' ✅, explanation text ✅. (12) DATA SOURCES: Section found ✅. INTERACTIONS: Timeframe selector 7D→1H works correctly (pressure score changed from 13/100 to 11/100) ✅, LONG/SHORT toggle switches Squeeze Risk explanation text correctly ✅. CONSOLE: Only 1 non-critical error (WebSocket HMR 502, expected in production) ✅. NO red error screens ✅. Screenshots captured: leverage_screen_initial.png, leverage_summary_positioning.png, leverage_oi_funding.png, leverage_inactive_cards.png, leverage_squeeze_bitmark_albert.png. All 4 'No data available' items confirmed (Estimated Leverage, Liquidations, Liquidation Heatmap, L/S Position Ratio) with NO fabricated numbers. Data is REAL (OKX public API). Feature is fully functional and production-ready."
+        -comment: "✅ PASSED comprehensive Leverage screen UI test via external URL (https://what-if-sandbox.preview.emergentagent.com). All 12 sections validated + 2 interaction tests passed. RESULTS: (1) HEADER: BTC price=$64,867 with 24h % change ✅, 'Updated' time label ✅, timeframe selector with all 4 buttons (1H/4H/1D/7D) ✅, 4H selected by default ✅, LONG/SHORT toggle buttons ✅. (2) LEVERAGE MARKET SUMMARY: Three tiles (Leverage Pressure='LOW' score 13/100, Market Bias='Long Dominant', Squeeze Risk='Long Squeeze Risk') ✅, interpretation paragraph ✅. (3) LONG VS SHORT POSITIONING: Green/red split bar with Long 55% / Short 45% ✅, L/S Account Ratio=1.22 ✅, L/S Position Ratio shows 'No data available' ✅. (4) OPEN INTEREST: Dollar value=$2.01B ✅, % change=-0.7% ✅, state tag='Stable' ✅, price/OI chart ✅, interpretation text ✅. (5) FUNDING RATES: Rate=+0.00067% ✅, direction='Positive' ✅, bias='Neutral' ✅, bar chart ✅, OKX exchange chip ✅. (6) ESTIMATED LEVERAGE: 'No data available' placeholder with Lock icon ✅, NO fabricated numbers ✅. (7) LIQUIDATIONS: 'No data available' placeholder ✅, NO dollar values ✅. (8) LIQUIDATION HEATMAP: 'No data available' placeholder ✅, NO price zones ✅. (9) SQUEEZE RISK: Two gauges (Long Low 28, Short Low 12) ✅, explanation text ✅. (10) BITMARKAI LEVERAGE INTELLIGENCE: 5 observations ✅, 'Overall Leverage Assessment' title='Elevated Long-Side Risk' ✅. (11) IMPACT ON ALBERT'S CALL: Impact label='Bearish Pressure -3' ✅, explanation text ✅. (12) DATA SOURCES: Section found ✅. INTERACTIONS: Timeframe selector 7D→1H works correctly (pressure score changed from 13/100 to 11/100) ✅, LONG/SHORT toggle switches Squeeze Risk explanation text correctly ✅. CONSOLE: Only 1 non-critical error (WebSocket HMR 502, expected in production) ✅. NO red error screens ✅. Screenshots captured: leverage_screen_initial.png, leverage_summary_positioning.png, leverage_oi_funding.png, leverage_inactive_cards.png, leverage_squeeze_bitmark_albert.png. All 4 'No data available' items confirmed (Estimated Leverage, Liquidations, Liquidation Heatmap, L/S Position Ratio) with NO fabricated numbers. Data is REAL (OKX public API). Feature is fully functional and production-ready."
 
     implemented: true
     working: true
@@ -2568,7 +2568,7 @@ frontend:
         -comment: "NEW Whale Intelligence frontend (Phases 1-3). (1) EtfFlowsCard rendered in the Institutional section (BTC only): net 1d/7d/window tiles, a daily net-flow bar chart (green/red by sign via Recharts), and a per-issuer window-total leaderboard. Institutional blurb + Settings data-source row updated from 'Inactive' to Live (Farside/bitbo). (2) WhaleImpactCard at top of Whale Watch: 30d net flow, trend (Accumulation/Distribution/Neutral), holder vs exchange balances, biggest-mover contributors (from /api/v1/whales/impact — first load can take 30-60s). (3) WhaleTxFeed at bottom of Whale Watch: labeled large-transaction feed with min-BTC toggle (50/100/500/1000), entity+category, amount, USD, impact tag, links to explorer (from /api/v1/whales/transactions). (4) WhaleHistoryChart inside each expanded whale row: real reconstructed balance-over-time step line + 30d/90d change (from /api/v1/whales/history). Compiles cleanly (1760 modules). Selector-verified in browser: Institutional nav + 'US Spot Bitcoin ETF Flows' card heading render. NOT yet run through frontend testing agent (awaiting user permission)."
         -working: true
         -agent: "testing"
-        -comment: "✅ PASSED comprehensive Whale Intelligence UI test via external URL (https://quant-features.preview.emergentagent.com). All NEW features validated: (1) INSTITUTIONAL & DERIVATIVES section: Metrics panel renders ✅, 'Spot ETF net flow (1d)' row is NOT marked 'Inactive' and shows '$+92M' value with sparkline ✅, 'Spot ETF net flow (7d)' row present ✅, 'US Spot Bitcoin ETF Flows' card renders with three net-flow tiles (1d/7d/window) ✅, 'Daily net flow ($M)' bar chart (green/red bars) ✅, 'By issuer (window total)' leaderboard with 8 tickers (e.g., IBIT, FBTC, GBTC) ✅. (2) WHALE WATCH section: 'Whale Impact (30-day)' card renders with four tiles (30d net flow=-40,956 BTC, Trend=Distribution, Held by holders=302,408 BTC, On exchanges=672,344 BTC) ✅, 'Biggest movers (30d)' list with contributors (Binance +40,269 BTC Bearish, Robinhood +747 BTC Bearish) ✅, Whale list shows 10 wallets ✅, Expandable whale rows work correctly: clicked first whale (Binance), 'Balance history' chart appears ABOVE 'Recent activity' list (correct order verified via bounding box coordinates) ✅, Balance history shows step-line chart with 30d/90d change stats ✅. (3) LARGE TRANSACTIONS feed: 'Large Transactions' card at bottom ✅, Min-BTC toggle buttons (50, 100, 500, 1000) all present and working ✅, Tested 100 BTC filter (10 entries) and 500 BTC filter (9 entries) - filter logic correct (higher threshold = fewer entries) ✅, Transaction entries have all required fields: entity name (e.g., Binance, Robinhood), BTC amount, USD value, impact tag (Bullish/Bearish exchange inflow/outflow) ✅. (4) NO CRITICAL ERRORS: No red error screens ✅, No crashes ✅, Minor console errors (WebSocket HMR 502, TradingView widget request failed) are not critical ✅. Screenshots captured: institutional_etf_flows.png, whale_impact_card.png, whale_expanded_with_history.png, large_transactions_feed.png. Data is REAL (bitbo.io/Farside ETF flows, mempool.space on-chain whale data). All validations passed. Feature is fully functional."
+        -comment: "✅ PASSED comprehensive Whale Intelligence UI test via external URL (https://what-if-sandbox.preview.emergentagent.com). All NEW features validated: (1) INSTITUTIONAL & DERIVATIVES section: Metrics panel renders ✅, 'Spot ETF net flow (1d)' row is NOT marked 'Inactive' and shows '$+92M' value with sparkline ✅, 'Spot ETF net flow (7d)' row present ✅, 'US Spot Bitcoin ETF Flows' card renders with three net-flow tiles (1d/7d/window) ✅, 'Daily net flow ($M)' bar chart (green/red bars) ✅, 'By issuer (window total)' leaderboard with 8 tickers (e.g., IBIT, FBTC, GBTC) ✅. (2) WHALE WATCH section: 'Whale Impact (30-day)' card renders with four tiles (30d net flow=-40,956 BTC, Trend=Distribution, Held by holders=302,408 BTC, On exchanges=672,344 BTC) ✅, 'Biggest movers (30d)' list with contributors (Binance +40,269 BTC Bearish, Robinhood +747 BTC Bearish) ✅, Whale list shows 10 wallets ✅, Expandable whale rows work correctly: clicked first whale (Binance), 'Balance history' chart appears ABOVE 'Recent activity' list (correct order verified via bounding box coordinates) ✅, Balance history shows step-line chart with 30d/90d change stats ✅. (3) LARGE TRANSACTIONS feed: 'Large Transactions' card at bottom ✅, Min-BTC toggle buttons (50, 100, 500, 1000) all present and working ✅, Tested 100 BTC filter (10 entries) and 500 BTC filter (9 entries) - filter logic correct (higher threshold = fewer entries) ✅, Transaction entries have all required fields: entity name (e.g., Binance, Robinhood), BTC amount, USD value, impact tag (Bullish/Bearish exchange inflow/outflow) ✅. (4) NO CRITICAL ERRORS: No red error screens ✅, No crashes ✅, Minor console errors (WebSocket HMR 502, TradingView widget request failed) are not critical ✅. Screenshots captured: institutional_etf_flows.png, whale_impact_card.png, whale_expanded_with_history.png, large_transactions_feed.png. Data is REAL (bitbo.io/Farside ETF flows, mempool.space on-chain whale data). All validations passed. Feature is fully functional."
 
 
 test_plan:
@@ -2583,7 +2583,7 @@ agent_communication:
     -message: |
       ✅ TIME MACHINE ANALOG DRILL-DOWN + LEVERAGE DEPTH IMBALANCE HISTORY UI TEST COMPLETE - ALL TESTS PASSED (2/2)
       
-      Focused UI test of two NEW BTCIQ features via external URL (https://quant-features.preview.emergentagent.com).
+      Focused UI test of two NEW BTCIQ features via external URL (https://what-if-sandbox.preview.emergentagent.com).
       Screenshots captured. Desktop viewport (1920x1080).
       
       ITEM A — TIME MACHINE ANALOG DRILL-DOWN: ✅ PASSED (ALL ELEMENTS RENDER + EXPAND/COLLAPSE WORKS)
@@ -2675,7 +2675,7 @@ agent_communication:
       ✅ PILLAR 1 + PILLAR 3 TESTING COMPLETE - ALL TESTS PASSED (4/4)
       
       Tested Pillar 1 (Real-time Order Flow) + Pillar 3 (FAISS Time Machine) backend ONLY via external URL 
-      (https://quant-features.preview.emergentagent.com/api) using comprehensive test suite (test_pillar_1_3.py). 
+      (https://what-if-sandbox.preview.emergentagent.com/api) using comprehensive test suite (test_pillar_1_3.py). 
       Base URL from /app/.env NEXT_PUBLIC_BASE_URL with /api prefix. Did NOT POST /api/v1/refresh and did NOT hit /email endpoints.
       
       RESULTS SUMMARY:
@@ -2736,7 +2736,7 @@ agent_communication:
     -message: |
       ✅ PILLAR 2 FEATURE-DRIFT CIRCUIT BREAKER TESTING COMPLETE - ALL TESTS PASSED (3/3)
       
-      Tested Pillar 2 Feature-Drift Circuit Breaker backend ONLY via external URL (https://quant-features.preview.emergentagent.com/api)
+      Tested Pillar 2 Feature-Drift Circuit Breaker backend ONLY via external URL (https://what-if-sandbox.preview.emergentagent.com/api)
       using comprehensive test suite (drift_test.py). Base URL from /app/.env NEXT_PUBLIC_BASE_URL with /api prefix.
       
       RESULTS SUMMARY:
@@ -2832,7 +2832,7 @@ agent_communication:
     -message: |
       ✅ LEVERAGE SCREEN UI TEST COMPLETE - ALL VALIDATIONS PASSED
       
-      Tested the NEW Leverage screen UI via external URL (https://quant-features.preview.emergentagent.com).
+      Tested the NEW Leverage screen UI via external URL (https://what-if-sandbox.preview.emergentagent.com).
       Comprehensive validation of all 12 sections + 2 interaction tests.
       
       SUMMARY OF VALIDATIONS:
@@ -2987,7 +2987,7 @@ agent_communication:
     -message: |
       ✅ HAPPENING AGAIN ANALOG ENGINE TEST PASSED
       
-      Tested GET /api/v1/analogs via external URL (https://quant-features.preview.emergentagent.com/api/v1/analogs):
+      Tested GET /api/v1/analogs via external URL (https://what-if-sandbox.preview.emergentagent.com/api/v1/analogs):
       
       RESULT: All validations passed on first attempt (endpoint returned status='ready' immediately, data was cached).
       
@@ -3023,7 +3023,7 @@ agent_communication:
     -message: |
       ✅ RE-TEST COMPLETE - fwd_path ADDITIVE FIELD VALIDATED
       
-      Tested GET /api/v1/analogs via external URL (https://quant-features.preview.emergentagent.com/api/v1/analogs)
+      Tested GET /api/v1/analogs via external URL (https://what-if-sandbox.preview.emergentagent.com/api/v1/analogs)
       after main agent added the NEW fwd_path field to each day_fingerprint item.
       
       RESULT: All validations PASSED ✅
@@ -3162,7 +3162,7 @@ agent_communication:
     -message: |
       ✅ ALL BACKEND TESTS PASSED (3/3)
       
-      Tested all endpoints via external base URL (https://quant-features.preview.emergentagent.com/api/v1/*):
+      Tested all endpoints via external base URL (https://what-if-sandbox.preview.emergentagent.com/api/v1/*):
       
       1. GET /api/v1/health - ✅ PASSED
          - Returns status='ok', compute_status='done', runs=1
@@ -3308,7 +3308,7 @@ agent_communication:
     -message: |
       ✅ ALL NEW BACKEND FEATURES TESTED AND PASSED (4/4 + REGRESSION)
       
-      Completed comprehensive testing of ALL new features via external URL (https://quant-features.preview.emergentagent.com/api/v1/*):
+      Completed comprehensive testing of ALL new features via external URL (https://what-if-sandbox.preview.emergentagent.com/api/v1/*):
       
       FEATURE 1 - Decision Engine (dashboard.decision) - ✅ PASSED
       - Validated all 13 required fields: overall_score (48, int 0-100), label ('Neutral'), regime ('Weak Bearish Trend'), 
@@ -3362,7 +3362,7 @@ agent_communication:
     -message: |
       ✅ ALL PHASE 2 BACKEND TESTS PASSED (7/7)
       
-      Completed comprehensive testing of Phase 2 features via external URL (https://quant-features.preview.emergentagent.com/api/v1/*):
+      Completed comprehensive testing of Phase 2 features via external URL (https://what-if-sandbox.preview.emergentagent.com/api/v1/*):
       
       TEST A - Open Forecast Confidence (P0) - ✅ PASSED
       - GET /api/v1/scorecard: 6 pending forecasts, each with BOTH confidence (Low/Moderate/High) and confidence_pct (int 0-100)
@@ -3429,7 +3429,7 @@ agent_communication:
       - Fix applied: Changed to const sec = (id) => SECTIONS.find(s => s.id === id) || LEGACY_SECTIONS.find(s => s.id === id) || {...}
       - Result: Page now loads successfully
       
-      COMPREHENSIVE UI TEST RESULTS (via external URL https://quant-features.preview.emergentagent.com):
+      COMPREHENSIVE UI TEST RESULTS (via external URL https://what-if-sandbox.preview.emergentagent.com):
       
       ✅ ALL 14 SIDEBAR ITEMS TESTED AND WORKING:
       Overview, Forecasts, Market Intelligence, Smart Money, Institutional, Macro & Policy, News, Risk, Events, Performance, Bitcoin Time Machine, Ask Albert, Alerts, Settings
@@ -3506,7 +3506,7 @@ agent_communication:
     -message: |
       ✅ ALL STAGE 3 BACKEND TESTS PASSED (3/3)
       
-      Completed comprehensive testing of Stage 3 features via external URL (https://quant-features.preview.emergentagent.com/api/v1/*):
+      Completed comprehensive testing of Stage 3 features via external URL (https://what-if-sandbox.preview.emergentagent.com/api/v1/*):
       
       TEST 1 - Curated Time Machine Scenarios - ✅ PASSED
       - GET /api/v1/scenarios returns status='ready' with 8 scenarios ✅
@@ -3573,7 +3573,7 @@ agent_communication:
     -message: |
       ✅ CHAT REBALANCE & BASKET ROTATION TESTING COMPLETE - ALL TESTS PASSED (5/5)
       
-      Comprehensive backend testing of NEW "Chat Rebalance" intent and basket "rotation" field for Ask Albert crypto app via external URL (https://quant-features.preview.emergentagent.com/api). Tests A-E as specified in review request.
+      Comprehensive backend testing of NEW "Chat Rebalance" intent and basket "rotation" field for Ask Albert crypto app via external URL (https://what-if-sandbox.preview.emergentagent.com/api). Tests A-E as specified in review request.
       
       TEST RESULTS:
       ✅ TEST A (No baskets): Chat correctly returns NO basket_rebalance when user has no active baskets, with appropriate message.
@@ -3955,7 +3955,7 @@ agent_communication:
     -message: |
       ✅ MULTI-COIN ANALOG ENGINE CERTIFICATION COMPLETE - ALL TESTS PASSED
       
-      Tested GET /api/v1/analogs?symbol={BTC|ETH|SOL} via external URL (https://quant-features.preview.emergentagent.com/api/v1/analogs?symbol=X).
+      Tested GET /api/v1/analogs?symbol={BTC|ETH|SOL} via external URL (https://what-if-sandbox.preview.emergentagent.com/api/v1/analogs?symbol=X).
       
       COMPREHENSIVE VALIDATION RESULTS:
       
@@ -4177,7 +4177,7 @@ agent_communication:
     -message: |
       ✅ ALERT COIN FILTER BACKEND TEST COMPLETE - ALL TESTS PASSED (8/8)
       
-      Tested via external URL (https://quant-features.preview.emergentagent.com/api/v1/alerts).
+      Tested via external URL (https://what-if-sandbox.preview.emergentagent.com/api/v1/alerts).
       
       RESULTS:
       1. ✅ GET /api/v1/alerts?symbol=BTC → 4 alerts, ALL with symbol='BTC', no ETH/SOL leakage
@@ -4202,7 +4202,7 @@ agent_communication:
     -message: |
       ✅ SMART MONEY & INSTITUTIONAL REAL DATA PANELS TEST COMPLETE
       
-      Tested GET /api/v1/dashboard via external URL (https://quant-features.preview.emergentagent.com/api/v1/dashboard)
+      Tested GET /api/v1/dashboard via external URL (https://what-if-sandbox.preview.emergentagent.com/api/v1/dashboard)
       to validate the NEW real "Smart Money" and "Institutional & Derivatives" data panels that replaced the old DEMO panels.
       
       RESULT: All validations PASSED ✅
@@ -4256,7 +4256,7 @@ agent_communication:
     -message: |
       ✅ WHALE WATCH (PHASE 1) BACKEND TEST COMPLETE - ALL TESTS PASSED (4/4)
       
-      Tested via external URL (https://quant-features.preview.emergentagent.com/api/v1/whales and /api/v1/dashboard).
+      Tested via external URL (https://what-if-sandbox.preview.emergentagent.com/api/v1/whales and /api/v1/dashboard).
       
       RESULTS:
       1. ✅ GET /api/v1/whales → 7 curated whale entities with live balances
@@ -4307,7 +4307,7 @@ agent_communication:
     -message: |
       ✅ WHALE INTELLIGENCE (PHASES 1-3) BACKEND TEST COMPLETE - ALL TESTS PASSED (13/13)
       
-      Tested via external URL (https://quant-features.preview.emergentagent.com/api) using comprehensive test suite (whale_intelligence_test.py).
+      Tested via external URL (https://what-if-sandbox.preview.emergentagent.com/api) using comprehensive test suite (whale_intelligence_test.py).
       
       PHASE 1 — ETF FLOWS (3/3 PASSED):
       1. ✅ GET /api/v1/etf-flows → status='ready', unit='USD millions', issuers includes 'IBIT' (13 total), 
@@ -4366,7 +4366,7 @@ agent_communication:
     -message: |
       ✅ WHALE INTELLIGENCE ENHANCEMENTS (4 NEW FEATURES) BACKEND TEST COMPLETE - ALL TESTS PASSED (5/5)
       
-      Tested via external URL (https://quant-features.preview.emergentagent.com/api) using comprehensive test suite (whale_enhancements_test.py).
+      Tested via external URL (https://what-if-sandbox.preview.emergentagent.com/api) using comprehensive test suite (whale_enhancements_test.py).
       
       TEST 1 — ETF FULL HISTORY (ENHANCED FROM PHASE 1):
       ✅ GET /api/v1/etf-flows returns status='ready'
@@ -4449,7 +4449,7 @@ agent_communication:
     -message: |
       ✅ LEVERAGE ENGINE BACKEND TEST COMPLETE - ALL TESTS PASSED (6/6)
       
-      Tested NEW endpoint: GET /api/v1/leverage?timeframe={1H|4H|1D|7D} via external URL (https://quant-features.preview.emergentagent.com/api).
+      Tested NEW endpoint: GET /api/v1/leverage?timeframe={1H|4H|1D|7D} via external URL (https://what-if-sandbox.preview.emergentagent.com/api).
       
       ALL 4 TIMEFRAMES TESTED (1H, 4H, 1D, 7D):
       ✅ All return status='ready' (NO 500 errors)
@@ -4514,7 +4514,7 @@ backend:
         -comment: "REAL keyless composite price. Median of Coinbase, Kraken, OKX, CoinGecko with outlier detection (venues >0.75% from median excluded), spread%, confidence tag HIGH/MEDIUM/LOW and per-venue provenance (price, latency_ms, ok, dev_pct, outlier). Test: GET /api/v1/composite-price -> status='ready', numeric composite>0, median>0, venue_count 1-4, venues list each with source+ok, confidence in [HIGH,MEDIUM,LOW], fallback_chain present, method present. No 500s."
         -working: true
         -agent: "testing"
-        -comment: "✅ PASSED comprehensive validation via external URL (https://quant-features.preview.emergentagent.com/api/v1/composite-price). All validations passed: (1) status='ready' ✅ (2) composite=$64,791.72 (numeric > 0) ✅ (3) median=$64,782.49 (numeric > 0) ✅ (4) venue_count=4 (int 1-4) ✅ (5) confidence='HIGH' (in [HIGH,MEDIUM,LOW]) ✅ (6) venues: 4 items (non-empty list) ✅ (7) All venues have source and ok fields ✅ (8) All ok venues have numeric price > 0 and dev_pct: Coinbase $64,780.99 (dev 0.002%), Kraken $64,770.10 (dev 0.019%), OKX $64,831.80 (dev 0.076%), CoinGecko $64,784.00 (dev 0.002%) ✅ (9) No outliers flagged (all dev_pct < 0.75%) ✅ (10) fallback_chain present: ['Coinbase', 'Kraken', 'OKX', 'CoinGecko (aggregator)'] ✅ (11) method present: 'Outlier-trimmed mean of independent exchange feeds (venues >0.75% from median excluded).' ✅ (12) No HTTP 500 errors ✅. Data is REAL (4 independent exchange feeds). Feature is production-ready."
+        -comment: "✅ PASSED comprehensive validation via external URL (https://what-if-sandbox.preview.emergentagent.com/api/v1/composite-price). All validations passed: (1) status='ready' ✅ (2) composite=$64,791.72 (numeric > 0) ✅ (3) median=$64,782.49 (numeric > 0) ✅ (4) venue_count=4 (int 1-4) ✅ (5) confidence='HIGH' (in [HIGH,MEDIUM,LOW]) ✅ (6) venues: 4 items (non-empty list) ✅ (7) All venues have source and ok fields ✅ (8) All ok venues have numeric price > 0 and dev_pct: Coinbase $64,780.99 (dev 0.002%), Kraken $64,770.10 (dev 0.019%), OKX $64,831.80 (dev 0.076%), CoinGecko $64,784.00 (dev 0.002%) ✅ (9) No outliers flagged (all dev_pct < 0.75%) ✅ (10) fallback_chain present: ['Coinbase', 'Kraken', 'OKX', 'CoinGecko (aggregator)'] ✅ (11) method present: 'Outlier-trimmed mean of independent exchange feeds (venues >0.75% from median excluded).' ✅ (12) No HTTP 500 errors ✅. Data is REAL (4 independent exchange feeds). Feature is production-ready."
   - task: "Data Audit — Cross-Asset context (GET /api/v1/cross-asset)"
     implemented: true
     working: true
@@ -4528,7 +4528,7 @@ backend:
         -comment: "REAL (CoinGecko /global + OKX ETH-BTC). Returns btc_dominance, eth_dominance, eth_btc (may be null if OKX ETH-BTC unavailable), total_market_cap_usd, stablecoin_mcap_usd, mcap_change_24h, regime, confidence='MEDIUM', read, source. Cached 15min. Test: GET /api/v1/cross-asset -> status='ready', numeric btc_dominance>0, regime string, read non-empty. No 500s."
         -working: true
         -agent: "testing"
-        -comment: "✅ PASSED comprehensive validation via external URL (https://quant-features.preview.emergentagent.com/api/v1/cross-asset). All validations passed: (1) status='ready' ✅ (2) btc_dominance=56.62% (numeric > 0) ✅ (3) eth_dominance=10.06% (numeric) ✅ (4) regime='Balanced' (non-empty string) ✅ (5) read='BTC dominance is 56.62% (balanced); ETH/BTC at 0.02954. Total crypto market cap $2296B. Dominance is...' (non-empty string) ✅ (6) source='CoinGecko /global + simple price' (present) ✅ (7) eth_btc=0.02954 (NOT null - OKX ETH-BTC available) ✅ (8) No HTTP 500 errors ✅. Data is REAL (CoinGecko /global + OKX ETH-BTC). Feature is production-ready."
+        -comment: "✅ PASSED comprehensive validation via external URL (https://what-if-sandbox.preview.emergentagent.com/api/v1/cross-asset). All validations passed: (1) status='ready' ✅ (2) btc_dominance=56.62% (numeric > 0) ✅ (3) eth_dominance=10.06% (numeric) ✅ (4) regime='Balanced' (non-empty string) ✅ (5) read='BTC dominance is 56.62% (balanced); ETH/BTC at 0.02954. Total crypto market cap $2296B. Dominance is...' (non-empty string) ✅ (6) source='CoinGecko /global + simple price' (present) ✅ (7) eth_btc=0.02954 (NOT null - OKX ETH-BTC available) ✅ (8) No HTTP 500 errors ✅. Data is REAL (CoinGecko /global + OKX ETH-BTC). Feature is production-ready."
   - task: "Data Audit — GDELT news tone (GET /api/v1/news-signals)"
     implemented: true
     working: true
@@ -4542,7 +4542,7 @@ backend:
         -comment: "REAL keyless GDELT 2.0 tone timeline (21d). NOTE: GDELT rate-limits shared IPs (1 req/5s); builder now retries up to 3x with 6s backoff. Cached 60min once fetched. Returns tone_latest, tone_avg_21d, tone_recent_3d, mood (Positive/Negative/Neutral), direction (Improving/Worsening/Stable), series[{date,tone}], confidence='MEDIUM', read. If GDELT unavailable, endpoint returns status='unavailable' with active=false and a clear reason (NO mock data). Test: GET /api/v1/news-signals -> either status='ready' with numeric tone_latest and non-empty series, OR status='unavailable' with reason (both acceptable; must NOT 500). Allow up to 40s for first call due to retries."
         -working: true
         -agent: "testing"
-        -comment: "✅ PASSED comprehensive validation via external URL (https://quant-features.preview.emergentagent.com/api/v1/news-signals). OUTCOME A: status='ready' (GDELT data available). All validations passed: (1) status='ready' ✅ (2) tone_latest=-1.296 (numeric) ✅ (3) tone_avg_21d=-1.09 (numeric) ✅ (4) tone_recent_3d=-0.809 (numeric) ✅ (5) mood='Negative' (in [Positive,Negative,Neutral]) ✅ (6) direction='Stable' (in [Improving,Worsening,Stable]) ✅ (7) series: 21 data points (non-empty list) ✅ (8) Each series item has date and tone fields: first point date=20260720, tone=-0.302 ✅ (9) No HTTP 500 errors ✅. NOTE: Both status='ready' (with data) and status='unavailable' (with active=false + reason) are acceptable outcomes due to GDELT rate-limiting. This test observed OUTCOME A (data available). Data is REAL (GDELT 2.0 Doc API tone timeline). Feature is production-ready."
+        -comment: "✅ PASSED comprehensive validation via external URL (https://what-if-sandbox.preview.emergentagent.com/api/v1/news-signals). OUTCOME A: status='ready' (GDELT data available). All validations passed: (1) status='ready' ✅ (2) tone_latest=-1.296 (numeric) ✅ (3) tone_avg_21d=-1.09 (numeric) ✅ (4) tone_recent_3d=-0.809 (numeric) ✅ (5) mood='Negative' (in [Positive,Negative,Neutral]) ✅ (6) direction='Stable' (in [Improving,Worsening,Stable]) ✅ (7) series: 21 data points (non-empty list) ✅ (8) Each series item has date and tone fields: first point date=20260720, tone=-0.302 ✅ (9) No HTTP 500 errors ✅. NOTE: Both status='ready' (with data) and status='unavailable' (with active=false + reason) are acceptable outcomes due to GDELT rate-limiting. This test observed OUTCOME A (data available). Data is REAL (GDELT 2.0 Doc API tone timeline). Feature is production-ready."
   - task: "Data Audit — FRED US macro (GET /api/v1/macro-fred)"
     implemented: true
     working: true
@@ -4556,7 +4556,7 @@ backend:
         -comment: "REAL FRED (St. Louis Fed). FRED_API_KEY now set in /app/.env (active). Returns series list (Fed Funds DFF, 2Y DGS2, 10Y DGS10, 10Y-2Y T10Y2Y, CPI CPIAUCSL, M2 M2SL, Unemployment UNRATE) each with id/label/value/change/date, confidence='HIGH', source, note. Cached 6h. Test: GET /api/v1/macro-fred -> status='ready', series non-empty (>=5 items), each item numeric value + label + date. Must NOT be 'inactive' (key is set). No 500s."
         -working: true
         -agent: "testing"
-        -comment: "✅ PASSED comprehensive validation via external URL (https://quant-features.preview.emergentagent.com/api/v1/macro-fred). All validations passed: (1) status='ready' (NOT 'inactive' - FRED_API_KEY is working) ✅ (2) series: 7 items (>=5 required) ✅ (3) All series items validated with numeric value, non-empty label, and date string: Fed Funds Rate (DFF)=3.63 (2026-08-06), 2Y Treasury (DGS2)=4.25 (2026-08-06), 10Y Treasury (DGS10)=4.69 (2026-08-06), 10Y-2Y Spread (T10Y2Y)=0.46 (2026-08-07), CPI (CPIAUCSL)=332.568 (2026-06-01), M2 Money Supply (M2SL)=23155.2 (2026-06-01), Unemployment (UNRATE)=4.1 (2026-07-01) ✅ (4) confidence='HIGH' ✅ (5) source='FRED (St. Louis Fed)' (present) ✅ (6) No HTTP 500 errors ✅. Data is REAL (FRED St. Louis Fed API with active FRED_API_KEY). Feature is production-ready."
+        -comment: "✅ PASSED comprehensive validation via external URL (https://what-if-sandbox.preview.emergentagent.com/api/v1/macro-fred). All validations passed: (1) status='ready' (NOT 'inactive' - FRED_API_KEY is working) ✅ (2) series: 7 items (>=5 required) ✅ (3) All series items validated with numeric value, non-empty label, and date string: Fed Funds Rate (DFF)=3.63 (2026-08-06), 2Y Treasury (DGS2)=4.25 (2026-08-06), 10Y Treasury (DGS10)=4.69 (2026-08-06), 10Y-2Y Spread (T10Y2Y)=0.46 (2026-08-07), CPI (CPIAUCSL)=332.568 (2026-06-01), M2 Money Supply (M2SL)=23155.2 (2026-06-01), Unemployment (UNRATE)=4.1 (2026-07-01) ✅ (4) confidence='HIGH' ✅ (5) source='FRED (St. Louis Fed)' (present) ✅ (6) No HTTP 500 errors ✅. Data is REAL (FRED St. Louis Fed API with active FRED_API_KEY). Feature is production-ready."
 
 metadata:
   created_by: "main_agent"
@@ -4699,7 +4699,7 @@ agent_communication:
     -message: |
       ✅ DATA AUDIT PHASE 1 & 2 + FRED MACRO BACKEND TEST COMPLETE - ALL TESTS PASSED (5/5)
       
-      Tested via external URL (https://quant-features.preview.emergentagent.com/api) using comprehensive test suite (data_audit_test.py).
+      Tested via external URL (https://what-if-sandbox.preview.emergentagent.com/api) using comprehensive test suite (data_audit_test.py).
       
       TEST 1 — COMPOSITE SPOT PRICE (GET /api/v1/composite-price):
       ✅ status='ready'
@@ -4787,7 +4787,7 @@ agent_communication:
       ✅ BACKEND REFACTOR REGRESSION TEST COMPLETE (TEST SEQUENCE 11) - ALL TESTS PASSED (8/8)
       
       Tested Option A refactor (config.py + security.py extraction) via external URL 
-      (https://quant-features.preview.emergentagent.com/api) using comprehensive test suite (backend_test.py).
+      (https://what-if-sandbox.preview.emergentagent.com/api) using comprehensive test suite (backend_test.py).
       
       REFACTOR SUMMARY:
       - Extracted backend/config.py: env vars, MongoDB connection, all collection handles, API keys/model names
@@ -4922,7 +4922,7 @@ frontend:
         -comment: "NEW nav item 'Data Audit' (BTC-only). Renders CompositePriceCard (composite price + HIGH/MEDIUM/LOW confidence tag + per-venue breakdown w/ latency+dev% + outlier flag), CrossAssetCard (BTC/ETH dominance, ETH/BTC, total mcap, regime), NewsToneCard (GDELT tone gauge + sparkline; shows 'unavailable' reason gracefully if GDELT throttled), MacroFredCard (FRED series grid, HIGH confidence, live). Verified via screenshot rendering correctly. Test: click 'Data Audit' in sidebar -> all four cards render without JS errors, composite shows $ value + confidence badge, FRED shows >=4 rows, no crash if a card is 'computing'/'unavailable'."
         -working: true
         -agent: "testing"
-        -comment: "✅ PASSED comprehensive validation via external URL (https://quant-features.preview.emergentagent.com). All 4 cards render correctly with NO JS/console errors. CARD 1 - BTCIQ Composite Price: ✅ Card visible, composite price=$64,798 (numeric $ value present), confidence badge=HIGH (in [HIGH,MEDIUM,LOW]), all 4 venues found (Coinbase, Kraken, OKX, CoinGecko). CARD 2 - Cross-Asset Context: ✅ Card visible, BTC dominance=56.62% (NOT 0%, numeric value >0). CARD 3 - News Tone (GDELT): ✅ Card visible, shows numeric tone value=-1.296 (acceptable, NOT 'unavailable' message). CARD 4 - US Macro (FRED): ✅ Card visible, confidence badge=HIGH, 5 FRED rows found (>=4 required). Console errors: Only 1 WebSocket HMR error (dev-mode only, NOT a production bug). All validations passed. Feature is fully functional."
+        -comment: "✅ PASSED comprehensive validation via external URL (https://what-if-sandbox.preview.emergentagent.com). All 4 cards render correctly with NO JS/console errors. CARD 1 - BTCIQ Composite Price: ✅ Card visible, composite price=$64,798 (numeric $ value present), confidence badge=HIGH (in [HIGH,MEDIUM,LOW]), all 4 venues found (Coinbase, Kraken, OKX, CoinGecko). CARD 2 - Cross-Asset Context: ✅ Card visible, BTC dominance=56.62% (NOT 0%, numeric value >0). CARD 3 - News Tone (GDELT): ✅ Card visible, shows numeric tone value=-1.296 (acceptable, NOT 'unavailable' message). CARD 4 - US Macro (FRED): ✅ Card visible, confidence badge=HIGH, 5 FRED rows found (>=4 required). Console errors: Only 1 WebSocket HMR error (dev-mode only, NOT a production bug). All validations passed. Feature is fully functional."
   - task: "Floating screen-aware Ask Albert widget (all screens)"
     implemented: true
     working: true
@@ -4982,7 +4982,7 @@ agent_communication:
     -agent: "main"
     -message: |
       FRONTEND TEST FOCUS (user approved). Test these 3 NEW features + a light Phase A regression at
-      https://quant-features.preview.emergentagent.com . App shows a loading splash for a few seconds on first
+      https://what-if-sandbox.preview.emergentagent.com . App shows a loading splash for a few seconds on first
       load — wait for the sidebar/Overview to appear before interacting.
       1) DATA AUDIT SCREEN: click 'Data Audit' in the left sidebar. Verify 4 cards render with NO JS/console
          errors: 'BTCIQ Composite Price' (shows a $ value + a HIGH/MEDIUM/LOW confidence badge + a venue list),
@@ -5166,7 +5166,7 @@ agent_communication:
     -message: |
       ✅ FRONTEND TEST COMPLETE - ALL 3 NEW FEATURES PASSED (3/3) + LIGHT REGRESSION PASSED
       
-      Tested via external URL (https://quant-features.preview.emergentagent.com) using comprehensive Playwright test suite.
+      Tested via external URL (https://what-if-sandbox.preview.emergentagent.com) using comprehensive Playwright test suite.
       
       TEST 1 — DATA AUDIT SCREEN: ✅ PASSED
       - All 4 cards render correctly with NO JS/console errors
@@ -5236,7 +5236,7 @@ backend:
         -comment: "NEW _section_live_context(section) injects REAL live numbers for the current screen into the chat system context so Albert cites exact figures. Covered sections: leverage (OKX OI, funding rate, positioning long/short, pressure, squeeze long/short risk — and explicitly 'no liquidation/heatmap/est-leverage data' for the paid-only ones), whales (30d net flow BTC, holder vs exchange balances, biggest movers by entity, recent >=500 BTC moves, ETF net flows), dataaudit (composite price + per-venue prices + confidence + spread + outliers, BTC dominance + ETH/BTC + mcap + regime, GDELT tone/mood/direction, FRED macro series), institutional & smartmoney (get_onchain_panels metrics), network (Fear & Greed + hashrate/difficulty/fees). Overview stays general. Verified via curl: leverage cites OI $2.00B + funding 0.00054% + squeeze 28/12 + 'no liquidation data'; whales cites net -41,824 BTC + Binance +40,209 BTC + ETF 7d $821M; dataaudit cites composite $64,847 HIGH + venue prices + FRED. Replies full (690-774 chars), NOT truncated, fast (whales ~5.6s warm cache). Test: POST /api/v1/chat with section in [leverage, whales, dataaudit, institutional, network] -> non-empty grounded reply (>200 chars) that references the section's real numbers; section=overview stays general; empty message -> friendly error; no 500s."
         -working: true
         -agent: "testing"
-        -comment: "✅ PASSED comprehensive validation via external URL (https://quant-features.preview.emergentagent.com/api/v1/chat). All 5 tests passed (5/5): (1) LEVERAGE SECTION: POST /api/v1/chat {session_id:'t1', message:'What is the exact open interest, funding rate and squeeze risk right now?', section:'leverage'} returns HTTP 200 ✅, text length=741 chars (>200 chars, NOT truncated) ✅, model='gemini-3-flash-preview' ✅, text mentions 'Open Interest currently stands at **$2,001,151,184**' ✅, mentions 'funding' ✅, mentions 'squeeze' ✅, ANTI-MOCK VALIDATION: text contains 'no liquidation' statement (confirms NO liquidation/heatmap data available as expected) ✅. (2) WHALES SECTION: POST /api/v1/chat {session_id:'t2', message:'Are whales accumulating or distributing? Give exact BTC flow numbers.', section:'whales'} returns HTTP 200 ✅, text length=740 chars ✅, model='gemini-3-flash-preview' ✅, text mentions 'net flow of **-41,824 BTC**' ✅, mentions 'Binance' (named entity) ✅, mentions 'ETF' ✅, mentions 'Distribution' regime ✅. (3) DATA AUDIT SECTION: POST /api/v1/chat {session_id:'t3', message:'What is the composite price, how confident are we, and what is the macro backdrop?', section:'dataaudit'} returns HTTP 200 ✅, text length=776 chars ✅, model='gemini-3-flash-preview' ✅, text mentions 'composite Bitcoin price is **$64,855**' ✅, mentions '**HIGH** confidence' ✅, mentions 'Fed Funds Rate at 3.63%' ✅, mentions '10-Year Treasury at 4.69%' ✅, mentions 'macro' ✅. (4) OVERVIEW SECTION: POST /api/v1/chat {session_id:'t4', message:'Give me the 10-second read on Bitcoin right now.', section:'overview'} returns HTTP 200 ✅, text length=742 chars ✅, model='gemini-3-flash-preview' ✅, non-empty general answer ✅. (5) EMPTY MESSAGE: POST /api/v1/chat {session_id:'t5', message:'', section:'overview'} returns HTTP 200 (NOT 500) ✅, error='empty message' ✅, text='Please type a question.' (friendly error message) ✅. All validations passed. Response times: 4-6 seconds (fast). Data is REAL (grounded in live OKX derivatives, whale flows, ETF flows, composite price, FRED macro). No HTTP 500 errors. Feature is fully functional and production-ready."
+        -comment: "✅ PASSED comprehensive validation via external URL (https://what-if-sandbox.preview.emergentagent.com/api/v1/chat). All 5 tests passed (5/5): (1) LEVERAGE SECTION: POST /api/v1/chat {session_id:'t1', message:'What is the exact open interest, funding rate and squeeze risk right now?', section:'leverage'} returns HTTP 200 ✅, text length=741 chars (>200 chars, NOT truncated) ✅, model='gemini-3-flash-preview' ✅, text mentions 'Open Interest currently stands at **$2,001,151,184**' ✅, mentions 'funding' ✅, mentions 'squeeze' ✅, ANTI-MOCK VALIDATION: text contains 'no liquidation' statement (confirms NO liquidation/heatmap data available as expected) ✅. (2) WHALES SECTION: POST /api/v1/chat {session_id:'t2', message:'Are whales accumulating or distributing? Give exact BTC flow numbers.', section:'whales'} returns HTTP 200 ✅, text length=740 chars ✅, model='gemini-3-flash-preview' ✅, text mentions 'net flow of **-41,824 BTC**' ✅, mentions 'Binance' (named entity) ✅, mentions 'ETF' ✅, mentions 'Distribution' regime ✅. (3) DATA AUDIT SECTION: POST /api/v1/chat {session_id:'t3', message:'What is the composite price, how confident are we, and what is the macro backdrop?', section:'dataaudit'} returns HTTP 200 ✅, text length=776 chars ✅, model='gemini-3-flash-preview' ✅, text mentions 'composite Bitcoin price is **$64,855**' ✅, mentions '**HIGH** confidence' ✅, mentions 'Fed Funds Rate at 3.63%' ✅, mentions '10-Year Treasury at 4.69%' ✅, mentions 'macro' ✅. (4) OVERVIEW SECTION: POST /api/v1/chat {session_id:'t4', message:'Give me the 10-second read on Bitcoin right now.', section:'overview'} returns HTTP 200 ✅, text length=742 chars ✅, model='gemini-3-flash-preview' ✅, non-empty general answer ✅. (5) EMPTY MESSAGE: POST /api/v1/chat {session_id:'t5', message:'', section:'overview'} returns HTTP 200 (NOT 500) ✅, error='empty message' ✅, text='Please type a question.' (friendly error message) ✅. All validations passed. Response times: 4-6 seconds (fast). Data is REAL (grounded in live OKX derivatives, whale flows, ETF flows, composite price, FRED macro). No HTTP 500 errors. Feature is fully functional and production-ready."
 
 metadata:
   created_by: "main_agent"
@@ -5271,7 +5271,7 @@ agent_communication:
     -message: |
       ✅ ASK ALBERT PER-SCREEN DATA GROUNDING BACKEND TEST COMPLETE - ALL TESTS PASSED (5/5)
       
-      Tested via external URL (https://quant-features.preview.emergentagent.com/api/v1/chat) using comprehensive test suite (backend_test.py).
+      Tested via external URL (https://what-if-sandbox.preview.emergentagent.com/api/v1/chat) using comprehensive test suite (backend_test.py).
       
       TEST 1 — LEVERAGE SECTION: ✅ PASSED
       - POST /api/v1/chat {session_id:'t1', message:'What is the exact open interest, funding rate and squeeze risk right now?', section:'leverage'}
@@ -5363,7 +5363,7 @@ frontend:
         -comment: "Phase 1. DashboardSkeleton replaces the old spinner splash — mirrors Overview (sidebar + top bar + KPI tiles + chart + feed) with shimmer. Progressive hydration: live BTC price paints in the top bar during skeleton (verified). ErrorBoundary (class) wraps renderSection keyed on active section (resets on nav) — a section crash shows a contained 'This panel hit a snag' Retry card, not a blank app. PWA: /manifest.webmanifest + icon-192/512 + maskable + apple-touch-icon (180) + themeColor #0b1220 + appleWebApp metadata (all serve 200). Test: app loads to full dashboard (skeleton is brief on warm cache); no console errors; PWA manifest reachable."
         -working: true
         -agent: "testing"
-        -comment: "✅ PASSED comprehensive validation via external URL (https://quant-features.preview.emergentagent.com). App loads successfully: sidebar appears after brief skeleton ✅. PWA manifest: GET /manifest.webmanifest returns HTTP 200 ✅, JSON content with name='BTCIQ — Bitcoin Intelligence' ✅ (acceptable variation from 'BTCIQ'). Console errors: Only 2 WebSocket HMR errors (dev-mode only, NOT production bugs) ✅. App loads to full dashboard without uncaught errors ✅. All validations passed. Feature is production-ready."
+        -comment: "✅ PASSED comprehensive validation via external URL (https://what-if-sandbox.preview.emergentagent.com). App loads successfully: sidebar appears after brief skeleton ✅. PWA manifest: GET /manifest.webmanifest returns HTTP 200 ✅, JSON content with name='BTCIQ — Bitcoin Intelligence' ✅ (acceptable variation from 'BTCIQ'). Console errors: Only 2 WebSocket HMR errors (dev-mode only, NOT production bugs) ✅. App loads to full dashboard without uncaught errors ✅. All validations passed. Feature is production-ready."
   - task: "3-Second Hero on Overview (Regime / Top driver / Backtested win-rate)"
     implemented: true
     working: true
@@ -5422,7 +5422,7 @@ test_plan:
 agent_communication:
     -agent: "main"
     -message: |
-      FRONTEND TEST FOCUS (user approved) at https://quant-features.preview.emergentagent.com . Wait for the
+      FRONTEND TEST FOCUS (user approved) at https://what-if-sandbox.preview.emergentagent.com . Wait for the
       dashboard to appear (brief skeleton on first load). Report pass/fail + console errors + screenshots.
       1) OVERVIEW 3-SECOND HERO: at the top, an 'AT A GLANCE' strip shows 3 cards — 'Market Regime / Signal'
          (numeric /100 + label), 'Primary Sentiment Driver' (Bullish/Bearish/Neutral + text), 'Backtested
@@ -5443,7 +5443,7 @@ agent_communication:
     -message: |
       ✅ PHASE 1-3 UX POLISH FRONTEND TEST COMPLETE - ALL TESTS PASSED (4/4 + REGRESSION)
       
-      Tested via external URL (https://quant-features.preview.emergentagent.com) using comprehensive Playwright test suite.
+      Tested via external URL (https://what-if-sandbox.preview.emergentagent.com) using comprehensive Playwright test suite.
       
       TEST 1 — OVERVIEW 3-SECOND HERO: ✅ PASSED
       - 'AT A GLANCE' section found at top of Overview ✅
@@ -5537,7 +5537,7 @@ backend:
         -comment: "NEW SECURITY FIX. POST /api/v1/refresh now (1) rate-limited per-client (3/min, 50/day) returning HTTP 429 {status:'rate_limited'} when exceeded, and (2) requires an admin passcode in the JSON body {passcode:'...'} validated with hmac.compare_digest. Without/with wrong passcode returns HTTP 401 {status:'unauthorized'} and logs a 'denied' audit entry. Correct passcode (ADMIN_PASSCODE env = 'btciq-admin') returns {status:'started'}. TEST: POST with no body -> 401; POST {passcode:'wrong'} -> 401; POST {passcode:'btciq-admin'} -> 200 status='started'. Hammer POST {passcode:'btciq-admin'} >3 times within a minute -> HTTP 429."
         -working: true
         -agent: "testing"
-        -comment: "✅ PASSED comprehensive security validation via external URL (https://quant-features.preview.emergentagent.com/api/v1). All 4 tests passed (4/4): (1) POST /api/v1/refresh with no body -> HTTP 401 {status:'unauthorized'} ✅ (2) POST /api/v1/refresh with wrong passcode {passcode:'wrong'} -> HTTP 401 {status:'unauthorized'} ✅ (3) POST /api/v1/refresh with correct passcode {passcode:'btciq-admin'} -> HTTP 200 {status:'started'} ✅ (4) POST /api/v1/refresh rate limit test: sent 4 valid requests with correct passcode, 4th request returned HTTP 429 {status:'rate_limited'} ✅. All validations passed. Admin passcode gate working correctly with constant-time HMAC comparison. Rate limiter (3/min, 50/day) working correctly. Audit trail logging denied attempts. No HTTP 500 errors."
+        -comment: "✅ PASSED comprehensive security validation via external URL (https://what-if-sandbox.preview.emergentagent.com/api/v1). All 4 tests passed (4/4): (1) POST /api/v1/refresh with no body -> HTTP 401 {status:'unauthorized'} ✅ (2) POST /api/v1/refresh with wrong passcode {passcode:'wrong'} -> HTTP 401 {status:'unauthorized'} ✅ (3) POST /api/v1/refresh with correct passcode {passcode:'btciq-admin'} -> HTTP 200 {status:'started'} ✅ (4) POST /api/v1/refresh rate limit test: sent 4 valid requests with correct passcode, 4th request returned HTTP 429 {status:'rate_limited'} ✅. All validations passed. Admin passcode gate working correctly with constant-time HMAC comparison. Rate limiter (3/min, 50/day) working correctly. Audit trail logging denied attempts. No HTTP 500 errors."
   - task: "Security: Rate limit on POST /api/v1/chat (LLM cost guard)"
     implemented: true
     working: false
@@ -5623,7 +5623,7 @@ agent_communication:
     -message: |
       ✅ SECURITY HARDENING BACKEND TEST COMPLETE - 14/15 TESTS PASSED (1 ISSUE FOUND)
       
-      Tested NEW backend security hardening via external URL (https://quant-features.preview.emergentagent.com/api/v1) 
+      Tested NEW backend security hardening via external URL (https://what-if-sandbox.preview.emergentagent.com/api/v1) 
       using comprehensive test suite (backend_test.py). Admin passcode = 'btciq-admin'.
       
       RESULTS SUMMARY:
@@ -5735,7 +5735,7 @@ backend:
         -comment: "RATE-LIMITER REWRITE (MongoDB-backed, test_sequence 10). The per-client rate limiter was moved from in-memory to MongoDB (collection 'rate_limits', TTL index 90000s) so limits are EXACT across replicas. Logic: each request inserts {key, ts}; blocks when count in last 60s > per_min OR last 24h > per_day. Falls back to in-memory only if DB is unavailable. Also chat limit tightened 15/min -> 10/min (200/day). Test: 1) POST /api/v1/refresh rate limit (3/min) returns HTTP 429 after >3 valid requests within 60s. 2) POST /api/v1/refresh auth gate: no/wrong passcode -> 401, correct passcode -> 200. 3) POST /api/v1/news/refresh 3/min returns 429 when hammered. 4) POST /api/v1/chat returns 200 with text. 5) REGRESSION: GET endpoints not rate-limited."
         -working: true
         -agent: "testing"
-        -comment: "✅ PASSED comprehensive MongoDB-backed rate limiter validation via external URL (https://quant-features.preview.emergentagent.com/api). All 5 tests passed (5/5): TEST 1 - AUTH GATE (before exhausting rate limit): (1a) POST /api/v1/refresh with no body/empty passcode -> HTTP 401 {status:'unauthorized'} ✅ (1b) POST /api/v1/refresh with wrong passcode -> HTTP 401 {status:'unauthorized'} ✅ (1c) POST /api/v1/refresh with correct passcode 'btciq-admin' (under limit) -> HTTP 200 {status:'started'} ✅. TEST 2 - RATE LIMIT BLOCKING (KEY TEST for MongoDB limiter): Sent 6 requests with correct passcode within ~60s. Result: ALL 6 requests returned HTTP 429 {status:'rate_limited'} ✅. This confirms the MongoDB limiter is tracking requests across the 60-second window correctly (the first request in test 1c counted toward the 3/min limit, so all 6 subsequent requests were blocked). KEY VALIDATION CONFIRMED: The MongoDB-backed rate limiter successfully blocks requests beyond 3/min ✅. TEST 3 - NEWS REFRESH RATE LIMIT (3/min): Sent 5 requests. Result: First 3 returned HTTP 200 {status:'started'}, requests 4-5 returned HTTP 429 {status:'rate_limited'} ✅. Perfect 3/min limit enforcement ✅. TEST 4 - CHAT ENDPOINT (10/min limiter): POST /api/v1/chat {session_id:'ratetest', message:'hi'} -> HTTP 200 with non-empty text (716 chars) ✅. Chat endpoint working correctly ✅. TEST 5 - REGRESSION (GETs NOT rate-limited): (5a) GET /api/v1/dashboard -> HTTP 200 {status:'ready'} ✅ (5b) GET /api/v1/ticker -> HTTP 200 with numeric price $64,985.20 ✅ (5c) GET /api/v1/health -> HTTP 200 {status:'ok'} ✅. All GET endpoints working without rate limiting ✅. EXACT OBSERVED VALUES: Auth gate: 401 for no/wrong passcode, 200 for correct passcode ✅. Refresh rate limit: 0 success (200), 6 rate-limited (429) in test 2 (all blocked after test 1c used 1 request) ✅. News refresh: 3 success (200), 2 rate-limited (429) ✅. Chat: 200 with 716 chars text ✅. Regression: dashboard status='ready', ticker price=$64,985.20, health status='ok' ✅. NO ISSUES FOUND. The MongoDB-backed rate limiter is working correctly and blocking requests beyond the limit. Data is REAL (MongoDB collection 'rate_limits' with TTL index). No HTTP 500 errors. Feature is production-ready."
+        -comment: "✅ PASSED comprehensive MongoDB-backed rate limiter validation via external URL (https://what-if-sandbox.preview.emergentagent.com/api). All 5 tests passed (5/5): TEST 1 - AUTH GATE (before exhausting rate limit): (1a) POST /api/v1/refresh with no body/empty passcode -> HTTP 401 {status:'unauthorized'} ✅ (1b) POST /api/v1/refresh with wrong passcode -> HTTP 401 {status:'unauthorized'} ✅ (1c) POST /api/v1/refresh with correct passcode 'btciq-admin' (under limit) -> HTTP 200 {status:'started'} ✅. TEST 2 - RATE LIMIT BLOCKING (KEY TEST for MongoDB limiter): Sent 6 requests with correct passcode within ~60s. Result: ALL 6 requests returned HTTP 429 {status:'rate_limited'} ✅. This confirms the MongoDB limiter is tracking requests across the 60-second window correctly (the first request in test 1c counted toward the 3/min limit, so all 6 subsequent requests were blocked). KEY VALIDATION CONFIRMED: The MongoDB-backed rate limiter successfully blocks requests beyond 3/min ✅. TEST 3 - NEWS REFRESH RATE LIMIT (3/min): Sent 5 requests. Result: First 3 returned HTTP 200 {status:'started'}, requests 4-5 returned HTTP 429 {status:'rate_limited'} ✅. Perfect 3/min limit enforcement ✅. TEST 4 - CHAT ENDPOINT (10/min limiter): POST /api/v1/chat {session_id:'ratetest', message:'hi'} -> HTTP 200 with non-empty text (716 chars) ✅. Chat endpoint working correctly ✅. TEST 5 - REGRESSION (GETs NOT rate-limited): (5a) GET /api/v1/dashboard -> HTTP 200 {status:'ready'} ✅ (5b) GET /api/v1/ticker -> HTTP 200 with numeric price $64,985.20 ✅ (5c) GET /api/v1/health -> HTTP 200 {status:'ok'} ✅. All GET endpoints working without rate limiting ✅. EXACT OBSERVED VALUES: Auth gate: 401 for no/wrong passcode, 200 for correct passcode ✅. Refresh rate limit: 0 success (200), 6 rate-limited (429) in test 2 (all blocked after test 1c used 1 request) ✅. News refresh: 3 success (200), 2 rate-limited (429) ✅. Chat: 200 with 716 chars text ✅. Regression: dashboard status='ready', ticker price=$64,985.20, health status='ok' ✅. NO ISSUES FOUND. The MongoDB-backed rate limiter is working correctly and blocking requests beyond the limit. Data is REAL (MongoDB collection 'rate_limits' with TTL index). No HTTP 500 errors. Feature is production-ready."
 
 metadata:
   created_by: "main_agent"
@@ -5770,7 +5770,7 @@ agent_communication:
     -message: |
       ✅ MONGODB-BACKED RATE LIMITER TEST COMPLETE - ALL TESTS PASSED (5/5)
       
-      Tested via external URL (https://quant-features.preview.emergentagent.com/api) using comprehensive test suite (backend_test.py).
+      Tested via external URL (https://what-if-sandbox.preview.emergentagent.com/api) using comprehensive test suite (backend_test.py).
       
       TEST 1 — AUTH GATE (before exhausting rate limit): ✅ PASSED
       - 1a. POST /api/v1/refresh with no body/empty passcode -> HTTP 401 {status:'unauthorized'} ✅
@@ -5850,7 +5850,7 @@ agent_communication:
     -message: |
       ✅ CODE REVIEW FIXES REGRESSION TEST COMPLETE - ALL TESTS PASSED (10/10)
       
-      Tested via external URL (https://quant-features.preview.emergentagent.com/api) after applying code-review fixes.
+      Tested via external URL (https://what-if-sandbox.preview.emergentagent.com/api) after applying code-review fixes.
       
       CONTEXT OF CHANGES:
       - Fixed HALVINGS name collision (cycle context now works)
@@ -6287,7 +6287,7 @@ backend:
         -working: true
         -agent: "testing"
         -comment: |
-          ✅ PASSED comprehensive Resend email integration test via external URL (https://quant-features.preview.emergentagent.com/api). 
+          ✅ PASSED comprehensive Resend email integration test via external URL (https://what-if-sandbox.preview.emergentagent.com/api). 
           All 8 test scenarios passed (18/18 sub-tests). Admin passcode = 000000. Safe test address = delivered@resend.dev.
           
           TEST 1 — AUTH GATING (NO PASSCODE): All 5 endpoints correctly return status='unauthorized' (5/5 PASSED) ✅
@@ -6383,7 +6383,7 @@ agent_communication:
     -message: |
       ✅ RESEND EMAIL INTEGRATION TEST COMPLETE - ALL TESTS PASSED (18/18)
       
-      Tested all 5 NEW Resend email endpoints via external URL (https://quant-features.preview.emergentagent.com/api) 
+      Tested all 5 NEW Resend email endpoints via external URL (https://what-if-sandbox.preview.emergentagent.com/api) 
       using comprehensive test suite (backend_test.py). Admin passcode = 000000. Safe test address = delivered@resend.dev.
       
       RESULTS SUMMARY:
@@ -6505,7 +6505,7 @@ backend:
         -working: true
         -agent: "testing"
         -comment: |
-          ✅ PASSED comprehensive Dynamic Regime-Switching engine validation via external URL (https://quant-features.preview.emergentagent.com/api). 
+          ✅ PASSED comprehensive Dynamic Regime-Switching engine validation via external URL (https://what-if-sandbox.preview.emergentagent.com/api). 
           All 7 tests passed (7/7): 
           
           TEST 1 — GET /api/v1/forecast/regime: ✅ PASSED
@@ -6612,7 +6612,7 @@ agent_communication:
       ✅ DYNAMIC REGIME-SWITCHING ENGINE BACKEND TEST COMPLETE - ALL TESTS PASSED (7/7)
       
       Tested NEW Dynamic Regime-Switching (Gaussian HMM) feature via external URL 
-      (https://quant-features.preview.emergentagent.com/api) using comprehensive test suite (backend_test.py).
+      (https://what-if-sandbox.preview.emergentagent.com/api) using comprehensive test suite (backend_test.py).
       
       RESULTS SUMMARY:
       1. ✅ GET /api/v1/forecast/regime → status='ready', current_regime='bull_momentum', regime_probabilities sum=1.0, 
@@ -6700,7 +6700,7 @@ backend:
         -working: true
         -agent: "testing"
         -comment: |
-          ✅ PASSED comprehensive Real-time Data Audit validation via external URL (https://quant-features.preview.emergentagent.com/api). 
+          ✅ PASSED comprehensive Real-time Data Audit validation via external URL (https://what-if-sandbox.preview.emergentagent.com/api). 
           All 3 tests passed (3/3): 
           
           TEST 1 — GET /api/v1/data-audit: ✅ PASSED (13/13 validations)
@@ -6797,7 +6797,7 @@ agent_communication:
     -message: |
       ✅ REAL-TIME DATA AUDIT BACKEND TEST COMPLETE - ALL TESTS PASSED (3/3)
       
-      Tested NEW Real-time Data Audit endpoint via external URL (https://quant-features.preview.emergentagent.com/api) 
+      Tested NEW Real-time Data Audit endpoint via external URL (https://what-if-sandbox.preview.emergentagent.com/api) 
       using comprehensive test suite (backend_test.py).
       
       RESULTS SUMMARY:
@@ -6875,7 +6875,7 @@ backend:
         -working: true
         -agent: "testing"
         -comment: |
-          ✅ PASSED comprehensive Albert If-Then Scenario Playbook + Contradiction Resolution validation via external URL (https://quant-features.preview.emergentagent.com/api). All 4 tests passed (4/4): (1) GET /api/v1/dashboard returns HTTP 200, status='ready' ✅, decision.scenarios_block present and NOT null ✅, scenarios_block contains all required fields: price=$72,741 (number) ✅, regime='bull_momentum' (string) ✅, regime_label='Bull Momentum' (string) ✅, scenarios (list of 2) ✅, contradiction (dict) ✅. SCENARIOS VALIDATED: scenarios[0].type='bull' ✅, scenarios[1].type='bear' ✅. BULL SCENARIO: label='Primary Bull Scenario' ✅, trigger='Break & 4h/daily close above $74,888 on >1.2x average volume' (non-empty string) ✅, trigger_level=74888.0 (number) ✅, target='$77,334' (non-empty string) ✅, target_level=77334.0 (number) ✅, probability=55 (int 15-85) ✅, move_pct=6.3 (number) ✅, rationale='48% of comparable 20-day-high breakouts closed hig...' (non-empty string) ✅, trigger_level (74888.0) > price (72741.0) ✅, target_level (77334.0) >= trigger_level (74888.0) ✅. BEAR SCENARIO: label='Bearish Invalidation' ✅, trigger='Loss of $70,754 support on rising volume' (non-empty string) ✅, trigger_level=70754.0 (number) ✅, target='$66,061 (liquidity sweep)' (non-empty string) ✅, target_level=66061.0 (number) ✅, probability=34 (int 15-85) ✅, move_pct=-9.2 (number) ✅, rationale='Failing to hold structure has historically resolve...' (non-empty string) ✅, trigger_level (70754.0) < price (72741.0) ✅, target_level (66061.0) <= trigger_level (70754.0) ✅. CONTRADICTION OBJECT: present=False (bool) ✅, winner='None' (valid: bullish/bearish/null) ✅, summary='Signal groups are broadly aligned — no material co...' (non-empty string) ✅. (2) REGRESSION: GET /api/v1/dashboard decision.weights_mode='dynamic' ✅. (3) REGRESSION: GET /api/v1/forecast/regime returns HTTP 200, status='ready' ✅. (4) REGRESSION: GET /api/v1/data-audit returns HTTP 200, status='ready', feeds count=10 (expected 10) ✅. All validations passed. Data is REAL. No HTTP 500 errors. Feature is fully functional and production-ready.
+          ✅ PASSED comprehensive Albert If-Then Scenario Playbook + Contradiction Resolution validation via external URL (https://what-if-sandbox.preview.emergentagent.com/api). All 4 tests passed (4/4): (1) GET /api/v1/dashboard returns HTTP 200, status='ready' ✅, decision.scenarios_block present and NOT null ✅, scenarios_block contains all required fields: price=$72,741 (number) ✅, regime='bull_momentum' (string) ✅, regime_label='Bull Momentum' (string) ✅, scenarios (list of 2) ✅, contradiction (dict) ✅. SCENARIOS VALIDATED: scenarios[0].type='bull' ✅, scenarios[1].type='bear' ✅. BULL SCENARIO: label='Primary Bull Scenario' ✅, trigger='Break & 4h/daily close above $74,888 on >1.2x average volume' (non-empty string) ✅, trigger_level=74888.0 (number) ✅, target='$77,334' (non-empty string) ✅, target_level=77334.0 (number) ✅, probability=55 (int 15-85) ✅, move_pct=6.3 (number) ✅, rationale='48% of comparable 20-day-high breakouts closed hig...' (non-empty string) ✅, trigger_level (74888.0) > price (72741.0) ✅, target_level (77334.0) >= trigger_level (74888.0) ✅. BEAR SCENARIO: label='Bearish Invalidation' ✅, trigger='Loss of $70,754 support on rising volume' (non-empty string) ✅, trigger_level=70754.0 (number) ✅, target='$66,061 (liquidity sweep)' (non-empty string) ✅, target_level=66061.0 (number) ✅, probability=34 (int 15-85) ✅, move_pct=-9.2 (number) ✅, rationale='Failing to hold structure has historically resolve...' (non-empty string) ✅, trigger_level (70754.0) < price (72741.0) ✅, target_level (66061.0) <= trigger_level (70754.0) ✅. CONTRADICTION OBJECT: present=False (bool) ✅, winner='None' (valid: bullish/bearish/null) ✅, summary='Signal groups are broadly aligned — no material co...' (non-empty string) ✅. (2) REGRESSION: GET /api/v1/dashboard decision.weights_mode='dynamic' ✅. (3) REGRESSION: GET /api/v1/forecast/regime returns HTTP 200, status='ready' ✅. (4) REGRESSION: GET /api/v1/data-audit returns HTTP 200, status='ready', feeds count=10 (expected 10) ✅. All validations passed. Data is REAL. No HTTP 500 errors. Feature is fully functional and production-ready.
 
 metadata:
   created_by: "main_agent"
@@ -6899,7 +6899,7 @@ agent_communication:
     -message: |
       ✅ COMPREHENSIVE UI TEST OF NEWLY ADDED BTCIQ PANELS COMPLETE - 6/7 TESTS PASSED
       
-      Tested via external URL (https://quant-features.preview.emergentagent.com) using comprehensive Playwright test suite.
+      Tested via external URL (https://what-if-sandbox.preview.emergentagent.com) using comprehensive Playwright test suite.
       Admin passcode: 000000 (stored in localStorage key 'btciq_admin_passcode').
       
       TEST RESULTS SUMMARY:
@@ -7045,7 +7045,7 @@ agent_communication:
     -message: |
       ✅ ALBERT IF-THEN SCENARIO PLAYBOOK + CONTRADICTION RESOLUTION TEST COMPLETE - ALL TESTS PASSED (4/4)
       
-      Tested via external URL (https://quant-features.preview.emergentagent.com/api) using comprehensive test suite (scenarios_test.py).
+      Tested via external URL (https://what-if-sandbox.preview.emergentagent.com/api) using comprehensive test suite (scenarios_test.py).
       
       TEST 1 — SCENARIOS_BLOCK VALIDATION (GET /api/v1/dashboard):
       ✅ HTTP 200, status='ready'
@@ -7149,7 +7149,7 @@ backend:
         -working: true
         -agent: "testing"
         -comment: |
-          ✅ PASSED comprehensive Model Reliability block validation via external URL (https://quant-features.preview.emergentagent.com/api). 
+          ✅ PASSED comprehensive Model Reliability block validation via external URL (https://what-if-sandbox.preview.emergentagent.com/api). 
           All 5 tests passed (5/5): 
           
           TEST 1 — GET /api/v1/scorecard (Model Reliability block): ✅ PASSED (14/14 validations)
@@ -7226,7 +7226,7 @@ agent_communication:
       ✅ MODEL RELIABILITY BLOCK BACKEND TEST COMPLETE - ALL TESTS PASSED (5/5)
       
       Tested NEW Model Reliability block in /api/v1/scorecard via external URL 
-      (https://quant-features.preview.emergentagent.com/api) using comprehensive test suite (backend_test.py).
+      (https://what-if-sandbox.preview.emergentagent.com/api) using comprehensive test suite (backend_test.py).
       
       RESULTS SUMMARY:
       1. ✅ GET /api/v1/scorecard → status='ready', reliability object present with all required fields
@@ -7334,7 +7334,7 @@ backend:
         -working: true
         -agent: "testing"
         -comment: |
-          ✅ PASSED comprehensive Probabilistic Forecasts validation via external URL (https://quant-features.preview.emergentagent.com/api). 
+          ✅ PASSED comprehensive Probabilistic Forecasts validation via external URL (https://what-if-sandbox.preview.emergentagent.com/api). 
           All 5 tests passed (5/5): 
           
           TEST 1 — GET /api/v1/dashboard (Quantiles + Expected Value): ✅ PASSED (ALL VALIDATIONS)
@@ -7429,7 +7429,7 @@ agent_communication:
       ✅ PROBABILISTIC FORECASTS BACKEND TEST COMPLETE - ALL TESTS PASSED (5/5)
       
       Tested NEW Probabilistic Forecasts feature (quantile price cones + Expected-Value per horizon) via external URL 
-      (https://quant-features.preview.emergentagent.com/api) using comprehensive test suite (backend_test.py).
+      (https://what-if-sandbox.preview.emergentagent.com/api) using comprehensive test suite (backend_test.py).
       
       RESULTS SUMMARY:
       1. ✅ GET /api/v1/dashboard (Quantiles + EV) → All forecasts (24H, 7D, 30D) have valid quantiles (monotonic) + EV metrics
@@ -7500,7 +7500,7 @@ backend:
         -agent: "testing"
         -comment: |
           ✅ PASSED comprehensive Isotonic Calibration + Per-Horizon Feature Sets validation via external URL 
-          (https://quant-features.preview.emergentagent.com/api). All 6 tests passed (6/6).
+          (https://what-if-sandbox.preview.emergentagent.com/api). All 6 tests passed (6/6).
           
           TEST 1 — GET /api/v1/dashboard (Isotonic Calibration + Per-Horizon Features): ✅ PASSED (ALL VALIDATIONS)
           - HTTP 200, status='ready' ✅
@@ -7614,7 +7614,7 @@ agent_communication:
       ✅ ISOTONIC CALIBRATION + PER-HORIZON FEATURE SETS BACKEND TEST COMPLETE - ALL TESTS PASSED (6/6)
       
       Tested NEW Isotonic Calibration + Per-Horizon Feature Sets feature via external URL 
-      (https://quant-features.preview.emergentagent.com/api) using comprehensive test suite (backend_test.py).
+      (https://what-if-sandbox.preview.emergentagent.com/api) using comprehensive test suite (backend_test.py).
       
       RESULTS SUMMARY:
       1. ✅ GET /api/v1/dashboard (Isotonic Calibration) → All 6 horizons calibrated=True, feature counts match expected (7/7/8/8/4/4)
@@ -7688,7 +7688,7 @@ backend:
         -working: true
         -agent: "testing"
         -comment: |
-          ✅ PASSED comprehensive BitMarkAI FastAPI Quant Upgrades validation via external URL (https://quant-features.preview.emergentagent.com/api). 
+          ✅ PASSED comprehensive BitMarkAI FastAPI Quant Upgrades validation via external URL (https://what-if-sandbox.preview.emergentagent.com/api). 
           All 7 tests passed (7/7): 
           
           TEST 1 — GET /api/v1/dashboard (Forecasts with CQR + Triple-Barrier): ✅ PASSED (ALL VALIDATIONS)
@@ -7809,7 +7809,7 @@ agent_communication:
     -message: |
       ✅ BITMARKAI FASTAPI QUANT UPGRADES - FINAL VALIDATION COMPLETE - ALL TESTS PASSED (7/7)
       
-      Tested via external URL (https://quant-features.preview.emergentagent.com/api) using comprehensive test suite (quant_validation_test.py).
+      Tested via external URL (https://what-if-sandbox.preview.emergentagent.com/api) using comprehensive test suite (quant_validation_test.py).
       
       RESULTS SUMMARY:
       1. ✅ GET /api/v1/dashboard (Forecasts with CQR + Triple-Barrier) → All validations passed
@@ -7897,7 +7897,7 @@ backend:
         -working: true
         -agent: "testing"
         -comment: |
-          ✅ PASSED comprehensive validation of BitMarkAI Quant Ensemble Weighting + Coverage History additions via external URL (https://quant-features.preview.emergentagent.com/api). All 4 tests passed (4/4).
+          ✅ PASSED comprehensive validation of BitMarkAI Quant Ensemble Weighting + Coverage History additions via external URL (https://what-if-sandbox.preview.emergentagent.com/api). All 4 tests passed (4/4).
           
           TEST 1 — GET /api/v1/validation (Coverage History + Validation Metrics): ✅ PASSED
           - HTTP 200, status='ready' ✅
@@ -7963,7 +7963,7 @@ backend:
     -message: |
       ✅ BITMARKAI QUANT - ENSEMBLE WEIGHTING + COVERAGE HISTORY VALIDATION COMPLETE - ALL TESTS PASSED (4/4)
       
-      Tested via external URL (https://quant-features.preview.emergentagent.com/api) using comprehensive test suite (backend_test.py).
+      Tested via external URL (https://what-if-sandbox.preview.emergentagent.com/api) using comprehensive test suite (backend_test.py).
       
       RESULTS SUMMARY:
       1. ✅ GET /api/v1/validation (Coverage History + Validation Metrics) → All validations passed
@@ -8039,7 +8039,7 @@ backend:
         -working: true
         -agent: "testing"
         -comment: |
-          ✅ PASSED comprehensive validation via external URL (https://quant-features.preview.emergentagent.com/api). All 3 tests passed (3/3):
+          ✅ PASSED comprehensive validation via external URL (https://what-if-sandbox.preview.emergentagent.com/api). All 3 tests passed (3/3):
           
           TEST 1 — GET /api/v1/validation (Coverage History by Horizon): ✅ PASSED
           - HTTP 200, status='ready' ✅
@@ -8094,7 +8094,7 @@ agent_communication:
     -comment: |
       ✅ BITMARKAI COVERAGE-BY-HORIZON + ENSEMBLE WEIGHT VALIDATION COMPLETE - ALL TESTS PASSED (3/3)
       
-      Tested via external URL (https://quant-features.preview.emergentagent.com/api) using comprehensive test suite (backend_test.py).
+      Tested via external URL (https://what-if-sandbox.preview.emergentagent.com/api) using comprehensive test suite (backend_test.py).
       
       RESULTS SUMMARY:
       1. ✅ GET /api/v1/validation (Coverage History by Horizon) → All validations passed
@@ -8161,7 +8161,7 @@ backend:
         -working: true
         -agent: "testing"
         -comment: |
-          ✅ PASSED comprehensive validation via external URL (https://quant-features.preview.emergentagent.com/api). All 3 tests passed (3/3):
+          ✅ PASSED comprehensive validation via external URL (https://what-if-sandbox.preview.emergentagent.com/api). All 3 tests passed (3/3):
           
           TEST 1 — GET /api/v1/validation (Coverage Alerts + Recent Coverage): ✅ PASSED
           - HTTP 200, status='ready' ✅
@@ -8210,7 +8210,7 @@ agent_communication:
     -comment: |
       ✅ BITMARKAI COVERAGE ALERTS + SELF-HEALING WIDEN + MODEL-HEALTH BADGE VALIDATION COMPLETE - ALL TESTS PASSED (3/3)
       
-      Tested via external URL (https://quant-features.preview.emergentagent.com/api) using comprehensive test suite (bitmark_coverage_test.py).
+      Tested via external URL (https://what-if-sandbox.preview.emergentagent.com/api) using comprehensive test suite (bitmark_coverage_test.py).
       
       RESULTS SUMMARY:
       1. ✅ GET /api/v1/validation (Coverage Alerts + Recent Coverage) → All validations passed
@@ -8245,7 +8245,7 @@ agent_communication:
     -comment: |
       ✅ PILLAR 4 (PROACTIVE ALERTS DATA) + BREAKER DEMO TOGGLE VALIDATION COMPLETE - ALL TESTS PASSED (3/3)
       
-      Tested via external URL (https://quant-features.preview.emergentagent.com/api) using comprehensive test suite (pillar4_breaker_test.py).
+      Tested via external URL (https://what-if-sandbox.preview.emergentagent.com/api) using comprehensive test suite (pillar4_breaker_test.py).
       
       RESULTS SUMMARY:
       1. ✅ GET /api/v1/dashboard (Pillar 4 - cost_basis + leverage_snapshot) → All validations passed
@@ -8285,7 +8285,7 @@ agent_communication:
     -comment: |
       ❌ CIRCUIT BREAKER UI RE-TEST - ITEM A PASSED, ITEM B PARTIAL FAILURE
       
-      Focused re-test of two previously-failing BTCIQ UI items via external URL (https://quant-features.preview.emergentagent.com).
+      Focused re-test of two previously-failing BTCIQ UI items via external URL (https://what-if-sandbox.preview.emergentagent.com).
       Admin passcode = 000000 (localStorage key 'btciq_admin_passcode'). Screenshots captured.
       
       ITEM A — Feature-Drift Circuit Breaker panel: ✅ PASSED
@@ -8342,7 +8342,7 @@ agent_communication:
     -comment: |
       ✅ BTCIQ ORDER-FLOW + PROJECTION OVERLAYS UI TEST COMPLETE - ALL TESTS PASSED (2/2)
       
-      Focused UI pass on new BTCIQ order-flow + projection overlays via external URL (https://quant-features.preview.emergentagent.com).
+      Focused UI pass on new BTCIQ order-flow + projection overlays via external URL (https://what-if-sandbox.preview.emergentagent.com).
       Screenshots captured. Desktop viewport (1920x1080).
       
       ITEM A — LEVERAGE SCREEN → "Live Order Flow" card: ✅ PASSED (ALL ELEMENTS RENDER)
@@ -8842,7 +8842,7 @@ agent_communication:
     -message: |
       ✅ ASK ALBERT ADVISOR UI END-TO-END TEST COMPLETE - 5/7 TESTS PASSED, 2 PARTIAL FAILURES
       
-      Tested "Ask Albert" advisor UI end-to-end via external URL (https://quant-features.preview.emergentagent.com).
+      Tested "Ask Albert" advisor UI end-to-end via external URL (https://what-if-sandbox.preview.emergentagent.com).
       Navigated to app root, clicked sidebar "Ask Albert" to open full Ask Albert section.
       
       TEST RESULTS:
@@ -9087,7 +9087,7 @@ frontend:
 
     -agent: "testing"
     -message: |
-      ✅ ALL 6 NEW/CHANGED BACKEND ENDPOINTS TESTED AND PASSED via external URL (https://quant-features.preview.emergentagent.com/api).
+      ✅ ALL 6 NEW/CHANGED BACKEND ENDPOINTS TESTED AND PASSED via external URL (https://what-if-sandbox.preview.emergentagent.com/api).
       
       SUMMARY:
       1. ✅ POST /api/v1/tts - Gemini TTS endpoint: Valid text returns 200 with non-empty audio_base64 (172,280 chars, decodes to 129,210 bytes valid WAV), mime_type='audio/wav', cached=False on first call, cached=True on repeat. Empty text returns 400. All tests passed.
@@ -9129,7 +9129,7 @@ backend:
         -working: true
         -agent: "testing"
         -comment: |
-          ✅ PASSED comprehensive post-rebrand sanity check via external URL (https://quant-features.preview.emergentagent.com/api).
+          ✅ PASSED comprehensive post-rebrand sanity check via external URL (https://what-if-sandbox.preview.emergentagent.com/api).
           Tested 8 core endpoints to verify string replacements did not break .format() calls or core functionality.
           
           TEST RESULTS (7/8 PASSED):
@@ -9283,7 +9283,7 @@ agent_communication:
     -message: |
       ✅ ALBERT TRADING STRATEGIES BACKEND TESTING COMPLETE - ALL TESTS PASSED (10/10)
       
-      Tested all Albert Trading Strategies endpoints via external URL (https://quant-features.preview.emergentagent.com/api).
+      Tested all Albert Trading Strategies endpoints via external URL (https://what-if-sandbox.preview.emergentagent.com/api).
       
       TESTED FLOWS:
       1. ✅ POST /api/v1/albert/strategy/build (BTC) - Returns draft with targets and rules
@@ -9314,7 +9314,7 @@ agent_communication:
     -message: |
       ✅ ALERT ENGINE BACKEND TESTING COMPLETE - ALL TESTS PASSED (6/6)
       
-      Tested all 5 Alert Engine endpoints via external URL (https://quant-features.preview.emergentagent.com/api) plus cleanup.
+      Tested all 5 Alert Engine endpoints via external URL (https://what-if-sandbox.preview.emergentagent.com/api) plus cleanup.
       
       TESTED FLOWS:
       1. ✅ GET /api/v1/alert-engine/config - Returns 20 coins with symbol+name, settings with all required signals/filters/watchlist
@@ -9353,7 +9353,7 @@ agent_communication:
     -message: |
       ✅ ALERT ENGINE V2 BACKEND TESTING COMPLETE - ALL TESTS PASSED (7/7)
       
-      Tested all NEW Alert Engine v2 additions via external URL (https://quant-features.preview.emergentagent.com/api).
+      Tested all NEW Alert Engine v2 additions via external URL (https://what-if-sandbox.preview.emergentagent.com/api).
       
       TESTED FLOWS:
       1. ✅ GET /api/v1/alert-engine/config - Returns NEW v2 fields (btc_rs, corr_cap, expiry_candles, friction_bps)
@@ -9389,7 +9389,7 @@ agent_communication:
     -message: |
       ✅ ALERT ENGINE V3 BACKEND TESTING COMPLETE - ALL TESTS PASSED (6/6)
       
-      Tested all NEW Alert Engine v3 endpoints via external URL (https://quant-features.preview.emergentagent.com/api).
+      Tested all NEW Alert Engine v3 endpoints via external URL (https://what-if-sandbox.preview.emergentagent.com/api).
       
       TESTED FLOWS:
       1. ✅ GET /api/v1/alert-engine/sectors - Returns 4 sectors with valid structure (sector, strength, hot, members)
@@ -9461,7 +9461,7 @@ agent_communication:
     -message: |
       ✅ BACKEND TESTING COMPLETE - ALL TESTS PASSED (9/9)
       
-      Tested TWO NEW backend features (Model Switcher + Albert Knows the Engines) plus regression via external URL (https://quant-features.preview.emergentagent.com/api).
+      Tested TWO NEW backend features (Model Switcher + Albert Knows the Engines) plus regression via external URL (https://what-if-sandbox.preview.emergentagent.com/api).
       
       A) MODEL SWITCHER - ALL 4 TESTS PASSED:
       ✅ A1: GET /api/v1/settings/models returns correct structure (status='ready', prefs with 6 features, models flash='gemini-3-flash-preview' & pro='gemini-3.1-pro-preview', features array with 6 items). Defaults validated: chat_deep='pro', all others 'flash'.
@@ -9506,7 +9506,7 @@ agent_communication:
     -message: |
       ✅ NATIVE GOOGLE SIGN-IN BACKEND TESTING COMPLETE - ALL TESTS PASSED (10/10)
       
-      Tested Native Google Sign-In (GIS ID-token) backend endpoints via external URL (https://quant-features.preview.emergentagent.com/api).
+      Tested Native Google Sign-In (GIS ID-token) backend endpoints via external URL (https://what-if-sandbox.preview.emergentagent.com/api).
       Testing focused on negative/structure paths only (cannot mint real Google ID token).
       
       AUTH ENDPOINTS - ALL 7 TESTS PASSED:
@@ -9547,7 +9547,7 @@ agent_communication:
     -message: |
       ✅ MULTI-COIN (BASKET) STRATEGIES BACKEND TESTING COMPLETE - ALL TESTS PASSED (8/8)
       
-      Tested NEW multi-coin basket strategy feature + regression via external URL (https://quant-features.preview.emergentagent.com/api).
+      Tested NEW multi-coin basket strategy feature + regression via external URL (https://what-if-sandbox.preview.emergentagent.com/api).
       
       BASKET FLOW TESTS - ALL 5 TESTS PASSED:
       ✅ 1. POST /api/v1/albert/strategy/basket/build {goal:'long the majors, small short on a laggard'} returns HTTP 200 with status='ready', draft with 4 legs (BTC long 35%, ETH long 30%, SOL long 25%, DOT short 10%), weights sum to 100.0%, title='Major Momentum vs. Structural Laggard Hedge'
@@ -9606,7 +9606,7 @@ agent_communication:
     -message: |
       ✅ BASKET REBALANCE/REWEIGHT ENDPOINTS TESTING COMPLETE - ALL TESTS PASSED (7/7)
       
-      Tested NEW basket rebalance and reweight endpoints + regression via external URL (https://quant-features.preview.emergentagent.com/api).
+      Tested NEW basket rebalance and reweight endpoints + regression via external URL (https://what-if-sandbox.preview.emergentagent.com/api).
       
       REBALANCE/REWEIGHT TESTS - ALL 4 TESTS PASSED:
       ✅ 1. POST /api/v1/albert/strategy/basket/{id}/rebalance {} returns HTTP 200 with status='ready', rationale (280 chars: "DeFi and Smart-Contract L1 sectors are significantly outperforming BTC. Trimming BTC to overweight ETH and SOL..."), legs: 3 items with symbol/position/current_weight/suggested_weight, suggested weights sum to 100.0% (BTC: 40%->20%, ETH: 30%->40%, SOL: 30%->40%)
@@ -9648,7 +9648,7 @@ agent_communication:
 
     -working: true
     -agent: "testing"
-    -comment: "✅ PASSED comprehensive basket rebalance/reweight endpoint testing via external URL (https://quant-features.preview.emergentagent.com/api). All 7 tests passed (7/7): 4 rebalance/reweight tests + 3 regression tests. REBALANCE/REWEIGHT: (1) POST /api/v1/albert/strategy/basket/{id}/rebalance {} returns HTTP 200 with status='ready', rationale (280 chars, LLM-generated contextual analysis referencing sector rotation), legs: 3 items with symbol/position/current_weight/suggested_weight ✅, suggested weights sum to 100.0% (BTC: 40%->20%, ETH: 30%->40%, SOL: 30%->40%) ✅. (2) POST /api/v1/albert/strategy/basket/{id}/reweight {weights:{BTC:70,ETH:30}} returns HTTP 200 with status='ready', basket.perf.legs weights reflect new normalized weights (BTC: 53.85%, ETH: 23.08%, SOL: 23.08%) ✅, weight ratio 2.33 (expected ~2.33 for 70:30 input) ✅, normalization working correctly (input 70:30 for 2 symbols, output normalized to 3 symbols maintaining ratio) ✅. (3) POST /api/v1/albert/strategy/basket/nonexistentid/rebalance {} returns HTTP 404 ✅ (non-existent basket correctly rejected). (4) POST /api/v1/albert/strategy/basket/{id}/close {} returns HTTP 200 with basket.status='closed' ✅, then POST .../{id}/rebalance {} returns HTTP 404 ✅ (closed basket correctly rejected, not eligible for rebalance). REGRESSION: (5) GET /api/v1/albert/strategies?symbol=BTC&pid=u_RBX returns HTTP 200 with status='ready' ✅ (single-coin strategy list still works). (6) POST /api/v1/tts {text:'hi',voice:'Charon'} returns HTTP 200 with audio_base64 (85,240 chars), mime_type='audio/wav' ✅ (TTS working correctly). (7) POST /api/v1/chat {session_id:'reb-reg',message:'how is btc looking?',deep:false,symbol:'BTC'} returns HTTP 200 with non-empty text (2,020 chars), model='gemini-3-flash-preview' ✅ (chat working correctly). All validations passed. Rebalance endpoint returns LLM-generated contextual rationale (references sector rotation and relative strength). Rebalance suggested weights are contextual (trimmed BTC from 40% to 20%, increased ETH and SOL based on sector strength). Reweight endpoint correctly applies new weights and normalizes them to sum to 100%. Reweight persists changes (returned basket.perf.legs reflect new weights). Both endpoints correctly return 404 for non-existent basket IDs and closed baskets. Single-coin strategy list, TTS, and chat regression tests passed (no breaking changes). Feature is fully functional and production-ready."
+    -comment: "✅ PASSED comprehensive basket rebalance/reweight endpoint testing via external URL (https://what-if-sandbox.preview.emergentagent.com/api). All 7 tests passed (7/7): 4 rebalance/reweight tests + 3 regression tests. REBALANCE/REWEIGHT: (1) POST /api/v1/albert/strategy/basket/{id}/rebalance {} returns HTTP 200 with status='ready', rationale (280 chars, LLM-generated contextual analysis referencing sector rotation), legs: 3 items with symbol/position/current_weight/suggested_weight ✅, suggested weights sum to 100.0% (BTC: 40%->20%, ETH: 30%->40%, SOL: 30%->40%) ✅. (2) POST /api/v1/albert/strategy/basket/{id}/reweight {weights:{BTC:70,ETH:30}} returns HTTP 200 with status='ready', basket.perf.legs weights reflect new normalized weights (BTC: 53.85%, ETH: 23.08%, SOL: 23.08%) ✅, weight ratio 2.33 (expected ~2.33 for 70:30 input) ✅, normalization working correctly (input 70:30 for 2 symbols, output normalized to 3 symbols maintaining ratio) ✅. (3) POST /api/v1/albert/strategy/basket/nonexistentid/rebalance {} returns HTTP 404 ✅ (non-existent basket correctly rejected). (4) POST /api/v1/albert/strategy/basket/{id}/close {} returns HTTP 200 with basket.status='closed' ✅, then POST .../{id}/rebalance {} returns HTTP 404 ✅ (closed basket correctly rejected, not eligible for rebalance). REGRESSION: (5) GET /api/v1/albert/strategies?symbol=BTC&pid=u_RBX returns HTTP 200 with status='ready' ✅ (single-coin strategy list still works). (6) POST /api/v1/tts {text:'hi',voice:'Charon'} returns HTTP 200 with audio_base64 (85,240 chars), mime_type='audio/wav' ✅ (TTS working correctly). (7) POST /api/v1/chat {session_id:'reb-reg',message:'how is btc looking?',deep:false,symbol:'BTC'} returns HTTP 200 with non-empty text (2,020 chars), model='gemini-3-flash-preview' ✅ (chat working correctly). All validations passed. Rebalance endpoint returns LLM-generated contextual rationale (references sector rotation and relative strength). Rebalance suggested weights are contextual (trimmed BTC from 40% to 20%, increased ETH and SOL based on sector strength). Reweight endpoint correctly applies new weights and normalizes them to sum to 100%. Reweight persists changes (returned basket.perf.legs reflect new weights). Both endpoints correctly return 404 for non-existent basket IDs and closed baskets. Single-coin strategy list, TTS, and chat regression tests passed (no breaking changes). Feature is fully functional and production-ready."
 
 
 frontend:
@@ -9720,7 +9720,7 @@ frontend:
       ✅ FOUR NEW BASKET FEATURES BACKEND TEST COMPLETE - ALL 4 TESTS PASSED (4/4)
       
       Tested four NEW backend features for the "Ask Albert" crypto app via external URL 
-      (https://quant-features.preview.emergentagent.com/api). All endpoints working correctly with 
+      (https://what-if-sandbox.preview.emergentagent.com/api). All endpoints working correctly with 
       LLM calls (Gemini) taking 30-45s as expected. Used 90s timeout on chat/build calls.
       
       TEST 1 — Basket in Chat (context injection): ✅ PASSED (3/3 sub-tests)
@@ -9778,7 +9778,7 @@ agent_communication:
       ✅ PHASE D3 PORTFOLIO COMMAND CENTRE E2E UI TEST COMPLETE — ALL TESTS PASSED (16/16)
       
       Tested Albert's Plan Phase D3 UI (decision cards, SELL plan, flip conditions, Ask-Albert explain modal, 
-      decision-history timeline) via external URL (https://quant-features.preview.emergentagent.com) using 
+      decision-history timeline) via external URL (https://what-if-sandbox.preview.emergentagent.com) using 
       seeded session (cookie + localStorage auth bypass). Desktop viewport (1920x1080).
       
       CRITICAL ACCEPTANCE CRITERIA — ALL PASSED:
@@ -9914,13 +9914,13 @@ frontend:
         -working: true
         -agent: "testing"
         -comment: |
-          ✅ PASSED Phase F Paper Execution Experience UI testing via external URL (https://quant-features.preview.emergentagent.com).
+          ✅ PASSED Phase F Paper Execution Experience UI testing via external URL (https://what-if-sandbox.preview.emergentagent.com).
           Tested 6 of 9 scenarios successfully (A, B, C, D, E, I). Scenarios F, G, H require specific backend conditions not 
           easily reproducible in UI testing (stale decision, expiry, slippage rejection).
           
           AUTH BYPASS: ✅ WORKING
           • Cookie albert_session=e2e_test_session_token_albert_0001 injected successfully
-          • localStorage btciq_user_id=7693422a-e2c0-4242-8211-e6f1d0eaa320 set successfully
+          • localStorage btciq_user_id=what-if-sandbox set successfully
           • Dashboard unlocked, Portfolio Command Centre loaded
           • Seeded PID has actionable calls: SOL BUY, BTC SELL, DOGE SELL (EMERGENCY_EXIT), ETH SELL
           
@@ -10049,7 +10049,7 @@ agent_communication:
           ("Execute (paper fill)") is the default primary action.
       (2) Branding: landing tagline changed to "Your Hucentai crypto quant" (unrelated to Phase F; already verified in DOM).
       AUTH BYPASS: seed_test_session.py already run. Inject Cookie albert_session=e2e_test_session_token_albert_0001 +
-      localStorage btciq_user_id=7693422a-e2c0-4242-8211-e6f1d0eaa320 (see /app/memory/test_credentials.md). Seeded pid
+      localStorage btciq_user_id=what-if-sandbox (see /app/memory/test_credentials.md). Seeded pid
       has a mandate+portfolio producing actionable BUY (SOL/BTC) and SELL (ETH RISK_REDUCTION, DOGE EMERGENCY_EXIT).
       Please run the full seeded flow (scenarios A-I above) and LOCK the final UI expectations: terminal orders immutable;
       expired/stale not reconfirmable in place; cancel disappears once illegal; frozen intent never changes post-create;
@@ -10173,7 +10173,7 @@ backend:
         -working: true
         -agent: "testing"
         -comment: |
-          ✅ PASSED comprehensive Phase G backend testing via external URL (https://quant-features.preview.emergentagent.com/api).
+          ✅ PASSED comprehensive Phase G backend testing via external URL (https://what-if-sandbox.preview.emergentagent.com/api).
           ALL 6 TESTS PASSED (6/6): Tests A-F as specified in review request.
           
           TEST A - NORMAL STATE: ✅ PASSED
@@ -10316,7 +10316,7 @@ frontend:
           Protection Active" confirmed present under a seeded protection state.
           PLEASE TEST (frontend, external URL, seeded auth-bypass session):
           AUTH: cookie albert_session=e2e_test_session_token_albert_0001 + localStorage
-          btciq_user_id=7693422a-e2c0-4242-8211-e6f1d0eaa320. NOTE the app shows a brief "Waking Albert..." overlay on
+          btciq_user_id=what-if-sandbox. NOTE the app shows a brief "Waking Albert..." overlay on
           load — wait for it to clear (can take several seconds) before asserting.
           The seeded pid is ALREADY in an active protection state (mandate max_drawdown_pct=20, HWM seeded ~35% above
           current so drawdown ~25%). Navigate to the "Strategies" tab (left nav) -> Portfolio Command Centre.
@@ -10335,7 +10335,7 @@ frontend:
         -working: true
         -agent: "testing"
         -comment: |
-          ✅ PASSED comprehensive Phase G Protection Banner UI testing via external URL (https://quant-features.preview.emergentagent.com).
+          ✅ PASSED comprehensive Phase G Protection Banner UI testing via external URL (https://what-if-sandbox.preview.emergentagent.com).
           ALL 4 TEST SCENARIOS PASSED (4/4): Scenario 1 (Protection Banner Content), Scenario 2 (Visual Precedence), 
           Scenario 3 (Albert's Call Text), Scenario 4 (BUY Suppression).
           
@@ -10415,7 +10415,7 @@ agent_communication:
       PHASE G banner UI ready for FRONTEND testing (user approved). Backend Phase G passed 6/6 already. Seeded pid
       7693422a is ALREADY in protection (drawdown ~25% vs 20% limit) so the rose "Portfolio Protection Active" banner
       should render at the top of the Command Centre with BUYs suppressed. Auth: cookie
-      albert_session=e2e_test_session_token_albert_0001 + localStorage btciq_user_id=7693422a-e2c0-4242-8211-e6f1d0eaa320;
+      albert_session=e2e_test_session_token_albert_0001 + localStorage btciq_user_id=what-if-sandbox;
       wait for the "Waking Albert..." overlay to clear, then open the Strategies tab. Please confirm the banner content,
       its position ABOVE the regime banner, and that no BUY rows appear while protected.
     -agent: "testing"
@@ -10523,7 +10523,7 @@ test_plan:
         -working: true
         -agent: "testing"
         -comment: |
-          ✅ PASSED comprehensive Phase H backend testing via external URL (https://quant-features.preview.emergentagent.com/api).
+          ✅ PASSED comprehensive Phase H backend testing via external URL (https://what-if-sandbox.preview.emergentagent.com/api).
           69/72 TESTS PASSED (96% pass rate). All 5 scenarios tested with fresh PIDs. Cleaned up 9 MongoDB collections.
           
           SCENARIO 1 - EMPTY/GRACEFUL: ✅ ALL 9 TESTS PASSED
@@ -10668,7 +10668,7 @@ frontend:
           Frontend compiles (home 200). NOTE app shows a "Waking Albert..." overlay on load (wait for it to clear).
           PLEASE TEST (frontend, external URL, seeded auth-bypass session):
           AUTH: cookie albert_session=e2e_test_session_token_albert_0001 + localStorage
-          btciq_user_id=7693422a-e2c0-4242-8211-e6f1d0eaa320. The demo pid is currently seeded into an ACTIVE protection
+          btciq_user_id=what-if-sandbox. The demo pid is currently seeded into an ACTIVE protection
           state (drawdown ~25% vs 20%), and has stored decision snapshots for many assets (BTC/ETH/SOL/DOGE/... ).
           Navigate to the "Strategies" tab -> Portfolio Command Centre.
           SCENARIOS:
@@ -10957,7 +10957,7 @@ backend:
         -working: true
         -agent: "testing"
         -comment: |
-          ✅ PASSED comprehensive Phase I backend testing via external URL (https://quant-features.preview.emergentagent.com/api).
+          ✅ PASSED comprehensive Phase I backend testing via external URL (https://what-if-sandbox.preview.emergentagent.com/api).
           ALL 7 SCENARIOS PASSED (7/7): Tests 1-7 as specified in review request.
           
           SCENARIO 1 - BUILDING→READY: ✅ PASSED
@@ -11061,13 +11061,13 @@ frontend:
               visually show Eligible=NO and a WAIT call badge (slate, NOT the green BUY badge) and, when expanded, the
               Info box "What would change this: Not in your approved universe."
           AUTH: use the seeded test session — cookie albert_session=e2e_test_session_token_albert_0001 and
-          localStorage btciq_user_id=7693422a-e2c0-4242-8211-e6f1d0eaa320 (pid u_7693422a-... which has a mandate). The
+          localStorage btciq_user_id=what-if-sandbox (pid u_7693422a-... which has a mandate). The
           Discovery Feed sits inside the Trading Strategies screen. Ignore any benign TradingView document.querySelector
           console error (known, no functional impact).
         -working: true
         -agent: "testing"
         -comment: |
-          ✅ PASSED comprehensive Phase I UI testing via external URL (https://quant-features.preview.emergentagent.com).
+          ✅ PASSED comprehensive Phase I UI testing via external URL (https://what-if-sandbox.preview.emergentagent.com).
           ALL 6 CHECKS PASSED (6/6): Tests 1-6 as specified in review request.
           
           CHECK 1 - BUILDING → READY: ✅ PASSED
@@ -11160,7 +11160,7 @@ backend:
         -working: true
         -agent: "testing"
         -comment: |
-          ✅ PASSED comprehensive Discovery Watchlist backend testing via external URL (https://quant-features.preview.emergentagent.com/api).
+          ✅ PASSED comprehensive Discovery Watchlist backend testing via external URL (https://what-if-sandbox.preview.emergentagent.com/api).
           ALL 5 TESTS PASSED (5/5): Tests 1-5 as specified in review request.
           
           TEST 1 - IDEMPOTENT PIN: ✅ PASSED
@@ -11230,7 +11230,7 @@ backend:
         -working: true
         -agent: "testing"
         -comment: |
-          ✅ PASSED comprehensive Recovery Timeline backend testing via external URL (https://quant-features.preview.emergentagent.com/api).
+          ✅ PASSED comprehensive Recovery Timeline backend testing via external URL (https://what-if-sandbox.preview.emergentagent.com/api).
           ALL 6 TESTS PASSED (6/6): Tests 1-6 as specified in review request.
           
           TEST 1 - SEED HWM: ✅ PASSED
@@ -11315,7 +11315,7 @@ frontend:
               show a clean empty state "No journey yet for <SYM>" (NOT an error). The watchlist chips also have a small
               activity icon that opens the same journey modal.
           AUTH: seeded session cookie albert_session=e2e_test_session_token_albert_0001 + localStorage
-          btciq_user_id=7693422a-e2c0-4242-8211-e6f1d0eaa320. Ignore benign TradingView document.querySelector console error.
+          btciq_user_id=what-if-sandbox. Ignore benign TradingView document.querySelector console error.
         -working: true
         -agent: "main"
         -comment: |
@@ -11334,7 +11334,7 @@ frontend:
         -working: false
         -agent: "testing"
         -comment: |
-          ✗ FAILED Discovery Watchlist + Journey UI testing via https://quant-features.preview.emergentagent.com.
+          ✗ FAILED Discovery Watchlist + Journey UI testing via https://what-if-sandbox.preview.emergentagent.com.
           
           SETUP: Auth configured correctly (cookie + localStorage), navigated to Trading Strategies, scrolled to Discovery card.
           
@@ -11425,7 +11425,7 @@ frontend:
         -working: true
         -agent: "testing"
         -comment: |
-          ✅ PASSED Recovery Timeline UI testing via https://quant-features.preview.emergentagent.com.
+          ✅ PASSED Recovery Timeline UI testing via https://what-if-sandbox.preview.emergentagent.com.
           
           CHECK 10 ✅ PASS: Portfolio Command Centre renders correctly
           • "Portfolio Command Centre" heading found ✅
@@ -11481,7 +11481,7 @@ backend:
         -working: true
         -agent: "testing"
         -comment: |
-          ✅ PASSED comprehensive Welcome Brief backend testing via external URL (https://quant-features.preview.emergentagent.com/api).
+          ✅ PASSED comprehensive Welcome Brief backend testing via external URL (https://what-if-sandbox.preview.emergentagent.com/api).
           ALL 5 TESTS PASSED (5/5): Tests 1-5 as specified in review request.
           
           TEST 1 - COMPLETE MANDATE: ✅ PASSED
@@ -11583,7 +11583,7 @@ frontend:
         -working: true
         -agent: "testing"
         -comment: |
-          ✅ PASSED comprehensive Welcome Brief UI testing via external URL (https://quant-features.preview.emergentagent.com).
+          ✅ PASSED comprehensive Welcome Brief UI testing via external URL (https://what-if-sandbox.preview.emergentagent.com).
           ALL 5 CORE UI TESTS PASSED (5/5): Tests 1-5 as specified in review request.
           
           TEST 1 - AUTO-APPEAR: ✅ PASSED
@@ -11707,7 +11707,7 @@ agent_communication:
     -message: |
       ✅ BACKEND TESTING COMPLETE FOR TWO NEW FEATURES. ALL 8 TESTS PASSED (8/8).
       
-      Tested via external URL (https://quant-features.preview.emergentagent.com/api) with FRESH test PIDs 
+      Tested via external URL (https://what-if-sandbox.preview.emergentagent.com/api) with FRESH test PIDs 
       (u_BELL_<uuid>, u_WK_<uuid>). Direct MongoDB seeding used as expected. All test data cleaned up.
       
       FEATURE 1 — UNIFIED BELL FEED: ✅ 5/5 TESTS PASSED
@@ -11785,7 +11785,7 @@ agent_communication:
     -message: |
       ✅ PHASE I backend testing COMPLETE. ALL 7 SCENARIOS PASSED (7/7).
       
-      Tested GET /api/v1/albert/discovery?pid= via external URL (https://quant-features.preview.emergentagent.com/api).
+      Tested GET /api/v1/albert/discovery?pid= via external URL (https://what-if-sandbox.preview.emergentagent.com/api).
       
       KEY FINDINGS:
       • Core architectural rule VERIFIED: "discovery is NOT permission to buy" — NO asset where albertCall='BUY' AND 
@@ -11844,7 +11844,7 @@ agent_communication:
       ✅ WELCOME BRIEF UI TESTING COMPLETE — ALL 5 CORE UI TESTS PASSED (5/5).
       
       Tested the NEW "Welcome Brief" modal on Albert's Plan (Ask Albert) app via external URL 
-      (https://quant-features.preview.emergentagent.com) with seeded test session 
+      (https://what-if-sandbox.preview.emergentagent.com) with seeded test session 
       (pid=u_7693422a-e2c0-4242-8211-e6f1d0eaa320).
       
       RESULTS:
@@ -11908,7 +11908,7 @@ agent_communication:
       NEW FRONTEND: TraderHome.js (projection cone + performance drill-down, deep-linked); MarketDrivers.js
       (new "Market Drivers" BTC-only section); deep-link URL state in page.js (section/symbol/horizon/focus/mdh
       with Back/Forward). If frontend testing is later requested, inject cookie albert_session=
-      e2e_test_session_token_albert_0001 + localStorage btciq_user_id=7693422a-e2c0-4242-8211-e6f1d0eaa320.
+      e2e_test_session_token_albert_0001 + localStorage btciq_user_id=what-if-sandbox.
 agent_communication:
     -agent: "main"
     -message: |
@@ -12708,6 +12708,57 @@ backend:
             Added on_event('shutdown') calling scheduler.shutdown(wait=False), a double-start guard,
             and misfire_grace_time on the five interval jobs. Verified over three reload cycles.
             `supervisorctl restart backend` now recovers without kill -9.
+  - task: "Deployment environment injection and API proxy regression smoke"
+    implemented: true
+    working: true
+    file: ".gitignore, .env.example, backend/config.py (inspected only), app/api/[[...path]]/route.js (inspected only)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            User chose platform-managed environment variables. Real .env files remain ignored;
+            added a name-only .env.example and corrected contradictory .gitignore comments.
+            Code inspection shows config.py reads MONGO_URL/DB_NAME from process env and
+            the proxy forwards the cookie; production env injection is NOT verified.
+            No backend code changed. Static deployment checker passed, but did not
+            inspect a live deployment. Request a READ-ONLY smoke of /api/auth/me and
+            /api/v1/albert/state-of-play using the existing seeded session; do not
+            create users or modify data.
+        - working: true
+          agent: "testing"
+          comment: |
+            Preview-only READ-ONLY API smoke passed 3/3: authorized /api/auth/me 200,
+            unauthorized 401, state-of-play 200 with existing token. Production 520
+            NOT tested and not resolved; do not extrapolate preview result to prod.
+  - task: "Production Cloudflare 520 host error (reported 2026-09-27 02:47:46 UTC)"
+    implemented: false
+    working: false
+    file: "production origin - deployment access unavailable"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: false
+          agent: "user"
+          comment: |
+            User repeatedly gets a Cloudflare page: 'Web server is returning an
+            unknown error', Error code 520, Browser Working, Cloudflare Working,
+            Host Error; screenshot shows Perth and 2026-09-27 02:47:46 UTC.
+            User identified the affected public domain as askalbert.app (no Ray ID
+            supplied). Asked how to handle it more gracefully. This is an
+            origin/CDN failure before app UI renders.
+        - working: "NA"
+          agent: "main"
+          comment: |
+            Required deployer debug was dispatched; it could not inspect production.
+            Its scoped job ID returned 'v3 deployment not found' for every
+            production-scoped tool. Cause and production secret presence unverified.
+            DO NOT infer a production fix from preview or static scanner. Await
+            correct deployment scope and origin logs; then fix, and ONLY testing
+            agent may verify against the reported 520 before closure.
 
 frontend:
   - task: "N-C what-if scenario chart (band hero, not-a-forecast framing, validation facts)"
@@ -12896,16 +12947,42 @@ frontend:
             • 15 scenario responses, 12 market-streams responses ✅
             • Zero console errors ✅
             • All screenshots captured (11 images) ✅
+  - task: "Header ticker wraps below controls at tablet widths"
+    implemented: true
+    working: "NA"
+    file: "app/page.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            User selected layout option 2b: keep LIVE ticker visible by wrapping
+            at 1024px instead of hiding it below xl. Changed ticker to its own
+            full-width row from md to below xl; mobile remains hidden and xl keeps
+            the original inline position. Authenticated 1920px screenshot shows
+            the desktop ticker; 1024px and 768px still require a browser check.
+            Previous frontend agent reported page-wide 1024px overflow (1050px);
+            do not assume the header was its sole source without measuring again.
+            Frontend testing agent requires explicit user permission.
+        - working: "NA"
+          agent: "user"
+          comment: |
+            User asked how the browser test would run; after a read-only method was
+            explained, user answered No. Do NOT call frontend testing agent. User
+            will review layout; 1024px outcome remains unverified.
 
 metadata:
   created_by: "main_agent"
-  version: "1.6"
-  test_sequence: 6
-  run_ui: true
+  version: "1.7"
+  test_sequence: 7
+  run_ui: false
 
 test_plan:
   current_focus: []
-  stuck_tasks: []
+  stuck_tasks:
+    - "Production Cloudflare 520 host error: deployment scope unavailable; NOT fixed"
   test_all: false
   test_priority: "high_first"
 
@@ -12959,3 +13036,75 @@ agent_communication:
         SCREENSHOTS: 11 images captured at multiple viewports showing all test areas.
         
         RECOMMENDATION: All critical functionality working. Minor overflow issue at 1024px is cosmetic and does not impact usability. Ready for main agent to summarize and finish.
+    - agent: "main"
+      message: |
+        User approved platform-managed secrets and 1024px ticker wrapping. Changed only
+        .gitignore comments/exception, added name-only .env.example, and adjusted ticker
+        layout in app/page.js. Re-run of static deployment health checker returned PASS;
+        it does NOT inspect the real production origin. Authenticated desktop screenshot
+        renders at 1920px; 1024px is NOT yet verified.
+        NEW USER BUG: recurrent Cloudflare 520 full-page host error at 2026-09-27
+        02:47:46 UTC. Deployer_agent reported 'v3 deployment not found' for its scoped
+        job, so could not inspect origin logs/secrets. Root cause UNVERIFIED, NOT fixed.
+        BACKEND TESTER: do a narrow READ-ONLY proxy/auth/state-of-play smoke with the
+        existing seeded test cookie/Bearer (see memory/test_credentials.md); NO seed,
+        mutation, restart, production claims or testing of the 520 itself. Report any
+        preview proxy 500 honestly. Frontend tester must WAIT for explicit user approval.
+    - agent: "testing"
+      message: |
+        ✅ BACKEND API REGRESSION SMOKE TEST COMPLETE - ALL TESTS PASSED (3/3)
+        
+        Tested preview Next.js /api proxy authentication and state-of-play endpoint at
+        https://what-if-sandbox.preview.emergentagent.com using existing seeded session
+        token sop_e2e_session_token_0001 from memory/test_credentials.md.
+        
+        TEST RESULTS:
+        • Test 1 - GET /api/auth/me (authorized): ✅ PASS
+          - Status: 200 OK
+          - Returned authenticated user: roger.parenzee@gmail.com (id: 6aabd120-2639-4682-8d6a-a670c24ba3c9)
+          - Session token recognized and valid
+          - Response via Cloudflare (CF-Ray: a417749acbcc22f7-ORD)
+        
+        • Test 2 - GET /api/auth/me (unauthorized): ✅ PASS (optional)
+          - Status: 401 Unauthorized (expected)
+          - Response: {"detail":"Not authenticated"}
+        
+        • Test 3 - GET /api/v1/albert/state-of-play (authorized): ✅ PASS
+          - Status: 200 OK
+          - Returned full state-of-play data (stateId: sop_f9514d84e4764d39)
+          - Response keys: status, stateId, generatedAt, paperOnly, owner, user, market,
+            portfolio, briefing, strategies, paper, paperAggregate, marketStreams,
+            capabilities, attention, changesSinceLastVisit, dataQuality, evidenceIndex, deepLinks
+          - Portfolio data: totalValue=$100,000, cash=$100,000, deployableCapital=$80,000
+          - Market regime: BULL, freshness: FRESH
+          - User mandate: COMPLETE, riskTolerance: HIGH, maxDrawdownPct: 25.0
+        
+        KEY FINDINGS:
+        • Preview Next.js /api proxy working correctly ✅
+        • Backend authentication with Bearer token working ✅
+        • Session token sop_e2e_session_token_0001 valid and recognized ✅
+        • NO 500 errors encountered (spec mentioned /api/auth/me may intermittently return 500) ✅
+        • All responses routed through Cloudflare successfully ✅
+        
+        SCOPE & LIMITATIONS:
+        • This is a READ-ONLY preview/local smoke test ONLY
+        • NO data mutation, NO credential changes, NO service restarts
+        • NO account creation or reseeding performed
+        • Production Cloudflare 520 issue remains UNVERIFIED and NOT fixed
+        • Deployer_agent reported 'v3 deployment not found' - deployment scope unavailable
+        • This test does NOT verify or claim to fix the production 520 error
+        • Test timestamp: 2026-09-27T03:34:56Z
+        
+        RECOMMENDATION:
+        Preview environment backend API proxy and authentication are functional. Production
+        520 issue requires deployment-scope access to investigate (logs, secrets, origin health).
+        Main agent should summarize findings and await user direction on production debugging.
+    - agent: "main"
+      message: |
+        User confirmed failing production domain askalbert.app. A single read-only page
+        fetch returned the app shell but does not establish reliability; intermittent
+        Cloudflare 520 remains open and no root cause has been verified. The static
+        deployment checker passed after the safe .env.example/.gitignore change;
+        production secret presence remains unknown because deployer scope failed.
+        User explicitly declined the proposed read-only frontend browser test.
+        Do not invoke frontend testing agent; tablet header wrap remains unverified.

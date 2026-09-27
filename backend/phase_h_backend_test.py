@@ -18,7 +18,7 @@ from config import (
 )
 
 # External API base
-BASE = 'https://quant-features.preview.emergentagent.com/api'
+BASE = 'https://what-if-sandbox.preview.emergentagent.com/api'
 
 # Fresh test PIDs
 PID_EMPTY = 'u_TEST_H_EMPTY'
