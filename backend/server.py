@@ -5482,7 +5482,7 @@ def health():
 @app.get('/api/v1/ticker')
 def ticker(symbol: str = 'BTC'):
     import time
-    symbol = (symbol or 'BTC').strip().upper()[:6]
+    symbol = (symbol or 'BTC').strip().upper()[:14]
     pair = 'BTC/USD' if symbol == 'BTC' else f'{symbol}/USD'
     now = time.time()
     cache = _ticker_cache.get(symbol)
@@ -5508,6 +5508,30 @@ def ticker(symbol: str = 'BTC'):
             _fx_cache['cooldown_ts'] = now
         return _fx_cache['rate']
 
+    if _asset_caps.candidate(symbol):
+        try:
+            observation = _verified_market.ticker(symbol)
+            last = float(observation['price'])
+            rate = usd_aud()
+            data = {'symbol': symbol, 'assetId': observation['assetId'],
+                    'price': last, 'rawPrice': observation['price'],
+                    'price_aud': round(last * rate, 2) if rate else None,
+                    'aud_rate': round(rate, 4) if rate else None,
+                    'change24h': None, 'high': None, 'low': None,
+                    'source': observation['provider'], 'pair': observation['pair'],
+                    'marketId': observation['marketId'], 'marketBase': observation['marketBase'],
+                    'marketBaseId': observation.get('marketBaseId'),
+                    'execution': observation['execution'], 'ts': observation['receivedAt'],
+                    'observedAt': observation['providerObservedAt'],
+                    'providerTimestamp': observation['providerTimestamp'],
+                    'timestampSource': observation['timestampSource']}
+            _ticker_cache[symbol] = {'data': data, 'ts': now}
+            return data
+        except _verified_market.MarketUnavailable as exc:
+            # Never fall back to a guessed symbol or a daily close for a paper mark.
+            return {'symbol': symbol, 'price': None, 'error': exc.detail, 'reasonCode': exc.code}
+
+    # Legacy read-only research tickers; never used as evidence for paper fills.
     for name in ['kraken', 'coinbase']:
         try:
             ex = getattr(ccxt, name)({'enableRateLimit': True})
@@ -7096,6 +7120,8 @@ PAPER_ENGINE_VERSION = 'paper-bot-v1.0.0'
 from albert.paper import core as _paper_core  # noqa: E402
 from albert.paper import portfolio as _paper_portfolio  # noqa: E402
 from albert.paper import profiles as _paper_profiles  # noqa: E402
+from albert import asset_capabilities as _asset_caps  # noqa: E402
+from albert import market_adapter as _verified_market  # noqa: E402
 
 PAPER_EXEC_PROFILE = {'executionProfileId': _paper_core.EXEC_PROFILE['executionProfileId'],
                       'feeBps': int(_paper_core.EXEC_PROFILE['feeBps']),
@@ -7106,15 +7132,14 @@ PAPER_PROPOSAL_TTL_MIN = _paper_core.PROPOSAL_TTL_MIN
 
 
 def _paper_btc_mark():
-    """Current BTC mark as an exact Decimal (or None) + freshness."""
-    try:
-        run = runs_col.find_one(sort=[('created_at', -1)]) or {}
-        px = _num((run.get('ticker') or {}).get('price')) or _num(run.get('last_close'))
-        age = _md_iso_age_hours(run.get('created_at') or run.get('as_of'))
-        fresh = bool(age is not None and age <= 48)
-        return (_paper_core.D(px) if px else None), fresh, run.get('created_at')
-    except Exception:  # noqa
-        return None, False, None
+    """A BTC paper fill requires a recent, verified provider quote.
+
+    The old 48-hour dashboard-run close is historical context, not an executable
+    mark. Losing the ticker blocks BOTH entries and exits until a valid quote
+    returns; it never fabricates a price for an existing position.
+    """
+    obs = _market_observation('BTC')
+    return obs['price'], obs['fresh'], obs['ts']
 
 
 def _paper_ledger_add(acct_id, event_type, entity_type, entity_id, amount, currency, note=''):
@@ -7281,34 +7306,34 @@ def _market_observation(sym):
         data = None
     if not data or data.get('price') is None:
         return {'price': None, 'ts': None, 'obsId': None, 'fresh': False, 'source': None}
-    price = _paper_core.D(str(data['price']))
-    ts = data.get('ts')             # provider fetch timestamp (iso)
+    price = _paper_core.D(str(data.get('rawPrice') or data['price']))
+    ts = data.get('ts')             # timestamp of a successful public quote fetch
     src = data.get('source') or 'ticker'
-    fresh = True
+    fresh = bool(price is not None and price > 0 and data.get('assetId') and
+                 data.get('execution', {}).get('limitsVerified'))
     try:
         import time as _t
         entry = _ticker_cache.get(sym)
-        if entry and entry.get('ts'):
-            fresh = (_t.time() - entry['ts']) < 60      # a recent provider observation
+        fresh = bool(fresh and entry and (_t.time() - entry['ts']) < 60)
     except Exception:  # noqa
-        pass
-    return {'price': price, 'ts': ts, 'obsId': '%s:%s:%s' % (sym, src, ts), 'fresh': fresh, 'source': src}
+        fresh = False
+    return {'price': price if fresh else None, 'ts': ts,
+            'observedAt': data.get('observedAt'),
+            'obsId': '%s:%s:%s' % (sym, src, data.get('observedAt')) if fresh else None,
+            'fresh': fresh, 'source': src, 'assetId': data.get('assetId'), 'pair': data.get('pair'),
+            'marketId': data.get('marketId'), 'execution': data.get('execution')}
 
 
 def _paper_mark(sym):
-    """Current mark for any asset as (Decimal|None, fresh:bool, obs:dict). Bound to a
-    real provider observation (blocker #3): BTC AND altcoins use the live ticker so BTC
-    is usable within its decision window and altcoins carry a genuine provider ts/obsId.
-    Falls back to the authoritative daily-run mark for BTC only if the ticker is down."""
+    """Live verified public quote for both entry and exit, or unavailable.
+    An outage may leave valid existing holdings open; it never supplies a
+    fabricated exit quote or silently substitutes a historical BTC close.
+    """
     sym = (sym or 'BTC').upper()
     obs = _market_observation(sym)
     if obs['price'] is not None and obs['fresh']:
         return obs['price'], True, obs
-    if sym == 'BTC':
-        px, fresh, ts = _paper_btc_mark()
-        return px, fresh, {'price': px, 'ts': ts, 'source': 'run', 'fresh': fresh,
-                           'obsId': ('BTC:run:%s' % ts) if ts else None}
-    return None, False, {'price': None, 'ts': None, 'obsId': None, 'fresh': False, 'source': None}
+    return None, False, obs
 
 
 def _paper_live_ranks():
@@ -7438,7 +7463,9 @@ def _autopilot_process_account(acct):
     _autopilot_set_vis(acct_id, lastCheckAt=now_iso)
     if acct.get('archivedAt'):
         return
-    px, fresh, mark_ts = _paper_btc_mark()
+    px, fresh, mark_obs = _paper_mark('BTC')
+    mark_ts = (mark_obs or {}).get('ts')
+    exec_prof = _paper_profiles.asset_profile('BTC', market=(mark_obs or {}).get('execution'))
     mandate = _albert_deps.get_mandate(pid) or {}
     info = _paper_core.compute_equity(acct, px, fresh)
 
@@ -7461,11 +7488,13 @@ def _autopilot_process_account(acct):
     lot = _paper_core._btc_lot(acct)
     if (lot and px is not None and fresh and PAPER_EXECUTION_ENABLED and lot.get('invalidationPrice') is not None
             and px < _paper_core.D(lot.get('invalidationPrice'))):
-        ex = _paper_core.run_exit_gates(acct=acct, mark_px=px, mark_fresh=fresh, full=True)
+        ex = _paper_core.run_exit_gates(acct=acct, mark_px=px, mark_fresh=fresh, full=True,
+                                        profile=exec_prof)
         if not ex.get('reject'):
             res, err, _ = _paper_core.apply_sell_atomic(paper_accounts_col, acct_id, pid, ex,
                                                         source='auto_invalidation',
-                                                        idem_key='inv:%s:%s' % (lot.get('lotId'), mark_ts))
+                                                        idem_key='inv:%s:%s' % (lot.get('lotId'), mark_ts),
+                                                        price_q=exec_prof['priceQ'])
             if not err:
                 _autopilot_set_vis(acct_id, lastTradeAt=now_iso)
                 _autopilot_notify(pid, acct_id, 'Paper position auto-exited (invalidation)',
@@ -7515,10 +7544,14 @@ def _autopilot_process_account(acct):
         if paper_proposals_col.find_one({'paperAccountId': acct_id, 'status': 'CREATED'}):
             return  # one open proposal at a time
         if canonical['action'] == 'BUY':
+            if not _asset_caps.entry_allowed('BTC', mandate, data_ok=fresh)[0]:
+                return
             s = _paper_core.run_entry_gates(acct=acct, canonical=canonical, mark_px=px, mark_fresh=fresh,
-                                            mandate=mandate, equity_info=info, has_open_intent=False)
+                                            mandate=mandate, equity_info=info, has_open_intent=False,
+                                            profile=exec_prof)
         else:
-            s = _paper_core.run_exit_gates(acct=acct, mark_px=px, mark_fresh=fresh, canonical=canonical)
+            s = _paper_core.run_exit_gates(acct=acct, mark_px=px, mark_fresh=fresh,
+                                           canonical=canonical, profile=exec_prof)
         if not s.get('reject'):
             _paper_make_proposal(acct_id, pid, canonical['action'], canonical, s)
             _autopilot_notify(pid, acct_id, 'Paper trade needs your approval',
@@ -7539,17 +7572,19 @@ def _autopilot_process_account(acct):
             return
         idem = 'auto:%s:%s' % (acct_id, sid)   # restart/duplicate-safe
         if canonical['action'] == 'BUY':
-            if paused:
-                return  # entries paused; leave snapshot unconsumed
+            if paused or not _asset_caps.entry_allowed('BTC', mandate, data_ok=fresh)[0]:
+                return  # entries paused/unsupported; leave snapshot unconsumed
             s = _paper_core.run_entry_gates(acct=acct, canonical=canonical, mark_px=px, mark_fresh=fresh,
-                                            mandate=mandate, equity_info=info, has_open_intent=False)
+                                            mandate=mandate, equity_info=info, has_open_intent=False,
+                                            profile=exec_prof)
             if s.get('reject'):
                 _paper_ledger_add(acct_id, 'AUTO_SKIPPED', 'decision', sid, None, None,
                                   'Autopilot skipped BUY: %s.' % s['reject'])
             else:
                 res, err, _ = _paper_core.apply_buy_atomic(paper_accounts_col, acct_id, pid, acct.get('version'),
                                                           idem, 'auto_' + sid, s, canonical,
-                                                          base_currency=acct.get('baseCurrency', 'USDC'))
+                                                          base_currency=acct.get('baseCurrency', 'USDC'),
+                                                          price_q=exec_prof['priceQ'])
                 if not err:
                     _autopilot_set_vis(acct_id, lastTradeAt=now_iso)
                     paper_accounts_col.update_one({'paperAccountId': acct_id},
@@ -7557,11 +7592,12 @@ def _autopilot_process_account(acct):
                     _autopilot_notify(pid, acct_id, 'Paper Autopilot bought BTC',
                                       'Auto-executed a simulated BUY on a fresh decision. Paper only — no real money.')
         else:  # SELL / EXIT / TRIM (reduce-only) — allowed even if paused
-            s = _paper_core.run_exit_gates(acct=acct, mark_px=px, mark_fresh=fresh, canonical=canonical)
+            s = _paper_core.run_exit_gates(acct=acct, mark_px=px, mark_fresh=fresh,
+                                           canonical=canonical, profile=exec_prof)
             if not s.get('reject'):
                 res, err, _ = _paper_core.apply_sell_atomic(paper_accounts_col, acct_id, pid, s,
                                                             source='auto', idem_key=idem, proposal_id='auto_' + sid,
-                                                            canonical=canonical)
+                                                            canonical=canonical, price_q=exec_prof['priceQ'])
                 if not err:
                     _autopilot_set_vis(acct_id, lastTradeAt=now_iso)
                     paper_accounts_col.update_one({'paperAccountId': acct_id},
@@ -7694,13 +7730,15 @@ def _autopilot_process_account_multi(acct):
             px, fresh = marks.get(sym, (None, False))
             if qty <= 0 or inv is None or px is None or not fresh or px >= inv:
                 continue
-            prof = _paper_profiles.asset_profile(sym, (dec_by_sym.get(sym) or {}).get('rank'))
+            prof = _paper_profiles.asset_profile(sym, (dec_by_sym.get(sym) or {}).get('rank'),
+                                                  market=(mark_obs.get(sym) or {}).get('execution'))
             sizing = _paper_core.size_sell(sym, qty, px, profile=prof, price_q=prof['priceQ'])
             if sizing.get('reject'):
                 continue
             res, err, _ = _paper_core.apply_sell_atomic(
                 paper_accounts_col, acct_id, pid, sizing, source='auto_invalidation',
-                idem_key='inv:%s:%s' % (lot.get('lotId'), (mark_obs.get(sym) or {}).get('obsId')), asset=sym)
+                idem_key='inv:%s:%s' % (lot.get('lotId'), (mark_obs.get(sym) or {}).get('obsId')),
+                asset=sym, price_q=prof['priceQ'])
             if not err:
                 _autopilot_set_vis(acct_id, lastTradeAt=now_iso)
                 _autopilot_notify(pid, acct_id, 'Paper position auto-exited (invalidation)',
@@ -7726,6 +7764,10 @@ def _autopilot_process_account_multi(acct):
         sid = d.get('decisionSnapshotId')
         if processed.get(sym) == sid:
             continue  # already handled this immutable snapshot for this asset
+        if d.get('action') == 'BUY' and not _asset_caps.capability(sym, mandate)['startEligible']:
+            # No proposal, cursor, ledger event or new exposure for a coin whose
+            # implementation/mandate became invalid. Historical lots and exits stay.
+            continue
         if not d.get('actionable'):
             newly_seen[sym] = sid   # WAIT/HOLD: record + consume, never trade
             _paper_ledger_add(acct_id, 'OBSERVED', 'decision', sid, None, None,
@@ -7753,10 +7795,10 @@ def _autopilot_process_account_multi(acct):
         elig, _reason = _paper_profiles.eligible_for_trading(
             sym, data_ok=fresh, excluded=excluded, approved=approved,
             mandate_complete=(d.get('mandateChecks') or {}).get('mandateComplete', True))
-        if d.get('action') == 'BUY' and not (elig and d.get('eligible')):
-            newly_seen[sym] = sid   # ineligible BUY: record, never trade
-            _paper_ledger_add(acct_id, 'OBSERVED', 'decision', sid, None, None,
-                              'Observed %s BUY but not eligible to trade — skipped.' % sym)
+        if d.get('action') == 'BUY' and not (elig and d.get('eligible') and
+                _asset_caps.entry_allowed(sym, mandate, data_ok=fresh)[0]):
+            # No observable entry or state change; a later valid observation may
+            # re-qualify this coin without losing the user's existing positions.
             continue
         rank, tier, rmeta = _paper_rank_for(sym, live_ranks, rank_meta_top)
         candidates.append({'symbol': sym, 'action': d.get('action'),
@@ -7786,7 +7828,8 @@ def _autopilot_process_account_multi(acct):
                 continue  # one open proposal per asset
             can = c['_canonical']
             px, _ = marks.get(sym, (None, False))
-            prof = _paper_profiles.asset_profile(sym, c.get('rank'), tier=c.get('tier'))
+            prof = _paper_profiles.asset_profile(sym, c.get('rank'), tier=c.get('tier'),
+                                                  market=(mark_obs.get(sym) or {}).get('execution'))
             if c['action'] == 'BUY':
                 alloc = _paper_portfolio.allocate(acct=acct, equity_info=equity_info,
                                                   candidates=[c], regime=regime, marks=marks,
@@ -7802,6 +7845,8 @@ def _autopilot_process_account_multi(acct):
                 sizing = _paper_core.size_sell(sym, pos['qty'], px, profile=prof, price_q=prof['priceQ'])
             if sizing.get('reject'):
                 newly_seen[sym] = c['_sid']; continue
+            if c['action'] == 'BUY' and not _asset_caps.entry_allowed(sym, mandate, data_ok=True)[0]:
+                continue
             _sds = _materialize_sds(acct, _strat, can, mark_obs.get(sym), c['action'], sym,
                                     sizing, sizing.get('trace', []), 'PROPOSED')
             _paper_make_proposal_multi(acct_id, pid, c['action'], can, sizing, sym,
@@ -7836,9 +7881,17 @@ def _autopilot_process_account_multi(acct):
                    or 'rot_%s' % sym)
             px, fresh2 = marks.get(sym, (None, False))
             _rk, _tier, _rmeta = _paper_rank_for(sym, live_ranks, rank_meta_top)
-            prof = _paper_profiles.asset_profile(sym, _rk, tier=_tier)
+            prof = _paper_profiles.asset_profile(sym, _rk, tier=_tier,
+                                                  market=(mark_obs.get(sym) or {}).get('execution'))
             idem = 'auto:%s:%s:%s' % (acct_id, sym, sid)
             if intent['action'] in ('BUY', 'ADD'):
+                # Allocators can introduce rotation targets, so recheck the
+                # actual intent (not merely the candidate) before any fill.
+                if not (_asset_caps.entry_allowed(sym, mandate, data_ok=fresh2)[0]
+                        and can.get('action') == 'BUY' and can.get('eligible')
+                        and can.get('actionable') and can.get('fresh')
+                        and (_strat_syms is None or sym in _strat_syms)):
+                    continue
                 sizing = _paper_core.size_buy(sym, intent['notional'], px, profile=prof, price_q=prof['priceQ'])
                 if sizing.get('reject'):
                     continue
@@ -7865,7 +7918,8 @@ def _autopilot_process_account_multi(acct):
                     continue
                 res, err, _ = _paper_core.apply_sell_atomic(
                     paper_accounts_col, acct_id, pid, sizing, source='auto_%s' % intent.get('reason', 'sell'),
-                    idem_key=idem, proposal_id='auto_%s_%s' % (sym, sid), canonical=can, asset=sym)
+                    idem_key=idem, proposal_id='auto_%s_%s' % (sym, sid), canonical=can,
+                    asset=sym, price_q=prof['priceQ'])
                 if not err:
                     traded_syms.add(sym)
                     if intent.get('reason') == 'ROTATION':      # M5.1 open a rotation record
@@ -7968,8 +8022,8 @@ def _paper_make_proposal_multi(acct_id, pid, side, canonical, sizing, asset, str
         'mandateVersion': canonical['mandateVersion'], 'version': 0,
         'notionalValue': notional, 'quantityPreview': qprev,
         'estimatedFees': _paper_core.dstr(sizing['fee']),
-        'referencePrice': _paper_core.dstr(sizing['fillPx'], _paper_profiles.asset_profile(asset).get('priceQ', _paper_core.PRICE_Q)),
-        'invalidationPrice': (_paper_core.dstr(_paper_core.D(canonical['invalidationPrice']))
+        'referencePrice': str(sizing['fillPx']),
+        'invalidationPrice': (str(_paper_core.D(canonical['invalidationPrice']))
                               if canonical.get('invalidationPrice') else None),
         'gateTrace': sizing.get('trace', []),
         'reason': 'Canonical %s decision for %s (engine %s).' % (side, asset, canonical['engineVersion']),
@@ -8161,7 +8215,6 @@ def _paper_dashboard_payload(a):
         for p in pe['positions']:
             sym = p['symbol']; lot = lots_by_id.get(sym, {})
             _rk, _tier, _rmeta = _paper_rank_for(sym, live_ranks, rank_meta_top)
-            pq = _paper_profiles.asset_profile(sym, _rk, tier=_tier).get('priceQ', _paper_core.PRICE_Q)
             if p['unrealized'] is not None:
                 unreal_total += p['unrealized']
             else:
@@ -8171,13 +8224,13 @@ def _paper_dashboard_payload(a):
             positions.append({
                 'paperPositionId': lot.get('lotId'), 'asset': sym,
                 'netQuantity': _paper_core.qty_dstr(p['qty']),
-                'averageEntryPrice': _paper_core.dstr(p['avgEntry'], pq),
+                'averageEntryPrice': str(p['avgEntry']),
                 'costBasis': _paper_core.dstr(lot.get('costBasis')),
                 'entryDecisionSnapshotId': lot.get('entryDecisionSnapshotId'),
                 'tier': _tier, 'marketCapRank': _rmeta.get('rank'),
                 'rankAvailable': _rmeta.get('available'), 'rankSource': _rmeta.get('source'),
-                'invalidationPrice': _paper_core.dstr(p['invalidation'], pq) if p.get('invalidation') is not None else None,
-                'currentPrice': _paper_core.dstr(p['markPx'], pq) if p['markFresh'] else None,
+                'invalidationPrice': str(p['invalidation']) if p.get('invalidation') is not None else None,
+                'currentPrice': str(p['markPx']) if p['markFresh'] else None,
                 'unrealizedPnl': _paper_core.dstr(p['unrealized']) if p['unrealized'] is not None else None})
 
         def _s(v, q=_paper_core.CASH_Q):
@@ -8313,6 +8366,14 @@ def paper_set_mode(acct_id: str, payload: dict = Body(...), user: dict = Depends
         return prior
     if payload.get('expectedVersion') is not None and int(payload['expectedVersion']) != int(a.get('version') or 0):
         raise HTTPException(status_code=409, detail='This account changed — reload and try again.')
+    if mode == 'PAPER_AUTOPILOT' and a.get('strategyId'):
+        bound = _strategy_for_account(a)
+        if not bound:
+            raise HTTPException(status_code=409, detail='Start the bound strategy before enabling Autopilot.')
+        _c, _h, errors = _studio_validate(bound.get('contract') or {}, pid, account=a)
+        if errors or _h != bound.get('contractHash'):
+            raise HTTPException(status_code=422, detail='Autopilot cannot add exposure: '
+                                + '; '.join(errors or ['contract hash mismatch']))
     paper_accounts_col.update_one({'paperAccountId': acct_id},
                                   {'$set': {'mode': mode}, '$inc': {'version': 1}})
     _paper_ledger_add(acct_id, 'MODE_CHANGED', 'account', acct_id, None, None, f"Mode set to {mode}.")
@@ -8340,6 +8401,9 @@ def paper_lifecycle(acct_id: str, cmd: str, payload: dict = Body(default={}),
         # Pause blocks NEW ENTRIES only; protective exits/canonical reductions continue.
         paper_accounts_col.update_one({'paperAccountId': acct_id}, {'$set': {'runtimeState': 'PAUSED_BY_USER'}})
     elif cmd == 'resume':
+        if a.get('strategyId'):
+            raise HTTPException(status_code=409, detail='Resume this wallet via its strategy Start control; '
+                                'the strategy and asset capabilities must be revalidated first.')
         # A plain resume must not clear an unresolved risk-breaker pause; that
         # requires an explicit reviewed reset (see paper-reset).
         if a.get('runtimeState') == 'PAUSED_RISK_BREAKER':
@@ -8401,6 +8465,28 @@ def paper_proposal_action(proposal_id: str, cmd: str, payload: dict = Body(defau
     if not PAPER_EXECUTION_ENABLED:
         raise HTTPException(status_code=503, detail=PAPER_EXEC_DISABLED_MSG)
 
+    # A stale asset or mandate restriction rejects BEFORE the canonical resolver
+    # (which may persist snapshots), proposal status, ledger or wallet can change.
+    # Only BUYs require entry support: SELLs remain available for legacy lots.
+    asset = (prop.get('asset') or 'BTC').upper()
+    if prop['side'] == 'BUY':
+        gate = _asset_caps.capability(asset, _get_mandate(pid))
+        if not gate['startEligible']:
+            raise HTTPException(status_code=409, detail=(
+                f'{asset} cannot open new exposure: {gate["reasonCode"]}. Existing exits remain available.'))
+        if prop.get('strategyId'):
+            bound = strategy_contracts_col.find_one({
+                'strategyId': prop['strategyId'], 'ownerId': pid,
+                'assignedPaperAccountId': a['paperAccountId'], 'status': 'PAPER_ACTIVE',
+                'version': prop.get('strategyVersion'),
+                'contractHash': prop.get('strategyContractHash')})
+            if not bound:
+                raise HTTPException(status_code=409, detail='The driving strategy changed; no paper trade placed.')
+            _c, current_hash, errors = _studio_validate(bound.get('contract') or {}, pid, account=a)
+            if current_hash != bound.get('contractHash') or errors or asset not in _strategy_syms(bound):
+                raise HTTPException(status_code=409, detail='The strategy cannot add this asset: '
+                                    + '; '.join(errors or ['contract or strategy universe changed']))
+
     # Revalidate against the CURRENT canonical decision for THIS proposal's asset (M6
     # multi-asset fix). A mandate/decision/inputs change mints a NEW snapshotId / hash
     # -> mismatch -> reject (fail closed). We compare BOTH snapshotId AND decisionInputsHash.
@@ -8433,10 +8519,10 @@ def paper_proposal_action(proposal_id: str, cmd: str, payload: dict = Body(defau
             return {'status': 'ready', 'proposalStatus': 'REJECTED_ON_REVALIDATION',
                     'message': 'The strategy behind this trade changed — paper trade not placed.'}
 
-    px, fresh, _ = _paper_mark(asset)
+    px, fresh, approval_obs = _paper_mark(asset)
     if px is None or not fresh:
         raise HTTPException(status_code=409, detail='Market data for %s is stale.' % asset)
-    prof = _paper_profiles.asset_profile(asset)
+    prof = _paper_profiles.asset_profile(asset, market=(approval_obs or {}).get('execution'))
     # Value the whole portfolio (all held assets) so sizing respects every limit.
     marks = {}
     for l in (a.get('lots') or []):
@@ -8473,7 +8559,8 @@ def paper_proposal_action(proposal_id: str, cmd: str, payload: dict = Body(defau
             raise HTTPException(status_code=409, detail='Gate rejected: %s.' % sizing['reject'])
         result, err, code = _paper_core.apply_sell_atomic(
             paper_accounts_col, a['paperAccountId'], pid, sizing, source='approval',
-            idem_key=idem_key, proposal_id=proposal_id, canonical=canonical, asset=asset)
+            idem_key=idem_key, proposal_id=proposal_id, canonical=canonical,
+            asset=asset, price_q=prof['priceQ'])
     if err:
         raise HTTPException(status_code=code, detail='Could not execute: %s.' % err)
     # Mirror proposal status (non-authoritative; the account doc is the source of truth).
@@ -8501,17 +8588,17 @@ def paper_close_position(position_id: str, payload: dict = Body(default={}),
     if not (payload or {}).get('confirm'):
         raise HTTPException(status_code=428, detail='Explicit confirmation is required to close a position.')
     sym = (lot.get('asset') or 'BTC').upper()
-    px, fresh, _ = _paper_mark(sym)
+    px, fresh, exit_obs = _paper_mark(sym)
     if px is None or not fresh:
         raise HTTPException(status_code=409, detail='Market data for %s is stale — cannot value the exit.' % sym)
-    prof = _paper_profiles.asset_profile(sym)
+    prof = _paper_profiles.asset_profile(sym, market=(exit_obs or {}).get('execution'))
     sizing = _paper_core.size_sell(sym, _paper_core.D(lot.get('qty')), px, profile=prof, price_q=prof['priceQ'])
     if sizing.get('reject'):
         raise HTTPException(status_code=409, detail='Could not close: %s.' % sizing['reject'])
     idem_key = str((payload or {}).get('idempotencyKey') or ('close_%s_%s' % (sym, position_id)))
     result, err, code = _paper_core.apply_sell_atomic(
         paper_accounts_col, a['paperAccountId'], pid, sizing, source='manual_close',
-        idem_key=idem_key, asset=sym)
+        idem_key=idem_key, asset=sym, price_q=prof['priceQ'])
     if err:
         raise HTTPException(status_code=code, detail='Could not close: %s.' % err)
     return {'status': 'ready', 'closed': result}
@@ -8571,8 +8658,8 @@ def paper_command(payload: dict = Body(...), user: dict = Depends(get_current_us
             return {'status': 'ready', 'card': None,
                     'message': 'Tell me which open position to close (for example, “close SOL”). I only see this account’s open positions.'}
         sym = (lot.get('asset') or '').upper()
-        px, fresh, _ = _paper_mark(sym)
-        prof = _paper_profiles.asset_profile(sym)
+        px, fresh, preview_obs = _paper_mark(sym)
+        prof = _paper_profiles.asset_profile(sym, market=(preview_obs or {}).get('execution'))
         preview = None
         if px is not None and fresh:
             sizing = _paper_core.size_sell(sym, _paper_core.D(lot.get('qty')), px, profile=prof, price_q=prof['priceQ'])
@@ -11417,10 +11504,9 @@ strategy_contracts_col = db['strategy_contracts']
 strategy_backtests_col = db['strategy_backtests']
 studio_idem_col = db['studio_idem']
 
-STUDIO_SUPPORTED = {'BTC', 'ETH', 'SOL', 'XRP', 'ADA', 'DOGE', 'AVAX', 'LINK', 'DOT', 'LTC',
-                    'MATIC', 'ATOM', 'NEAR', 'FIL', 'APT', 'ARB', 'OP', 'INJ', 'SUI', 'TIA', 'BNB', 'TRX'}
-STUDIO_MAX_LEGS = 8
-STUDIO_BACKTEST_VERSION = 'studio-bt-v1'
+STUDIO_SUPPORTED = frozenset(_asset_caps.ENTRY_ASSETS)
+STUDIO_MAX_LEGS = _asset_caps.MAX_STRATEGY_LEGS
+STUDIO_BACKTEST_VERSION = 'studio-bt-v3'
 STUDIO_TRANSITIONS = {
     'REVIEWED': {'assign': 'PAPER_ASSIGNED', 'archive': 'ARCHIVED'},
     'PAPER_ASSIGNED': {'activate': 'PAPER_ACTIVE', 'unassign': 'REVIEWED', 'archive': 'ARCHIVED'},
@@ -11435,6 +11521,8 @@ def _studio_canonical(draft):
     no ids/timestamps/prose). Same inputs -> same contract -> same hash."""
     assets = []
     for a in (draft.get('assets') or []):
+        if not isinstance(a, dict):
+            continue
         sym = str(a.get('symbol') or a.get('asset') or '').upper().strip()
         if not sym:
             continue
@@ -11461,7 +11549,7 @@ def _studio_canonical(draft):
         'reservePct': _f(draft.get('reservePct'), 0.0),
         'maxDrawdownPct': _f(draft.get('maxDrawdownPct')),
         'riskLimits': {
-            'maxPositions': int(draft.get('riskLimits', {}).get('maxPositions', len(assets)) or len(assets)),
+            'maxPositions': int((draft.get('riskLimits') or {}).get('maxPositions', len(assets)) or len(assets)),
             'maxTradeRiskPct': _f((draft.get('riskLimits') or {}).get('maxTradeRiskPct'), 2.0),
             'stopLossPct': _f((draft.get('riskLimits') or {}).get('stopLossPct')),
         },
@@ -11469,40 +11557,21 @@ def _studio_canonical(draft):
 
 
 def _studio_validate(draft, pid, account=None):
-    """Server-side validation (fail-closed). Returns (contract, contractHash, errors)."""
+    """Pure capability/contract checks before any wallet or strategy write.
+
+    Transient provider outages do not invalidate a saved plan: they force WAIT in
+    the engine and block entry at proposal/approval/execution, not Start.
+    """
+    draft = draft if isinstance(draft, dict) else {}
     c = _studio_canonical(draft)
-    errors = []
     m = _get_mandate(pid)
-    excluded = {str(x).upper() for x in (m.get('excluded_coins') or [])}
-    approved = {str(x).upper() for x in (m.get('approved_coins') or [])}
-    if not c['assets']:
-        errors.append('At least one asset is required.')
-    if len(c['assets']) > STUDIO_MAX_LEGS:
-        errors.append(f'Too many assets ({len(c["assets"])}); the limit is {STUDIO_MAX_LEGS}.')
-    for a in c['assets']:
-        if a['symbol'] not in STUDIO_SUPPORTED:
-            errors.append(f'{a["symbol"]} is not a supported asset.')
-        if a['symbol'] in excluded:
-            errors.append(f'{a["symbol"]} is on your excluded list.')
-        if a['weightPct'] <= 0:
-            errors.append(f'{a["symbol"]} must have a positive weight.')
-    total = round(sum(a['weightPct'] for a in c['assets']), 2)
-    if c['assets'] and abs(total - 100.0) > 0.5:
-        errors.append(f'Asset weights must sum to 100% (currently {total}%).')
-    if c['riskLimits']['maxPositions'] > STUDIO_MAX_LEGS:
-        errors.append('maxPositions exceeds the portfolio limit.')
+    errors = _asset_caps.validate_assets(draft, c['assets'], m)
+    if c['riskLimits']['maxPositions'] > STUDIO_MAX_LEGS or c['riskLimits']['maxPositions'] < 1:
+        errors.append('maxPositions must be between 1 and the portfolio limit.')
     if c['reservePct'] is not None and (c['reservePct'] < 0 or c['reservePct'] > 100):
         errors.append('reservePct must be between 0 and 100.')
-    # paper-account compatibility (assignment time)
-    if account is not None:
-        acct_excl = excluded
-        for a in c['assets']:
-            if a['symbol'] in acct_excl:
-                errors.append(f'{a["symbol"]} conflicts with the account mandate exclusions.')
-        if approved:
-            for a in c['assets']:
-                if a['symbol'] not in approved:
-                    errors.append(f'{a["symbol"]} is not in the account mandate approved universe.')
+    # The account is owner-scoped by the caller; its live mandate is the same
+    # owner's mandate. Both old assign and new Start use exactly these checks.
     return c, _studio_short_hash(c), errors
 
 
@@ -11538,58 +11607,90 @@ def _studio_get(sid, pid):
     return doc
 
 
-# ---- deterministic historical backtest (wired to ccxt daily candles) ----
+# ---- deterministic historical backtest (wired to ID-bound ccxt daily candles) ----
+_STUDIO_BACKTEST_FAILURES = {}
 def _studio_daily_closes(symbol, limit=200):
-    """Deterministic daily closes for a symbol via ccxt (kraken -> coinbase)."""
-    for name in ('kraken', 'coinbase'):
-        try:
-            ex = getattr(ccxt, name)({'enableRateLimit': True})
-            bars = ex.fetch_ohlcv(f'{symbol}/USD', timeframe='1d', limit=limit)
-            if bars and len(bars) > 30:
-                # Drop the last (still-forming) daily candle so results are deterministic
-                # within a UTC day (intraday close updates cannot change a completed backtest).
-                return [(int(b[0]), float(b[4])) for b in bars[:-1]]
-        except Exception:  # noqa
-            continue
-    return None
+    """Timestamp-aligned closed daily candles from an ID-bound public USD market."""
+    if not _asset_caps.candidate(symbol):
+        return None
+    try:
+        obs = _verified_market.daily(symbol, limit=max(limit, _verified_market.MIN_SCORING_CANDLES))
+        _STUDIO_BACKTEST_FAILURES.pop(symbol, None)
+        return [(int(b[0]), float(b[4])) for b in obs['bars'][-limit:]]
+    except _verified_market.MarketUnavailable as exc:
+        _STUDIO_BACKTEST_FAILURES[symbol] = {'code': exc.code, 'detail': exc.detail}
+        return None
 
 
 def _studio_backtest(contract):
     """Deterministic buy-and-hold-to-target-weights replay with monthly rebalance,
     fees + slippage applied. Traceable: stores the candle window + a data hash."""
-    prof = _paper_profiles.AGGRESSIVE_EXPERIENCED_V1 if PAPER_MULTI_ASSET_ENABLED else {}
-    fee_bps = float(prof.get('takerFeeBps', 10)) if prof else 10.0
-    slip_bps = float(prof.get('assumedSpreadBps', 5)) if prof else 5.0
+    # Same conservative paper cost model per asset. A one-size BTC fee/spread
+    # silently understates altcoin costs and would misrepresent the strategy.
     assets = contract['assets']
-    series = {}
+    costs = {}
     for a in assets:
-        cl = _studio_daily_closes(a['symbol'])
-        if cl:
-            series[a['symbol']] = cl
-    bench = series.get('BTC') or _studio_daily_closes('BTC')
-    coverage = round(len(series) / max(1, len(assets)) * 100, 1)
-    if not series:
-        return {'error': 'NO_DATA', 'dataCoveragePct': 0.0}
-    n = min(len(v) for v in series.values())
-    n = min(n, min((len(bench) if bench else n), n))
-    syms = [a['symbol'] for a in assets if a['symbol'] in series]
-    w = {a['symbol']: a['weightPct'] / 100.0 for a in assets if a['symbol'] in series}
-    wsum = sum(w.values()) or 1.0
-    w = {k: v / wsum for k, v in w.items()}  # renormalise over available assets
-    # align to the last n candles
-    px = {s: [c[1] for c in series[s][-n:]] for s in syms}
+        item = _asset_caps.candidate(a['symbol']) or {}
+        evidence = (_asset_caps.FROZEN.get('verification') or {}).get(item.get('id'), {})
+        profile = _paper_profiles.asset_profile(a['symbol'], item.get('rank'),
+                                                 market=evidence.get('execution'))
+        costs[a['symbol']] = {
+            'feeBps': float(profile['feeBps']),
+            'spreadBps': float(profile['spreadBps']),
+            'slippageBps': float(profile['slippageBps']),
+            'nature': profile['costNature'],
+            'providerTakerFeeBps': profile['providerTakerFeeBps'],
+            'providerObservedSpreadBps': profile['providerObservedSpreadBps'],
+            'model': profile['model']}
+    series = {}
+    missing = []
+    for a in assets:
+        sym = a['symbol']
+        if not _asset_caps.capability(sym)['entrySupported']:
+            missing.append({'symbol': sym, 'reason': 'ENTRY_NOT_IMPLEMENTED'})
+            continue
+        cl = _studio_daily_closes(sym)
+        if not cl:
+            missing.append({'symbol': sym, 'reason': 'HISTORICAL_DATA_UNAVAILABLE',
+                            'providerBlocker': _STUDIO_BACKTEST_FAILURES.get(sym)})
+        else:
+            series[sym] = {ts: price for ts, price in cl if price > 0}
+    bench = series.get('BTC') or None
+    if bench is None:
+        cl = _studio_daily_closes('BTC')
+        bench = {ts: price for ts, price in cl if price > 0} if cl else None
+    coverage = round((len(assets) - len(missing)) / max(1, len(assets)) * 100, 1)
+    if not bench:
+        missing.append({'symbol': 'BTC', 'reason': 'BENCHMARK_DATA_UNAVAILABLE',
+                        'providerBlocker': _STUDIO_BACKTEST_FAILURES.get('BTC')})
+    if missing or not assets:
+        return {'error': 'INCOMPLETE_DATA', 'missingAssets': missing,
+                'dataCoveragePct': coverage, 'message': 'Historical data is incomplete; '
+                'no assets were dropped and no weights were redistributed.'}
+    # Align by candle timestamp, not by each provider's independently fetched tail.
+    shared = set(bench)
+    for candles in series.values():
+        shared &= set(candles)
+    dates = sorted(shared)
+    if len(dates) < 30:
+        return {'error': 'INCOMPLETE_DATA', 'missingAssets': [],
+                'dataCoveragePct': coverage, 'sharedDays': len(dates),
+                'message': 'Not enough overlapping closed daily candles for every leg and BTC benchmark.'}
+    n = len(dates)
+    syms = [a['symbol'] for a in assets]
+    w = {a['symbol']: a['weightPct'] / 100.0 for a in assets}
+    px = {s: [series[s][ts] for ts in dates] for s in syms}
     equity = 100000.0
-    units = {s: (equity * w[s]) / px[s][0] for s in syms}
-    # apply entry fee+slippage once
-    cost_frac = (fee_bps + slip_bps) / 10000.0
-    equity *= (1 - cost_frac)
-    for s in syms:
-        units[s] *= (1 - cost_frac)
+    def _cost_fraction(sym):
+        cfg = costs[sym]
+        return (cfg['feeBps'] + cfg['spreadBps'] + cfg['slippageBps']) / 10000.0
+    units = {s: (equity * w[s]) / px[s][0] * (1 - _cost_fraction(s)) for s in syms}
+    fees_paid = sum(equity * w[s] * costs[s]['feeBps'] / 10000.0 for s in syms)
+    friction_paid = sum(equity * w[s] * _cost_fraction(s) for s in syms)
     curve = []
     peak = equity
     max_dd = 0.0
     rebal_every = 30
-    fees_paid = equity * cost_frac
     for i in range(n):
         val = sum(units[s] * px[s][i] for s in syms)
         curve.append(round(val, 2))
@@ -11598,22 +11699,25 @@ def _studio_backtest(contract):
         max_dd = max(max_dd, dd)
         if i > 0 and i % rebal_every == 0:  # deterministic monthly rebalance
             target = {s: val * w[s] for s in syms}
-            turnover = sum(abs(target[s] - units[s] * px[s][i]) for s in syms)
-            f = turnover * cost_frac
-            fees_paid += f
-            val -= f
-            units = {s: (val * w[s]) / px[s][i] for s in syms}
+            turnover = {s: abs(target[s] - units[s] * px[s][i]) for s in syms}
+            fees_paid += sum(turnover[s] * costs[s]['feeBps'] / 10000.0 for s in syms)
+            friction = sum(turnover[s] * _cost_fraction(s) for s in syms)
+            friction_paid += friction
+            net = val - friction
+            units = {s: (net * w[s]) / px[s][i] for s in syms}
     total_ret = round((curve[-1] / 100000.0 - 1) * 100, 2)
     bench_ret = None
-    if bench and len(bench) >= n:
-        bpx = [c[1] for c in bench[-n:]]
+    if bench:
+        bpx = [bench[ts] for ts in dates]
         bench_ret = round((bpx[-1] / bpx[0] - 1) * 100, 2)
-    data_hash = _studio_short_hash({s: [round(x, 2) for x in px[s]] for s in syms})
+    data_hash = _studio_short_hash({'dates': dates, 'prices': {s: [repr(x) for x in px[s]] for s in syms},
+                                    'costs': costs})
     return {
         'backtestVersion': STUDIO_BACKTEST_VERSION, 'sampleSizeDays': n,
         'totalReturnPct': total_ret, 'benchmarkReturnPct': bench_ret, 'benchmark': 'BTC buy-and-hold',
         'maxDrawdownPct': round(max_dd, 2), 'feesPaidUsd': round(fees_paid, 2),
-        'feeBps': fee_bps, 'slippageBps': slip_bps, 'dataCoveragePct': coverage,
+        'estimatedTotalFrictionUsd': round(friction_paid, 2),
+        'perAssetExecutionCosts': costs, 'dataCoveragePct': coverage,
         'assetsWithData': syms, 'finalEquity': curve[-1], 'startEquity': 100000.0,
         'dataHash': data_hash, 'deterministic': True,
     }
@@ -11621,12 +11725,50 @@ def _studio_backtest(contract):
 
 # ---- Studio conversational draft (LLM proposes; NOT authoritative, never persists) ----
 STUDIO_DRAFT_SYSTEM = (
-    "You are Albert helping a user draft a PAPER-trading strategy. Output ONLY one JSON object, no prose, "
-    "with keys: name, timeframe, assets (array of {symbol, weightPct}), entryRules, exitRules, "
-    "profitTaking, invalidation, sizing, reservePct (number), maxDrawdownPct (number), "
-    "riskLimits ({maxPositions, maxTradeRiskPct, stopLossPct}). RULES: preserve EXACTLY the assets the "
-    "user names — never substitute BTC or drop a leg. Weights must sum to 100. Use uppercase symbols. "
-    "This is a DRAFT proposal for the user to review; you are not saving or executing anything.")
+    "You are Albert drafting a PAPER-only strategy. Output ONLY one JSON object with keys: "
+    "name, timeframe, assets (array of {symbol, weightPct}), entryRules, exitRules, "
+    "profitTaking, invalidation, sizing, reservePct, maxDrawdownPct, riskLimits "
+    "({maxPositions, maxTradeRiskPct, stopLossPct}). Use ONLY the eligible assets "
+    "provided with this request. Never substitute a user-named coin, remove/add a leg, "
+    "or change an explicit allocation. If a requested asset is not eligible, do not "
+    "replace it; it requires the user's agreement. Weights must total exactly 100. "
+    "This is a draft only: no strategy is saved and no trade is authorised."
+)
+
+
+def _studio_data_status(sym):
+    """Cache-only scoring status; never confuse an unprobed coin with an outage."""
+    row = globals().get('_OHLCV_CACHE', {}).get(sym)
+    if row:
+        age = _time_mod.time() - row[0]
+        return 'FRESH' if age < _OHLCV_TTL and row[1] is not None and len(row[1]) >= 365 else 'STALE'
+    failure = globals().get('_SCORING_FAILURES', {}).get(sym)
+    return 'MISSING' if failure and _time_mod.time() - failure[0] < _OHLCV_TTL else 'UNVERIFIED'
+
+
+def _studio_capability_row(sym, mandate):
+    row = _asset_caps.capability(sym, mandate, _studio_data_status(sym))
+    failure = globals().get('_SCORING_FAILURES', {}).get(sym)
+    if failure:
+        row['lastProviderBlocker'] = {'code': failure[1], 'detail': failure[2]}
+    return row
+
+
+@app.get('/api/v1/albert/studio/capabilities')
+def studio_capabilities(user: dict = Depends(get_current_user)):
+    """Owner-scoped mandate restrictions and honest per-asset implementation matrix."""
+    mandate = _get_mandate(owner_pid(user))
+    return {'status': 'ready', 'registryVersion': _asset_caps.REGISTRY_VERSION,
+            'rankingSnapshot': {'id': _asset_caps.FROZEN['snapshotId'],
+                                'retrievedAt': _asset_caps.FROZEN['retrievedAt'],
+                                'sourceTimestamp': _asset_caps.FROZEN['sourceTimestamp'],
+                                'marketCapSelectedCount': 50,
+                                'totalCandidates': len(_asset_caps.STUDIO_ASSETS),
+                                'legacyAliases': {'MATIC': 'POL'},
+                                'cashReserveAsset': 'USDC'},
+            'dataNote': 'Cache-only daily scoring status; UNVERIFIED is not an outage. '
+                        'Fresh ID-bound provider prices and risk gates are checked before any fill.',
+            'assets': [_studio_capability_row(s, mandate) for s in _asset_caps.STUDIO_ASSETS]}
 
 
 @app.post('/api/v1/albert/studio/draft')
@@ -11636,30 +11778,59 @@ def studio_draft(payload: dict = Body(...), user: dict = Depends(get_current_use
     goal = str((payload or {}).get('goal') or '').strip()[:1500]
     if not goal:
         raise HTTPException(status_code=422, detail='Describe your strategy goal.')
+    pid = owner_pid(user)
+    requested, _weights = _asset_caps.goal_constraints(goal)
+    mandate = _get_mandate(pid)
+    unavailable = [_asset_caps.capability(s, mandate) for s in requested
+                   if not _asset_caps.capability(s, mandate)['startEligible']]
+    if unavailable:
+        limits = '; '.join(f"{r['symbol']}: {r['reasonCode']}" for r in unavailable)
+        raise HTTPException(status_code=422, detail=(
+            'Needs changes. Your requested coin cannot enter this paper strategy (' + limits +
+            '). No coin or allocation has been substituted. Choose a different coin or update '
+            'your mandate yourself, then submit a new goal.'))
+    eligible = [s for s in _asset_caps.STUDIO_ASSETS if _asset_caps.capability(s, mandate)['startEligible']]
+    if not (LLM_READY_KEY and _HAS_LLM):
+        raise HTTPException(status_code=503, detail='Albert is unavailable; no strategy was fabricated or saved.')
     draft = None
-    if LLM_READY_KEY and _HAS_LLM:
+    errors = ['Albert did not return a usable draft.']
+    for attempt in range(2):
         try:
             chat = (LlmChat(api_key=LLM_READY_KEY, session_id='studio-' + uuid.uuid4().hex[:8],
                             system_message=STUDIO_DRAFT_SYSTEM)
                     .with_model('gemini', _model_for('strategy')).with_params(temperature=0.2, max_tokens=1200))
-            reply = asyncio.run(chat.send_message(UserMessage(text=goal)))
+            instructions = (f'Goal: {goal}\nEligible paper-entry symbols: {", ".join(eligible)}. '
+                            f'Exact user-named symbols: {", ".join(requested) or "none"}. '
+                            f'Exact user weights (when supplied): {_weights}.')
+            if attempt:
+                instructions += (' Your earlier proposal failed server validation: ' + '; '.join(errors) +
+                                 '. Regenerate only within the eligible set; preserve every requested symbol '
+                                 'and explicit weight. Never silently substitute or redistribute.')
+            reply = asyncio.run(chat.send_message(UserMessage(text=instructions)))
             raw = (getattr(reply, 'text', '') or '').strip()
             if '```' in raw:
                 raw = re.sub(r'```(?:json)?', '', raw).strip()
             s, e = raw.find('{'), raw.rfind('}')
-            draft = json.loads(raw[s:e + 1])
+            candidate = json.loads(raw[s:e + 1])
+            if not isinstance(candidate, dict):
+                raise ValueError('Gemini returned no object')
+            c, chash, errors = _studio_validate(candidate, pid)
+            draft = candidate
+            errors += _asset_caps.explicit_request_errors(goal, draft)
+            if not errors:
+                break
         except Exception:  # noqa
             traceback.print_exc()
-            draft = None
-    if not draft:
-        draft = {'name': 'New strategy', 'timeframe': 'swing', 'assets': [{'symbol': 'BTC', 'weightPct': 100}],
-                 'entryRules': '', 'exitRules': '', 'profitTaking': '', 'invalidation': '',
-                 'sizing': '', 'reservePct': (_get_mandate(owner_pid(user)).get('reserve_pct') or 20),
-                 'riskLimits': {'maxPositions': 1}}
-    c, chash, errors = _studio_validate(draft, owner_pid(user))
-    return {'status': 'ready', 'draft': {**draft, 'name': draft.get('name') or 'New strategy'},
+            if draft is None:
+                errors = ['Albert did not return a usable draft.']
+    if draft is None:
+        raise HTTPException(status_code=503, detail='Albert could not draft a strategy; nothing was replaced or saved.')
+    return {'status': 'ready' if not errors else 'needs_changes',
+            'draft': {**draft, 'name': draft.get('name') or 'New strategy'},
             'contract': c, 'contractHash': chash, 'summary': _studio_summary(c),
-            'validationErrors': errors, 'note': 'DRAFT proposal — review, then Save to create the contract.'}
+            'validationErrors': errors, 'valid': not errors,
+            'note': ('Draft only; a WAIT decision does not prevent a supported strategy from starting. '
+                     'Starting never authorises a trade.')}
 
 
 @app.post('/api/v1/albert/studio/validate')
@@ -11743,6 +11914,10 @@ def studio_backtest_endpoint(sid: str, payload: dict = Body(default={}), user: d
     if not doc:
         raise HTTPException(status_code=404, detail='No such strategy.')
     res = _studio_backtest(doc['contract'])
+    if res.get('error'):
+        # A partial or unaligned replay is a failed request, not an authoritative
+        # performance result. Leave historical runs and contract untouched.
+        return {'status': 'incomplete', 'backtest': res}
     run_id = 'bt_' + uuid.uuid4().hex[:12]
     rec = {'_id': run_id, 'backtestRunId': run_id, 'strategyId': sid, 'ownerId': pid,
            'strategyVersion': doc['version'], 'contractHash': doc['contractHash'],
@@ -11805,7 +11980,13 @@ def _strategy_paper_public(doc, pid, acct=None):
     """The paper-trading facts that belong ON the strategy card."""
     acct = _strategy_acct(doc, pid) if acct is None else acct
     status = _strategy_paper_status(doc, acct)
+    _contract, current_hash, blockers = _studio_validate(doc.get('contract') or {}, pid, account=acct)
+    if current_hash != doc.get('contractHash'):
+        blockers.append('Saved contract hash mismatch; no new entries permitted.')
+    if status == 'HALTED_RISK':
+        blockers.append('The drawdown breaker requires a reviewed reset.')
     return {'paperStatus': status, 'paperStatusLabel': PAPER_STATUS_LABEL.get(status, status),
+            'canStart': not blockers and status != 'ARCHIVED', 'entryBlockers': blockers,
             'approvalMode': ACCT_MODE_TO_APPROVAL.get((acct or {}).get('mode')) if acct else None,
             'paperAccountId': (acct or {}).get('paperAccountId'),
             'isLive': status == 'LIVE', 'paperOnly': True}
@@ -11869,6 +12050,13 @@ def studio_start_paper(sid: str, payload: dict = Body(default={}),
         return prior
     acct_mode = APPROVAL_TO_ACCT_MODE[approval]
     acct = _strategy_acct(doc, pid)
+    # Validate the current mandate AND exact immutable contract before creating a
+    # wallet, resuming runtime state, or emitting an ACCOUNT_OPENED/RESUME event.
+    _c, _h, errs = _studio_validate(doc['contract'], pid, account=acct)
+    if _h != doc['contractHash']:
+        raise HTTPException(status_code=409, detail='Contract hash mismatch — reload the strategy.')
+    if errs:
+        raise HTTPException(status_code=422, detail='Cannot start: ' + '; '.join(errs))
     if acct and acct.get('runtimeState') == 'PAUSED_RISK_BREAKER':
         raise HTTPException(status_code=409, detail='This strategy hit its drawdown limit and '
                                                    'needs a reviewed reset before it can trade again.')
@@ -11881,13 +12069,8 @@ def studio_start_paper(sid: str, payload: dict = Body(default={}),
         _paper_ledger_add(acct['paperAccountId'], 'RESUME', 'account', acct['paperAccountId'],
                           None, None, 'Paper trading started in %s mode.' % approval)
         acct = _paper_get(acct['paperAccountId'], pid)
-    # Bind the EXACT reviewed contract: hash must still match and the plan must be
-    # compatible with the mandate. Fail closed — never go live on a drifted contract.
-    _c, _h, errs = _studio_validate(doc['contract'], pid, account=acct)
-    if _h != doc['contractHash']:
-        raise HTTPException(status_code=409, detail='Contract hash mismatch — reload the strategy.')
-    if errs:
-        raise HTTPException(status_code=422, detail='Cannot start: ' + '; '.join(errs))
+    # Start means the strategy is permitted to watch for a later canonical BUY.
+    # It does not imply that one exists: WAIT is a valid running state.
     strategy_contracts_col.update_one({'_id': doc['_id']}, {'$set': {
         'status': 'PAPER_ACTIVE', 'assignedPaperAccountId': acct['paperAccountId'],
         'paperStartedAt': datetime.datetime.utcnow().isoformat(),
@@ -11950,6 +12133,11 @@ def studio_set_approval_mode(sid: str, payload: dict = Body(default={}),
     if not acct:
         raise HTTPException(status_code=409,
                             detail='Start paper trading first — then you can change trade approval.')
+    if approval == 'AUTOPILOT':
+        _c, _h, errors = _studio_validate(doc.get('contract') or {}, pid, account=acct)
+        if errors or _h != doc.get('contractHash'):
+            raise HTTPException(status_code=422, detail='Autopilot cannot add exposure: '
+                                + '; '.join(errors or ['contract hash mismatch']))
     paper_accounts_col.update_one({'paperAccountId': acct['paperAccountId']},
                                   {'$set': {'mode': APPROVAL_TO_ACCT_MODE[approval]},
                                    '$inc': {'version': 1}})
@@ -12169,6 +12357,14 @@ def studio_lifecycle(sid: str, cmd: str, payload: dict = Body(default={}), user:
         updates['assignedPaperAccountId'] = acct_id
     if cmd == 'unassign':
         updates['assignedPaperAccountId'] = None
+    if cmd == 'activate':
+        acct = _strategy_acct(doc, pid)
+        if not acct:
+            raise HTTPException(status_code=409, detail='Assigned paper account is unavailable.')
+        _c, _h, errs = _studio_validate(doc.get('contract') or {}, pid, account=acct)
+        if _h != doc.get('contractHash') or errs:
+            raise HTTPException(status_code=422, detail='Cannot activate: '
+                                + '; '.join(errs or ['contract hash mismatch']))
     strategy_contracts_col.update_one({'_id': doc['_id']}, {'$set': updates})
     fresh = _studio_get(sid, pid)
     result = {'status': 'ready', 'command': cmd, **_studio_public(fresh)}
@@ -13229,7 +13425,7 @@ def _discovery_build():
         rows, src_ts = _discovery_universe_rows()
         if not rows:
             return
-        tradable = set(ALERT_COIN_PAIRS.keys()) | {'BTC'}
+        tradable = set(_asset_caps.ENTRY_ASSETS)  # Discovery is never permission to buy.
         reg = _albert_regime() or {}
         core = _discovery_mod.assemble_core(
             rows=rows, regime=(reg.get('regime') or 'RANGE'), tradable_set=tradable,
@@ -16284,28 +16480,10 @@ alert_engine_col = db['alert_engine']
 GMMA_FAST = [3, 5, 8, 10, 12, 15]
 GMMA_SLOW = [30, 35, 40, 45, 50, 60]
 
-ALERT_COIN_PAIRS = {
-    'BTC': [('kraken', 'BTC/USD'), ('coinbase', 'BTC/USD')],
-    'ETH': [('kraken', 'ETH/USD'), ('coinbase', 'ETH/USD')],
-    'SOL': [('kraken', 'SOL/USD'), ('coinbase', 'SOL/USD')],
-    'XRP': [('kraken', 'XRP/USD'), ('coinbase', 'XRP/USD')],
-    'ADA': [('kraken', 'ADA/USD'), ('coinbase', 'ADA/USD')],
-    'DOGE': [('kraken', 'DOGE/USD'), ('coinbase', 'DOGE/USD')],
-    'AVAX': [('kraken', 'AVAX/USD'), ('coinbase', 'AVAX/USD')],
-    'LINK': [('kraken', 'LINK/USD'), ('coinbase', 'LINK/USD')],
-    'DOT': [('kraken', 'DOT/USD'), ('coinbase', 'DOT/USD')],
-    'LTC': [('kraken', 'LTC/USD'), ('coinbase', 'LTC/USD')],
-    'MATIC': [('kraken', 'MATIC/USD'), ('coinbase', 'MATIC/USD')],
-    'ATOM': [('kraken', 'ATOM/USD'), ('coinbase', 'ATOM/USD')],
-    'BCH': [('kraken', 'BCH/USD'), ('coinbase', 'BCH/USD')],
-    'XLM': [('kraken', 'XLM/USD'), ('coinbase', 'XLM/USD')],
-    'ETC': [('kraken', 'ETC/USD'), ('coinbase', 'ETC/USD')],
-    'UNI': [('kraken', 'UNI/USD'), ('coinbase', 'UNI/USD')],
-    'AAVE': [('kraken', 'AAVE/USD'), ('coinbase', 'AAVE/USD')],
-    'FIL': [('kraken', 'FIL/USD'), ('coinbase', 'FIL/USD')],
-    'NEAR': [('kraken', 'NEAR/USD'), ('coinbase', 'NEAR/USD')],
-    'APT': [('kraken', 'APT/USD'), ('coinbase', 'APT/USD')],
-}
+# One shared feed configuration for alert signals and canonical decision scoring.
+# Research/compare coins keep their separate research-only universe.
+from albert.asset_capabilities import DAILY_MARKET_PAIRS as ALERT_COIN_PAIRS
+
 ALERT_COIN_NAMES = {
     'BTC': 'Bitcoin', 'ETH': 'Ethereum', 'SOL': 'Solana', 'XRP': 'XRP', 'ADA': 'Cardano',
     'DOGE': 'Dogecoin', 'AVAX': 'Avalanche', 'LINK': 'Chainlink', 'DOT': 'Polkadot', 'LTC': 'Litecoin',
@@ -16336,6 +16514,7 @@ ALERT_ENGINE_DEFAULTS = {
 }
 
 _OHLCV_CACHE = {}   # sym -> (ts, df)
+_SCORING_FAILURES = {}  # sym -> (ts, exact approved-provider blocker)
 _OHLCV_TTL = 3 * 3600
 
 
@@ -16386,6 +16565,18 @@ def _daily_ohlcv(symbol, limit=720):
     c = _OHLCV_CACHE.get(sym)
     if c and (now - c[0]) < _OHLCV_TTL:
         return c[1]
+    if _asset_caps.candidate(sym):
+        try:
+            result = _verified_market.daily(sym, limit)
+            df = pd.DataFrame(result['bars'], columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            _OHLCV_CACHE[sym] = (now, df)
+            _SCORING_FAILURES.pop(sym, None)
+            return df
+        except _verified_market.MarketUnavailable as exc:
+            _SCORING_FAILURES[sym] = (now, exc.code, exc.detail)
+            return None
+    # Legacy non-strategy alerts can still read their historical feed configuration.
     if sym == 'BTC':
         try:
             df, _src = fetch_ohlcv()

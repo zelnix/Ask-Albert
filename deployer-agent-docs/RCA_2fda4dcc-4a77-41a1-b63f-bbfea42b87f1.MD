@@ -1,56 +1,46 @@
-# Production RCA — "Ask Albert" chat returns "Network error — please try again"
+# CORRECTED RCA — askalbert.app FloatingAlbert widget "Network error — please try again."
 
-**Deployment:** quant-features (custom domain: askalbert.app / www.askalbert.app, both verified)
-**Active run:** 2fda4dcc-4a77-41a1-b63f-bbfea42b87f1 (status: success) — cluster target-8, tier_0
-**Template:** nextjs_mongo_shadcn_base_image, BUT deployed as a **hybrid**: Next.js standalone (:3000) + FastAPI backend (:8001) under supervisor. Entrypoint log: `=== Starting quant-features (Next.js standalone :3000 + FastAPI :8001) ===`.
+Supersedes the causal attribution in the earlier RCA for run `2fda4dcc-4a77-41a1-b63f-bbfea42b87f1`.
+Deployment `quant-features` → https://quant-features.emergent.host (custom domains askalbert.app / www.askalbert.app, both verified). Template `nextjs_mongo_shadcn_base_image`, tier_0, cluster target-8. Live run: `2fda4dcc-4a77-41a1-b63f-bbfea42b87f1` (status success, active).
 
-## Symptom
-Floating "Ask Albert" chat panel: every assistant reply (across 3 different messages + Retry) renders exactly `Network error — please try again`. Page itself renders fine with live data.
+## What the previous RCA got wrong
+- It attributed the screenshot to **PUT /api/v1/albert/chat** and inferred a transport-level OOM causal link **without a captured failing request**.
+- The floating widget (`/app/app/components/FloatingAlbert.js` L68–107) actually calls **POST `${API_BASE}/v1/chat`** → backend **POST /api/v1/chat** (`/app/backend/server.py:12180`). This is a DIFFERENT endpoint from `PUT /api/v1/albert/chat` (the studio chat). The two must not be conflated.
 
-## Live chat request path
-Browser → ingress (askalbert.app) → pod → **FastAPI :8001**. Chat endpoints observed in logs:
-- `PUT /api/v1/albert/chat` (send message) → **200 OK** when pod healthy
-- `GET /api/v1/albert/chat?pid=...&threadId=...` (history) → 200 OK
-- `GET /api/v1/albert/chat/threads?pid=...` → 200 OK
-The Gemini call runs in this path — log shows the AFC warning: *"Direct use of automatic function calling (AFC) in Models.generate_content is not recommended..."* interleaved with the chat traffic.
+## Evidence gathered from LIVE production (run 2fda4dcc)
 
-## What is NOT the cause (ruled out with evidence)
-- **Not the chat endpoint logic / not a 5xx:** `PUT /api/v1/albert/chat` logs 200 OK repeatedly; no 500/502/503 on the chat path.
-- **Not CORS / wrong base URL / custom-domain routing:** the light GET endpoints that populate the dashboard (`/api/v1/dashboard`, `/api/v1/ticker`, `/api/v1/orderflow`, `/api/v1/alerts`, `/api/v1/albert/notifications`) all return 200 and the page renders with live data on the SAME origin. A base-URL/CORS misconfig would break *every* `/api` call from askalbert.app, not just chat. Only the memory-heavy chat path fails.
-- **Not the database:** MONGO_URL present; `list_collections` returns 62 collections incl. `albert_chat`, `ask_quant_chat` — DB bound and available.
-- **Not a missing key:** `GEMINI_API_KEY` present and non-empty (also `EMERGENT_LLM_KEY` present). Presence only checked; value not revealed.
-- **Not the old 520:** custom domain resolves/links (`check_domain_status`: both linked; health probe 200). Prior 520 no longer reproduces.
+### 1. The widget endpoint exists and is POST-only — probe returns JSON, not HTML
+`GET https://quant-features.emergent.host/api/v1/chat` → **405 Method Not Allowed**, `Content-Type: application/json`, body `{"detail":"Method Not Allowed"}` (429 ms).
+- Confirms the route `/api/v1/chat` is registered and rejects non-POST (so the widget's POST path is the correct one).
+- Confirms that, **right now**, the ingress/CDN passes the backend's JSON error through unmodified — it is NOT rewriting to an HTML error page for this path at probe time.
 
-## Root cause (production-specific): tier_0 memory exhaustion → OOMKill/restart → transport-level failure
-`get_pod_events` for the active run:
-- Container `last_termination`: **OOMKilled, exit_code 137**, restarts=**1**, finished_at 2026-09-27T07:41:14Z.
-- Startup probe failures during the restart: `Get "http://10.x:3000/": connect: connection refused` and `context deadline exceeded` — the pod is **unreachable for ~30–40s** while Next.js + FastAPI reboot.
+### 2. No `POST /api/v1/chat` request is present in production logs
+Searched app logs for the live run across the full available window (since_minutes=1440), filters `chat`, then `POST|/v1/chat|429|500|502|503|Traceback|error|rate`:
+- The only chat-family lines are `GET /api/v1/albert/chat` (200), `GET /api/v1/albert/chat/threads` (200), `PUT /api/v1/albert/chat` (200). **Zero occurrences of `POST /api/v1/chat`.**
+- No 5xx and no 429 recorded against the chat endpoint. Observed non-200s were `422` on `POST /api/v1/albert/studio/save` (validation) — unrelated.
 
-`get_tier`: tier_0 "Starter" = memory request **200Mi / hard limit 512Mi**, CPU 50m/250m, 2 replicas, no HPA — on a **1.3GB** image running, in ONE 512Mi container:
-- FastAPI ML compute (5-fold cross-validation, feature importances)
-- `_paper_autopilot_worker` firing every 60s and **overlapping** ("Execution of job _paper_autopilot_worker ... skipped: maximum number of running instances reached (1)")
-- Scenario computations calling Yahoo Finance (many `urllib.error.HTTPError: HTTP Error 429: Too Many Requests` from `server.py:744 fetch_yahoo_series` / `server.py:362 _http_json` / `server.py:19106 _scenario_long_closes`)
-- Next.js standalone server
-- **Gemini chat via AFC generate_content** — the heaviest per-request path
+**⇒ The exact request that produced the screenshot ("Network error — please try again.") is UNVERIFIED.** There is no matching server-side log line for `POST /api/v1/chat`. Either the screenshot pre-dates the 24h log window (Loki max lookback is 1440 min — cannot look further back with available tooling), or the request never reached the backend (dropped before it was logged).
 
-### Failure chain
-1. The pod already runs hot against the 512Mi ceiling from background compute (paper-autopilot + scenario/ML).
-2. A chat message invokes Gemini `generate_content` with automatic function calling (AFC) — a memory-heavy burst — tipping the container over 512Mi.
-3. Kernel OOMKills the container (exit 137). Any in-flight chat request is severed → the browser `fetch()` rejects at the transport layer → the UI's catch block renders `Network error — please try again` (a client transport failure, NOT a server JSON error).
-4. The container restarts; startup probe fails (`connection refused` on :3000) for ~30–40s → the pod is unreachable → the user's Retry and subsequent messages land in the same restart window and fail identically → three consecutive "Network error" bubbles.
-This also explains why only chat fails while the dashboard's light GET calls succeed: chat is the one endpoint whose per-request memory burst trips (and coincides with) the OOM.
+Because it is unverified, **the following cannot be ruled out** and remain open possibilities consistent with the widget code:
+- A `fetch` rejection at the transport layer (connection dropped/refused) → catch → "Network error". This would leave no backend access-log line.
+- A non-JSON / HTML 5xx from ingress/CDN during a pod-down window → `await r.json()` throws → same catch → "Network error". (Note the widget sets a DIFFERENT string for AbortError/timeout and for 429, so those two are excluded as the source of THIS exact string.)
 
-## Confidence / what was verified vs inferred
-- **Verified:** OOMKilled exit 137 + restart + startup-probe unreachable window (pod events); tier_0 512Mi limit (get_tier); chat endpoint returns 200 when healthy and light GETs succeed (app logs + live health probe); DB bound (mongo list_collections); GEMINI_API_KEY present (list_secrets).
-- **Inferred (not reproduced):** the exact moment a chat request triggers/collides with the OOM. I could NOT (a) live-test an actual chat `PUT` from the askalbert.app origin (health tooling issues GET only), nor (b) boot the eph sandbox to read the frontend's exact fetch URL and the "Network error" catch line (sandbox spawn returned repeated `eph_source_check_failed` / envcore 500). OOM itself is not reproducible in the sandbox (larger resources, no live secrets/DB/Gemini), so this is diagnosed from runtime evidence, not reproduced.
+### 3. The 429s in the logs are OUTBOUND (Yahoo Finance), not the chat endpoint
+Many `Traceback ... urllib.error.HTTPError: HTTP Error 429: Too Many Requests` lines originate from `fetch_yahoo_series` in `_scenario_long_closes` (`/app/backend/server.py:19106`), driven by `POST /api/v1/albert/scenario-outlooks/preview`. Those are the backend calling Yahoo and being rate-limited; the endpoint still returns **200** (the error is caught). **Unrelated to the chat widget** — do not attribute the screenshot to these.
 
-## Recommended fixes
-1. **[Primary — User] Raise the tier.** Deployment Panel → Resources: tier_0 (512Mi) → tier_1 "Launch" or higher. 512Mi is insufficient for a hybrid Next.js + FastAPI ML/LLM app; this is the direct remediation for the OOMKill.
-2. **[Code — E1] Reduce per-pod memory pressure so chat doesn't OOM the process:**
-   - Gate/throttle `_paper_autopilot_worker` (it already overlaps every 60s) and consider moving background/scheduled jobs (paper autopilot, scenario/Yahoo recompute, ML CV) off the request-serving process or behind a concurrency guard.
-   - Cache/limit the Yahoo scenario fetches — they are 429-storming (`server.py` `_scenario_long_closes` → `fetch_yahoo_series` → `_http_json`) and add CPU/memory churn.
-   - Make the chat handler resilient (bounded memory, stream/timeout) so a Gemini AFC burst can't crash the worker.
-3. **[Verify — User] Confirm on the live domain.** On askalbert.app open DevTools → Network, send a chat, and capture the failing request's status/timing. Expected: a connection reset / timeout (transport failure) coinciding with a pod restart — not an HTTP 4xx/5xx body — which confirms the OOM-window diagnosis above.
+### 4. OOMKill is VERIFIED but NOT causally linked to the screenshot
+Pod events (get_pod_events, run 2fda4dcc): container `r-2fda4dcc...` **OOMKilled (exit 137)** at **2026-09-27T07:41:14Z**, `restart_count=1`; surrounding startup-probe failures (`connection refused` / `context deadline exceeded` on :3000). The pod recovered and is currently `Running`/`ready`. tier_0 = 512Mi ceiling.
+- This OOM is real and there WAS a pod-down/restart window (~07:41Z) during which any in-flight request would have failed at the transport/ingress layer.
+- **However, no chat POST is logged at or near that timestamp, so the link between the OOM and the screenshot remains an UNVERIFIED hypothesis, not a proven cause.** Keep the verified OOM fact and the unverified screenshot-causation strictly separate.
 
-## Explicitly not done (per instructions)
-No deploy/redeploy/rollback, no production data writes, no secret changes, no code changes. Secret values never revealed (presence-only).
+## Corrected conclusion
+- Screenshot source endpoint = **POST /api/v1/chat** (floating widget), NOT PUT /api/v1/albert/chat.
+- The **exact failing request is unverified** — no matching production log line in the last 24h. Do not assert a transport-level OOM cause for it.
+- Verified independently: (a) route exists, POST-only, returns JSON on error at probe time; (b) a real OOMKill/restart window existed at 07:41:14Z on tier_0; (c) outbound Yahoo 429s exist but belong to the scenario-outlooks endpoint, not chat.
+- HTML/non-JSON 5xx from ingress during a pod-down window is NOT ruled out.
+
+## Recommended next steps (no code or prod changes made)
+1. **Capture the failing request live** (DevTools → Network → the `POST /api/v1/chat` call): record HTTP status, response `Content-Type`, and whether the body is JSON or HTML. This is the single missing piece that will confirm transport-reject vs HTML-5xx vs backend-500. Note the wall-clock time so it can be correlated with pod events.
+2. **Correlate that timestamp** against pod OOM/restart events to confirm or refute the OOM hypothesis for chat specifically.
+3. **tier_0 (512Mi) is at risk** — a verified OOMKill already occurred. Raising the tier reduces the pod-down windows that could manifest as "Network error" for any endpoint. Offer as risk reduction, NOT as a confirmed fix for this screenshot.
+4. Optional (Code, for future diagnosability): the widget collapses fetch-reject AND `r.json()` parse-failure into one identical "Network error" string, which erased the signal here. Surfacing `r.status` / `Content-Type` (or logging them) would let the next occurrence be attributed precisely.

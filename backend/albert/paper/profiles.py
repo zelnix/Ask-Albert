@@ -128,15 +128,27 @@ _PRICE_Q_OVERRIDE = {
 }
 
 
-def asset_profile(symbol, rank=None, tier=None):
-    """Deterministic execution profile for an asset. Returns Decimals. `tier`
-    override forces a liquidity tier (M5.1: conservative SPEC when live rank
-    is unavailable)."""
+def asset_profile(symbol, rank=None, tier=None, market=None):
+    """Conservative fees/spread/slippage/limits PLUS observed provider precision.
+    A tier alone cannot certify market execution; workers require a verified
+    public-market observation for either a BUY or an exit fill.
+    """
     sym = (symbol or '').upper()
     tier = tier or cap_tier(sym, rank)
     prof = dict(_TIER_EXEC[tier])
     if sym in _PRICE_Q_OVERRIDE:
         prof['priceQ'] = _PRICE_Q_OVERRIDE[sym]
+    prof['executionVerified'] = bool(market and market.get('limitsVerified'))
+    prof['costNature'] = 'PAPER_SIMULATION_ASSUMPTION'
+    prof['providerTakerFeeBps'] = market.get('takerFeeBps') if market else None
+    prof['providerObservedSpreadBps'] = market.get('observedSpreadBps') if market else None
+    if prof['executionVerified']:
+        prof['priceQ'] = Decimal(market['priceQ'])
+        prof['qtyQ'] = max(Decimal('0.00000001'), Decimal(market['qtyQ']))
+        prof['feeBps'] = max(prof['feeBps'], Decimal(market.get('takerFeeBps') or '0'))
+        prof['spreadBps'] = max(prof['spreadBps'], Decimal(market.get('observedSpreadBps') or '0'))
+        for key in ('minAmount', 'maxAmount', 'minCost', 'maxCost', 'minPrice', 'maxPrice'):
+            prof[key] = Decimal(market[key]) if market.get(key) is not None else None
     prof['tier'] = tier
     prof['symbol'] = sym
     prof['model'] = 'conservative_%s' % tier.lower()
@@ -152,13 +164,10 @@ WRAPPED = {
 
 
 def is_leveraged(symbol):
-    """Leveraged / inverse ETP tokens (e.g. BTC3L, ETHUP, BTCDOWN, 3SBTC)."""
+    """Only explicit leveraged product forms; JUP/PUMP are ordinary tickers."""
     s = (symbol or '').upper()
-    for suf in ('UP', 'DOWN', 'BULL', 'BEAR'):
-        if s.endswith(suf) and len(s) > len(suf):
-            return True
     import re
-    return bool(re.search(r'\d+[LS]$', s)) or bool(re.match(r'^\d+[LS]', s))
+    return bool(re.fullmatch(r'(?:[A-Z]{2,12}(?:[235][LS]|UP|DOWN|BULL|BEAR)|[235][LS][A-Z]{2,12})', s))
 
 
 def is_wrapped(symbol):

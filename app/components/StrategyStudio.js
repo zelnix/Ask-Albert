@@ -40,14 +40,14 @@ function PaperBadge() {
   return <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-300"><FlaskConical className="h-3 w-3" />Paper only</span>;
 }
 
-function ConfirmBtn({ label, icon: Icon, onConfirm, tone = 'sky', busy }) {
+function ConfirmBtn({ label, icon: Icon, onConfirm, tone = 'sky', busy, disabled = false }) {
   const [armed, setArmed] = useState(false);
   const colors = { sky: 'bg-sky-500 hover:bg-sky-400', emerald: 'bg-emerald-600 hover:bg-emerald-500',
     amber: 'bg-amber-600 hover:bg-amber-500', red: 'bg-red-600 hover:bg-red-500', slate: 'bg-slate-700 hover:bg-slate-600' };
   if (armed) {
     return (
       <span className="inline-flex items-center gap-1">
-        <Button size="sm" disabled={busy} onClick={() => { setArmed(false); onConfirm(); }} className={`h-7 gap-1 px-2.5 text-[12px] ${colors[tone]}`}>
+        <Button size="sm" disabled={busy || disabled} onClick={() => { setArmed(false); onConfirm(); }} className={`h-7 gap-1 px-2.5 text-[12px] ${colors[tone]}`}>
           {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}Confirm {label}
         </Button>
         <button onClick={() => setArmed(false)} className="rounded p-1 text-slate-400 hover:text-white"><X className="h-3.5 w-3.5" /></button>
@@ -55,7 +55,7 @@ function ConfirmBtn({ label, icon: Icon, onConfirm, tone = 'sky', busy }) {
     );
   }
   return (
-    <Button size="sm" variant="outline" onClick={() => setArmed(true)} className="h-7 gap-1 border-slate-700 px-2.5 text-[12px] text-slate-200 hover:bg-slate-800">
+    <Button size="sm" variant="outline" disabled={disabled || busy} onClick={() => setArmed(true)} className="h-7 gap-1 border-slate-700 px-2.5 text-[12px] text-slate-200 hover:bg-slate-800">
       {Icon && <Icon className="h-3.5 w-3.5" />}{label}
     </Button>
   );
@@ -69,28 +69,46 @@ function Builder({ onSaved, onCancel }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
+  useEffect(() => {
+    if (!draft) return undefined;
+    let active = true;
+    const t = setTimeout(async () => {
+      try {
+        const r = await post('/v1/albert/studio/validate', { draft });
+        const j = await r.json();
+        if (active) setReview(r.ok ? { contract: j.contract, hash: j.contractHash,
+          summary: j.summary, errors: j.validationErrors || [], for: JSON.stringify(draft) } : null);
+      } catch (e) { if (active) { setReview(null); setErr('Validation unavailable; nothing can be saved.'); } }
+    }, 300);
+    return () => { active = false; clearTimeout(t); };
+  }, [draft]);
+
+  const updateDraft = (next) => { setReview(null); setErr(''); setDraft(next); };
+  const readyToSave = !!review && review.for === JSON.stringify(draft) && !(review.errors || []).length;
+
   const runDraft = async () => {
     if (!goal.trim()) return;
     setDrafting(true); setErr('');
     try {
-      const j = await (await post('/v1/albert/studio/draft', { goal })).json();
-      setDraft(j.draft); setReview({ contract: j.contract, hash: j.contractHash, summary: j.summary, errors: j.validationErrors });
-    } catch (e) { setErr('Could not draft — try again.'); }
+      const r = await post('/v1/albert/studio/draft', { goal });
+      const j = await r.json();
+      if (!r.ok) { setErr(j.detail || 'Albert could not draft a strategy. Nothing was substituted.'); return; }
+      setDraft(j.draft);
+      setReview({ contract: j.contract, hash: j.contractHash, summary: j.summary,
+        errors: j.validationErrors || [], for: JSON.stringify(j.draft) });
+    } catch (e) { setErr('Could not draft — try again. No strategy was saved.'); }
     finally { setDrafting(false); }
-  };
-  const revalidate = async (d) => {
-    const j = await (await post('/v1/albert/studio/validate', { draft: d })).json();
-    setReview({ contract: j.contract, hash: j.contractHash, summary: j.summary, errors: j.validationErrors });
   };
   const setAsset = (i, key, val) => {
     const next = { ...draft, assets: draft.assets.map((a, ix) => ix === i ? { ...a, [key]: key === 'weightPct' ? Number(val) : val.toUpperCase() } : a) };
-    setDraft(next); revalidate(next);
+    updateDraft(next);
   };
-  const addAsset = () => { const next = { ...draft, assets: [...(draft.assets || []), { symbol: '', weightPct: 0 }] }; setDraft(next); };
-  const removeAsset = (i) => { const next = { ...draft, assets: draft.assets.filter((_, ix) => ix !== i) }; setDraft(next); revalidate(next); };
-  const setField = (k, v) => { const next = { ...draft, [k]: v }; setDraft(next); };
+  const addAsset = () => updateDraft({ ...draft, assets: [...(draft.assets || []), { symbol: '', weightPct: 0 }] });
+  const removeAsset = (i) => updateDraft({ ...draft, assets: draft.assets.filter((_, ix) => ix !== i) });
+  const setField = (k, v) => updateDraft({ ...draft, [k]: v });
 
   const save = async () => {
+    if (!readyToSave) { setErr('Needs changes — wait for a valid review before saving.'); return; }
     setBusy(true); setErr('');
     try {
       const r = await post('/v1/albert/studio/save', { draft, name: draft.name, confirm: true,
@@ -117,6 +135,7 @@ function Builder({ onSaved, onCancel }) {
           <Button onClick={runDraft} disabled={drafting || !goal.trim()} className="mt-3 gap-1.5 bg-violet-600 hover:bg-violet-500">
             {drafting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}Draft with Albert
           </Button>
+          {err && <p role="alert" className="mt-2 text-[12px] font-medium text-amber-300">{err}</p>}
         </div>
       )}
       {draft && (
@@ -147,7 +166,7 @@ function Builder({ onSaved, onCancel }) {
           ))}
           {review && (
             <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
-              <p className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400"><ShieldCheck className="h-3.5 w-3.5" />Review · hash {review.hash}</p>
+              <p className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400"><ShieldCheck className="h-3.5 w-3.5" />{(review.errors || []).length ? 'Needs changes' : 'Reviewed'} · hash {review.hash}</p>
               <p className="text-[13px] text-slate-200">{review.summary}</p>
               {(review.errors || []).length > 0 && (
                 <ul className="mt-2 space-y-0.5 text-[12px] text-red-400">
@@ -156,9 +175,10 @@ function Builder({ onSaved, onCancel }) {
               )}
             </div>
           )}
-          {err && <p className="text-[12px] font-medium text-red-400">{err}</p>}
+          {!review && <p role="status" className="text-[12px] text-amber-300">Checking this draft — Save is disabled until validation completes.</p>}
+          {err && <p role="alert" className="text-[12px] font-medium text-red-400">{err}</p>}
           <div className="flex items-center gap-2">
-            <ConfirmBtn label="Save strategy" icon={CheckCircle2} tone="emerald" busy={busy}
+            <ConfirmBtn label="Save strategy" icon={CheckCircle2} tone="emerald" busy={busy} disabled={!readyToSave}
               onConfirm={save} />
             <span className="text-[11px] text-slate-500">Saves the exact plan you reviewed. Saving never starts trading &mdash; you choose that next.</span>
           </div>
@@ -298,7 +318,8 @@ function PaperPanel({ sid, name, onChange }) {
     );
   }
 
-  const meta = ps(p.paperStatus);
+  const meta = !p.canStart && !['LIVE', 'ARCHIVED', 'HALTED_RISK'].includes(p.paperStatus)
+    ? { label: 'Needs changes', color: 'text-amber-300', dot: 'bg-amber-400' } : ps(p.paperStatus);
   const perf = p.performance || {};
   const live = p.paperStatus === 'LIVE';
   const approvals = p.pendingApprovals || [];
@@ -334,14 +355,14 @@ function PaperPanel({ sid, name, onChange }) {
           ) : (
             arming ? (
               <>
-                <Button size="sm" disabled={busy} onClick={() => cmd('start-paper', { approvalMode: choice })} className="h-7 gap-1 bg-emerald-600 px-2.5 text-[12px] hover:bg-emerald-500">
+                <Button size="sm" disabled={busy || !p.canStart} onClick={() => cmd('start-paper', { approvalMode: choice })} className="h-7 gap-1 bg-emerald-600 px-2.5 text-[12px] hover:bg-emerald-500">
                   {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
                   Confirm start · {choice === 'AUTOPILOT' ? 'Autopilot' : 'Review and approve'}
                 </Button>
                 <button onClick={() => setArming(false)} className="rounded p-1 text-slate-400 hover:text-white"><X className="h-3.5 w-3.5" /></button>
               </>
             ) : (
-              <Button size="sm" disabled={p.paperStatus === 'ARCHIVED'} onClick={() => setArming(true)} className="h-7 gap-1 bg-emerald-600 px-2.5 text-[12px] hover:bg-emerald-500">
+              <Button size="sm" disabled={p.paperStatus === 'ARCHIVED' || !p.canStart} onClick={() => setArming(true)} className="h-7 gap-1 bg-emerald-600 px-2.5 text-[12px] hover:bg-emerald-500">
                 <Play className="h-3.5 w-3.5" />{p.paperStatus === 'STOPPED' ? 'Resume paper trading' : 'Start paper trading'}
               </Button>
             )
@@ -372,7 +393,12 @@ function PaperPanel({ sid, name, onChange }) {
         {!p.approvalMode && <p className="mt-1 text-[10.5px] text-slate-500">Pick how hands-on you want to be, then start. You can change this at any time.</p>}
       </div>
 
-      {err && <p className="text-[12px] font-medium text-red-400">{err}</p>}
+      {(p.entryBlockers || []).length > 0 && (
+        <div role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-[12px] text-amber-200">
+          <strong>{live ? 'New entries blocked' : 'Needs changes'}</strong>: {(p.entryBlockers || []).join(' ')} Existing positions and valid exits are preserved.
+        </div>
+      )}
+      {err && <p role="alert" className="text-[12px] font-medium text-red-400">{err}</p>}
       {msg && (
         <p className={`rounded-lg border p-2 text-[12px] font-medium ${
           msg.t === 'ok' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
@@ -481,8 +507,13 @@ function Detail({ sid, onChange }) {
   useEffect(() => { load(); }, [load]);
 
   const runBt = async () => {
-    setBtBusy(true);
-    try { const j = await (await post(`/v1/albert/studio/strategies/${sid}/backtest`, {})).json(); setBt(j.backtest); }
+    setBtBusy(true); setErr('');
+    try {
+      const r = await post(`/v1/albert/studio/strategies/${sid}/backtest`, {});
+      const j = await r.json();
+      if (r.ok) setBt(j.backtest || { error: 'INCOMPLETE_DATA', message: 'Backtest data unavailable.' });
+      else setErr(j.detail || 'Backtest failed.');
+    } catch (e) { setErr('Backtest failed; no result was saved.'); }
     finally { setBtBusy(false); }
   };
   const doCmd = async (cmd, extra) => {
@@ -498,7 +529,8 @@ function Detail({ sid, onChange }) {
   };
 
   if (!s) return <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800"><Loader2 className="h-5 w-5 animate-spin text-slate-400" /></Card>;
-  const meta = ps(s.paperStatus);
+  const meta = !s.canStart && !['LIVE', 'ARCHIVED', 'HALTED_RISK'].includes(s.paperStatus)
+    ? { label: 'Needs changes', color: 'text-amber-300' } : ps(s.paperStatus);
   return (
     <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
       <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -545,7 +577,7 @@ function Detail({ sid, onChange }) {
             <Methodology bt={bt} contractHash={s.contractHash} />
           </div>
         )}
-        {bt && bt.error && <p className="mt-2 text-[12px] text-amber-400">No historical data available for these assets right now.</p>}
+        {bt && bt.error && <p role="alert" className="mt-2 text-[12px] text-amber-400">{bt.message || 'Historical data is incomplete.'}{(bt.missingAssets || []).length ? ` Missing: ${bt.missingAssets.map((a) => `${a.symbol} (${a.reason})`).join(', ')}.` : ''} No weights were changed and no return was calculated.</p>}
       </div>
 
       {/* Paper trading lives HERE, on the strategy — one journey, no separate setup. */}
@@ -601,7 +633,8 @@ export default function StrategyStudio() {
             </Card>
           )}
           {list.map((s) => {
-            const m = ps(s.paperStatus);
+            const m = !s.canStart && !['LIVE', 'ARCHIVED', 'HALTED_RISK'].includes(s.paperStatus)
+              ? { label: 'Needs changes', color: 'text-amber-300', dot: 'bg-amber-400' } : ps(s.paperStatus);
             return (
               <button key={s.strategyId} onClick={() => { setSel(s.strategyId); setBuilding(false); }}
                 className={`w-full rounded-lg border p-3 text-left transition-colors ${sel === s.strategyId ? 'border-violet-500/50 bg-violet-500/[0.06]' : 'border-slate-800 bg-slate-900 hover:border-slate-700'}`}>

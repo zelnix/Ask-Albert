@@ -5,7 +5,7 @@ universe should bump ALBERT_ENGINE_VERSION so that immutable decision snapshots
 remain reproducible.
 """
 
-ALBERT_ENGINE_VERSION = 'albert-decide-v2'  # v2: Phase G portfolio drawdown protection + precedence insert
+ALBERT_ENGINE_VERSION = 'albert-decide-v3'  # v3: ID-bound closed daily data and frozen verified-entry universe
 
 # Regime-sensitive BUY entry thresholds (opportunity score must be >= this).
 REGIME_BUY_THRESHOLD = {'BULL': 72, 'RANGE': 78, 'BEAR': 85}
@@ -13,8 +13,10 @@ REGIME_BUY_THRESHOLD = {'BULL': 72, 'RANGE': 78, 'BEAR': 85}
 # Fraction of *deployable* USDC the engine is willing to put to work in a regime.
 REGIME_DEPLOY_CEILING = {'BULL': 0.60, 'RANGE': 0.35, 'BEAR': 0.15}
 
-# Liquid v1 discovery universe (held coins are always evaluated too).
-ALBERT_UNIVERSE = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'ADA', 'AVAX', 'DOGE', 'LINK', 'DOT', 'LTC', 'TRX']
+# Liquid v1 discovery universe (held coins are always evaluated too). Strategy
+# capability checks reuse the same list rather than keeping a second allow-list.
+from albert.asset_capabilities import ENGINE_DISCOVERY_ASSETS
+ALBERT_UNIVERSE = list(ENGINE_DISCOVERY_ASSETS)
 
 # Stablecoins are never scored as opportunities.
 STABLES = {'USDC', 'USDT', 'DAI', 'USD', 'TUSD', 'FDUSD', 'BUSD'}

@@ -39,7 +39,7 @@ QTY_Q = Decimal('0.00000001')     # 8dp (satoshi) — buys/sells ROUND_DOWN (nev
 PCT_Q = Decimal('0.01')
 MIN_NOTIONAL = Decimal('10')      # minimum simulated order notional
 
-SUPPORTED_ENGINE_VERSIONS = {'albert-decide-v2'}
+SUPPORTED_ENGINE_VERSIONS = {'albert-decide-v2', 'albert-decide-v3'}
 DECISION_TTL_MIN = 30
 PROPOSAL_TTL_MIN = 30
 
@@ -104,6 +104,31 @@ def qty_dstr(x):
     return str(d.quantize(QTY_Q, rounding=ROUND_DOWN))
 
 
+
+def round_tick(value, tick, mode=ROUND_DOWN):
+    """An exchange tick may be 0.05, not just a decimal-place quantum."""
+    v, q = D(value), D(tick)
+    if v is None or q is None or q <= 0:
+        return None
+    return (v / q).to_integral_value(rounding=mode) * q
+
+
+def execution_limits(qty, fill_px, profile):
+    """Fail closed when a simulated paper fill violates actual provider limits."""
+    if not profile.get('executionVerified'):
+        return 'EXECUTION_MARKET_UNVERIFIED'
+    cost = qty * fill_px
+    for key, val in [('minAmount', qty), ('minCost', cost), ('minPrice', fill_px)]:
+        lower = D(profile.get(key))
+        if lower is not None and val < lower:
+            return key.upper() + '_NOT_MET'
+    for key, val in [('maxAmount', qty), ('maxCost', cost), ('maxPrice', fill_px)]:
+        upper = D(profile.get(key))
+        if upper is not None and val > upper:
+            return key.upper() + '_EXCEEDED'
+    return None
+
+
 def sim_fill(side, ref_px, notional):
     """Deterministic conservative fill. Returns (fill_px: Decimal, fee: Decimal)."""
     ref_px = D(ref_px)
@@ -129,7 +154,7 @@ def sim_fill_p(side, ref_px, notional, profile, price_q=PRICE_Q):
     else:
         fill_px = ref_px * (Decimal('1') - slip)
     fee = (notional * D(profile.get('feeBps')) / BPS)
-    return fill_px.quantize(price_q, rounding=ROUND_HALF_UP), q_cash(fee)
+    return round_tick(fill_px, price_q, ROUND_HALF_UP), q_cash(fee)
 
 
 def size_buy(asset, notional, mark_px, *, profile=None, price_q=PRICE_Q):
@@ -140,10 +165,16 @@ def size_buy(asset, notional, mark_px, *, profile=None, price_q=PRICE_Q):
     notional = q_cash(notional)
     if notional is None or notional <= 0:
         return {'reject': 'BELOW_MIN_NOTIONAL', 'trace': []}
+    if not profile.get('executionVerified') and profile is not EXEC_PROFILE:
+        return {'reject': 'EXECUTION_MARKET_UNVERIFIED', 'trace': []}
     fill_px, fee = sim_fill_p('BUY', mark_px, notional, profile, price_q)
-    qty = q_qty((notional - fee) / fill_px) if fill_px and fill_px > 0 else None
+    qty = round_tick((notional - fee) / fill_px, profile.get('qtyQ') or QTY_Q) if fill_px and fill_px > 0 else None
     if qty is None or qty <= 0:
         return {'reject': 'BELOW_MIN_NOTIONAL', 'trace': []}
+    if profile.get('executionVerified'):
+        blocked = execution_limits(qty, fill_px, profile)
+        if blocked:
+            return {'reject': blocked, 'trace': []}
     return {'reject': None, 'trace': [], 'side': 'BUY', 'asset': (asset or '').upper(),
             'notional': notional, 'fillPx': fill_px, 'fee': fee, 'qty': qty}
 
@@ -151,11 +182,19 @@ def size_buy(asset, notional, mark_px, *, profile=None, price_q=PRICE_Q):
 def size_sell(asset, qty, mark_px, *, profile=None, price_q=PRICE_Q):
     """Build a reduce-only SELL sizing dict for an exact quantity (M5)."""
     profile = profile or EXEC_PROFILE
-    qty = q_qty(qty)
+    if not profile.get('executionVerified') and profile is not EXEC_PROFILE:
+        return {'reject': 'EXECUTION_MARKET_UNVERIFIED', 'trace': []}
+    qty = round_tick(qty, profile.get('qtyQ') or QTY_Q)
     if qty is None or qty <= 0:
         return {'reject': 'BELOW_MIN_NOTIONAL', 'trace': []}
     gross = qty * D(mark_px)
     fill_px, fee = sim_fill_p('SELL', mark_px, gross, profile, price_q)
+    if fill_px is None or fill_px <= 0:
+        return {'reject': 'INVALID_EXIT_PRICE', 'trace': []}
+    if profile.get('executionVerified'):
+        blocked = execution_limits(qty, fill_px, profile)
+        if blocked:
+            return {'reject': blocked, 'trace': []}
     return {'reject': None, 'trace': [], 'side': 'SELL', 'asset': (asset or '').upper(),
             'qty': qty, 'fillPx': fill_px, 'fee': fee}
 
@@ -253,7 +292,7 @@ def _rej(code, msg, trace):
 
 
 def run_entry_gates(*, acct, canonical, mark_px, mark_fresh, mandate, equity_info,
-                    has_open_intent=False):
+                    has_open_intent=False, profile=None):
     """Ordered mandate + risk gates for a paper BUY. Returns a dict with either
     'reject' set (with the failing gate in 'trace') or a sizing result. Sizing can
     only REDUCE the canonical amount."""
@@ -346,6 +385,10 @@ def run_entry_gates(*, acct, canonical, mark_px, mark_fresh, mandate, equity_inf
     notional = q_cash(notional)
     if not g('min_notional', notional is not None and notional >= MIN_NOTIONAL, 'notional=%s' % notional):
         return _rej('BELOW_MIN_NOTIONAL', 'Sized notional is below the minimum.', trace)
+    if profile is not None:
+        sized = size_buy('BTC', notional, mark_px, profile=profile, price_q=profile['priceQ'])
+        sized['trace'] = trace
+        return sized
     fill_px, fee = sim_fill('BUY', mark_px, notional)
     qty = q_qty((notional - fee) / fill_px)
     if not g('positive_qty', qty is not None and qty > 0, 'qty=%s' % qty):
@@ -354,7 +397,7 @@ def run_entry_gates(*, acct, canonical, mark_px, mark_fresh, mandate, equity_inf
             'notional': notional, 'fillPx': fill_px, 'fee': fee, 'qty': qty}
 
 
-def run_exit_gates(*, acct, mark_px, mark_fresh, canonical=None, full=False):
+def run_exit_gates(*, acct, mark_px, mark_fresh, canonical=None, full=False, profile=None):
     """Reduce-only paper SELL. `full`=True is a safe user-initiated exit that does
     not require a canonical SELL; otherwise a canonical SELL decision drives it."""
     trace = []
@@ -385,6 +428,10 @@ def run_exit_gates(*, acct, mark_px, mark_fresh, canonical=None, full=False):
     if not g('positive_qty', sell_qty is not None and sell_qty > 0):
         return _rej('BELOW_MIN_NOTIONAL', 'Nothing to sell.', trace)
     gross = sell_qty * mark_px
+    if profile is not None:
+        sized = size_sell('BTC', sell_qty, mark_px, profile=profile, price_q=profile['priceQ'])
+        sized['trace'] = trace
+        return sized
     fill_px, fee = sim_fill('SELL', mark_px, gross)
     return {'reject': None, 'trace': trace, 'side': 'SELL',
             'qty': sell_qty, 'fillPx': fill_px, 'fee': fee}
@@ -537,7 +584,7 @@ def apply_buy_atomic(col, acct_id, pid, expected_version, idem_key, proposal_id,
         if lot:
             oq = D(lot.get('qty')); ocb = D(lot.get('costBasis'))
             nq = q_qty(oq + qty); ncb = q_cash(ocb + notional)
-            navg = (ncb / nq).quantize(price_q, rounding=ROUND_HALF_UP) if nq > 0 else Decimal('0')
+            navg = round_tick(ncb / nq, price_q, ROUND_HALF_UP) if nq > 0 else Decimal('0')
             for l in lots:
                 if (l.get('asset') or '').upper() == asset:
                     l['qty'] = to128(nq); l['costBasis'] = to128(ncb); l['avgEntry'] = to128(navg)
@@ -551,14 +598,14 @@ def apply_buy_atomic(col, acct_id, pid, expected_version, idem_key, proposal_id,
                          'openedAt': datetime.datetime.utcnow().isoformat(),
                          'entryDecisionSnapshotId': canonical.get('decisionSnapshotId'),
                          'entryDecisionId': canonical.get('decisionId'),
-                         'invalidationPrice': to128(D(canonical.get('invalidationPrice')).quantize(price_q, rounding=ROUND_HALF_UP)) if canonical.get('invalidationPrice') else None,
+                         'invalidationPrice': to128(round_tick(D(canonical.get('invalidationPrice')), price_q)) if canonical.get('invalidationPrice') else None,
                          'positionVersion': 1})
         seq = (acct.get('accountSequence') or 0) + 1
         led = _ledger_entry(seq, 'FILL', lot_id, -notional,
-                            'BUY %s %s @ %s (fee %s) · approval' % (qty_dstr(qty), asset, dstr(fill_px), dstr(fee)),
-                            extra={'side': 'BUY', 'asset': asset, 'qty': qty_dstr(qty), 'fillPx': dstr(fill_px),
+                            'BUY %s %s @ %s (fee %s) · approval' % (qty_dstr(qty), asset, dstr(fill_px, price_q), dstr(fee)),
+                            extra={'side': 'BUY', 'asset': asset, 'qty': qty_dstr(qty), 'fillPx': dstr(fill_px, price_q),
                                    'fee': dstr(fee), 'notional': dstr(notional), 'proposalId': proposal_id})
-        result = {'side': 'BUY', 'asset': asset, 'qty': qty_dstr(qty), 'fillPrice': dstr(fill_px),
+        result = {'side': 'BUY', 'asset': asset, 'qty': qty_dstr(qty), 'fillPrice': dstr(fill_px, price_q),
                   'fee': dstr(fee), 'notional': dstr(notional), 'positionId': lot_id,
                   'decisionSnapshotId': canonical.get('decisionSnapshotId'), 'paperOnly': True}
         applied = {'idemKey': idem_key, 'proposalId': proposal_id, 'result': result,
@@ -579,7 +626,7 @@ def apply_buy_atomic(col, acct_id, pid, expected_version, idem_key, proposal_id,
 
 
 def apply_sell_atomic(col, acct_id, pid, sizing, source='approval', idem_key=None,
-                      proposal_id=None, canonical=None, base_currency='USDC', asset=None):
+                      proposal_id=None, canonical=None, base_currency='USDC', asset=None, price_q=PRICE_Q):
     """Apply a reduce-only SELL as ONE conditional update. `asset` (M5) defaults
     to the sizing/canonical asset (BTC for M1-M4)."""
     asset = (asset or sizing.get('asset') or (canonical or {}).get('asset') or 'BTC').upper()
@@ -626,11 +673,11 @@ def apply_sell_atomic(col, acct_id, pid, sizing, source='approval', idem_key=Non
         seq = (acct.get('accountSequence') or 0) + 1
         led = _ledger_entry(seq, 'FILL', lot.get('lotId'), proceeds,
                             'SELL %s %s @ %s (fee %s, PnL %s) · %s'
-                            % (qty_dstr(qty), asset, dstr(fill_px), dstr(fee), dstr(realized), source),
-                            extra={'side': 'SELL', 'asset': asset, 'qty': qty_dstr(qty), 'fillPx': dstr(fill_px),
+                            % (qty_dstr(qty), asset, dstr(fill_px, price_q), dstr(fee), dstr(realized), source),
+                            extra={'side': 'SELL', 'asset': asset, 'qty': qty_dstr(qty), 'fillPx': dstr(fill_px, price_q),
                                    'fee': dstr(fee), 'proceeds': dstr(proceeds), 'realized': dstr(realized),
                                    'costPortion': dstr(cost_portion), 'proposalId': proposal_id})
-        result = {'side': 'SELL', 'asset': asset, 'qty': qty_dstr(qty), 'fillPrice': dstr(fill_px),
+        result = {'side': 'SELL', 'asset': asset, 'qty': qty_dstr(qty), 'fillPrice': dstr(fill_px, price_q),
                   'fee': dstr(fee), 'proceeds': dstr(proceeds), 'realized': dstr(realized),
                   'paperOnly': True}
         push = {'ledger': led}
