@@ -117,18 +117,12 @@ function PerfHeadline({ perf, position }) {
   );
 }
 
-export function DraftModal({ draft, symbol, onClose, onActivated, onRegenerate, regenerating }) {
-  const [activating, setActivating] = React.useState(false);
-  const activate = async () => {
-    setActivating(true);
-    try {
-      const r = await fetch(`${API_BASE}/v1/albert/strategy`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ draft, pid: getPid() }),
-      });
-      const j = await r.json();
-      if (j && j.status === 'ready') { onActivated(j.strategy); }
-    } catch (e) { /* noop */ } finally { setActivating(false); }
+export function DraftModal({ draft, symbol, onClose, onRegenerate, regenerating }) {
+  const reviewInStudio = () => {
+    const plan = [draft.title, `${symbol} 100% ${draft.position || 'long'}`, draft.thesis,
+      `Original complete chat draft (including horizon, targets, stops and every rule): ${JSON.stringify(draft)}`].join('\n');
+    window.dispatchEvent(new CustomEvent('albert:build-strategy', { detail: { symbol, seed: plan } }));
+    onClose?.();
   };
   return (
     <div className="fixed inset-0 z-[95] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm" onClick={onClose}>
@@ -160,14 +154,14 @@ export function DraftModal({ draft, symbol, onClose, onActivated, onRegenerate, 
         <div className="space-y-1.5">{(draft.rules || []).map((r, i) => <RuleRow key={i} r={r} />)}</div>
 
         <div className="mt-5 flex gap-2">
-          <Button onClick={activate} disabled={activating} className="flex-1 gap-1.5 bg-gradient-to-r from-sky-500 to-violet-500 hover:opacity-90">
-            {activating ? <><Loader2 className="h-4 w-4 animate-spin" />Activating…</> : <><Play className="h-4 w-4" />Activate &amp; track</>}
+          <Button onClick={reviewInStudio} className="flex-1 gap-1.5 bg-gradient-to-r from-sky-500 to-violet-500 hover:opacity-90">
+            <Play className="h-4 w-4" />Review in Strategy Studio
           </Button>
           <Button onClick={onRegenerate} disabled={regenerating} variant="outline" className="gap-1.5 border-slate-700">
             {regenerating ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}Redraft
           </Button>
         </div>
-        <p className="mt-3 text-center text-[10px] leading-relaxed text-slate-500">Paper strategy for tracking &amp; nudges only — Albert never places real orders. Educational, not financial advice.</p>
+        <p className="mt-3 text-center text-[10px] leading-relaxed text-slate-500">Legacy draft only. Studio must review what its paper engine can actually execute before Save or Start; no trade is created here.</p>
       </div>
     </div>
   );
@@ -513,25 +507,19 @@ function BasketSection() {
       .then((r) => r.json()).then(setData).catch(() => {});
   }, []);
   React.useEffect(() => { load(); }, [load]);
-  const build = async () => {
-    setBuilding(true); setDraft(null);
-    try {
-      const r = await fetch(`${API_BASE}/v1/albert/strategy/basket/build`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ goal }),
-      });
-      const d = await r.json();
-      if (d.draft) setDraft(d.draft);
-    } catch (e) { /* noop */ } finally { setBuilding(false); }
+  const build = () => {
+    setDraft(null);
+    window.dispatchEvent(new CustomEvent('albert:build-strategy', {
+      detail: { seed: goal || 'Draft a multi-coin paper strategy using canonical BUY/SELL decisions.' },
+    }));
   };
-  const save = async () => {
+  const save = () => {
     if (!draft) return;
-    setSaving(true);
-    try {
-      await fetch(`${API_BASE}/v1/albert/strategy/basket`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ draft, pid: getPid() }),
-      });
-      setDraft(null); setGoal(''); load();
-    } catch (e) { /* noop */ } finally { setSaving(false); }
+    const plan = [draft.title || 'Multi-coin plan', draft.thesis || '',
+      ...(draft.legs || []).map((l) => `${l.symbol} ${l.weight_pct}% ${l.position || 'long'}.`),
+      `Original complete basket draft: ${JSON.stringify(draft)}`].join('\n');
+    window.dispatchEvent(new CustomEvent('albert:build-strategy', { detail: { seed: plan } }));
+    setDraft(null);
   };
   const closeBasket = async (id) => {
     setClosing(id);
@@ -646,16 +634,10 @@ export default function StrategiesSection() {
     return () => { clearTimeout(t); clearTimeout(clear); };
   }, [focusId, data]);
 
-  const build = async () => {
-    setBuilding(true);
-    try {
-      const r = await fetch(`${API_BASE}/v1/albert/strategy/build`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ symbol, goal }),
-      });
-      const j = await r.json();
-      if (j && j.status === 'ready') setDraft(j.draft);
-    } catch (e) { /* noop */ } finally { setBuilding(false); }
+  const build = () => {
+    window.dispatchEvent(new CustomEvent('albert:build-strategy', {
+      detail: { symbol, seed: goal || `Follow Albert's canonical BUY/SELL for ${symbol} at 100% allocation.` },
+    }));
   };
 
   const closeActive = async () => {
@@ -679,7 +661,7 @@ export default function StrategiesSection() {
   return (
     <div className="space-y-4">
       <SectionHead icon={Crosshair} title="Trading Strategies"
-        blurb={`Crypto strategies Albert builds and babysits — single-coin plays or multi-coin (portfolio-style) strategies, all in one place. Each has entries, profit targets, a stop and if-this-then-that rules on price, time and signals. Albert nudges you when it's time to act, paper-tracks the P&L, and keeps a history of how past plays performed.`} />
+        blurb="Earlier tracked strategies remain readable here. New paper plans are reviewed and saved in Strategy Studio; this older tracker no longer creates plans or paper entries." />
 
       <PanelBoundary label="Guardrails"><GuardrailsCard /></PanelBoundary>
 

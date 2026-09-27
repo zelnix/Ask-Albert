@@ -1,22 +1,19 @@
-"""ID-bound public prices and history for SIMULATION ONLY.
+"""Frozen-CoinGecko-ID public prices and history for SIMULATION ONLY.
 
-Prefer CoinGecko's frozen asset ID; use existing Kraken/Coinbase public prices and
-candles only as optional data sources. Venue listings, timestamps, order limits
-and trading permissions never define whether a paper coin is supported.
+The paper engine uses only the ID-bound CoinGecko path. A Kraken/Coinbase USD
+symbol is not proof of the same asset, so those read-only feeds are not a paper
+price/history fallback. Missing data means WAIT until the next normal cycle;
+existing holdings remain and exits still require a usable price.
 """
 import datetime
 import threading
 import time
 from decimal import Decimal, InvalidOperation
 
-import ccxt
-
 from albert import asset_capabilities as caps
 
-PROVIDERS = ('kraken', 'coinbase')
 DAY_MS = 86_400_000
 MIN_SCORING_CANDLES = 200  # default canonical trend; other features declare own lookback
-MARKET_CATALOG_TTL = 6 * 3600
 PRICE_CACHE_TTL = 45  # retrieval-age limit for simulated fills
 SOURCE_AGE_LIMIT = 15 * 60  # if a source supplies its own timestamp
 HISTORY_CACHE_TTL = 2 * 3600
@@ -41,24 +38,6 @@ class MarketUnavailable(Exception):
         self.coverage = coverage
         self.provider_failures = provider_failures or []
         super().__init__(f'{code}: {detail}')
-
-
-_exchanges = {}
-_locks = {name: threading.RLock() for name in PROVIDERS}
-_loaded_at = {}
-
-
-def _exchange(name):
-    if name not in PROVIDERS:
-        raise MarketUnavailable('PROVIDER_NOT_APPROVED', str(name))
-    ex = _exchanges.get(name)
-    if ex is None:
-        ex = getattr(ccxt, name)({'enableRateLimit': True, 'timeout': 15000})
-        _exchanges[name] = ex
-    if time.time() - _loaded_at.get(name, 0) > MARKET_CATALOG_TTL:
-        ex.load_markets(reload=bool(_loaded_at.get(name)))
-        _loaded_at[name] = time.time()
-    return ex
 
 
 def _positive(value, label):
@@ -134,28 +113,6 @@ def _cg_quote(item):
             'execution': simulation_precision(value)}
 
 
-def _market(name, asset):
-    item = caps.candidate(asset)
-    if not item:
-        raise MarketUnavailable('ASSET_ID_UNKNOWN', str(asset))
-    if item.get('ambiguousTicker'):
-        raise MarketUnavailable('AMBIGUOUS_TICKER', f"{item['symbol']} maps to multiple frozen asset IDs")
-    ex = _exchange(name)
-    # Trust the exchange's loaded metadata, NOT a guessed symbol or exchange ID.
-    allowed = caps.provider_bases(item['symbol'])
-    matched = [m for m in ex.markets.values()
-               if m.get('spot') is True and m.get('active') is not False
-               and str(m.get('quote') or '').upper() == 'USD'
-               and str(m.get('base') or '').upper() in allowed and m.get('id')]
-    if len(matched) != 1:
-        code = 'NO_EXACT_SPOT_USD_PAIR' if not matched else 'AMBIGUOUS_PROVIDER_MARKET'
-        raise MarketUnavailable(code, f"{name}: {item['id']} expected bases {sorted(allowed)}; found {len(matched)}")
-    m = matched[0]
-    if ex.markets.get(m['symbol']) is not m:
-        raise MarketUnavailable('MARKET_IDENTITY_MISMATCH', f'{name}: market missing from catalog')
-    return ex, m, item
-
-
 def _cg_history(item, limit):
     now = time.time()
     cache_key = item['id']
@@ -208,46 +165,11 @@ def _cg_history(item, limit):
 
 
 def ticker(asset):
-    """Real ID-bound USD price for paper marks; no venue execution conditions."""
+    """Only the frozen CoinGecko ID can supply a simulated paper mark."""
     item = caps.candidate(asset)
     if not item:
         raise MarketUnavailable('ASSET_ID_UNKNOWN', str(asset))
-    failures = []
-    try:
-        return _cg_quote(item)
-    except MarketUnavailable as exc:
-        failures.append(f'coingecko: {exc}')
-    for name in PROVIDERS:
-        try:
-            with _locks[name]:
-                ex, listed, item = _market(name, asset)
-                row = ex.fetch_ticker(listed['symbol'])
-                received_ms = int(time.time() * 1000)
-                value = _positive(row.get('last'), 'ticker.last')
-                observed_ms = row.get('timestamp')
-                if observed_ms is not None:
-                    try:
-                        observed_ms = int(observed_ms)
-                        if observed_ms > received_ms + 60_000 or received_ms - observed_ms > SOURCE_AGE_LIMIT * 1000:
-                            raise MarketUnavailable('STALE_PROVIDER_PRICE', f'{name} price event is too old')
-                    except (ValueError, TypeError):
-                        observed_ms = None  # retrieval time is still disclosed
-                return {'assetId': item['id'], 'asset': str(asset).upper(), 'price': str(value),
-                        'provider': name, 'pair': listed['symbol'], 'marketId': listed['id'],
-                        'marketBase': listed['base'], 'marketBaseId': listed.get('baseId'),
-                        'quote': listed['quote'],
-                        'receivedAt': datetime.datetime.fromtimestamp(received_ms / 1000,
-                                                                      datetime.timezone.utc).isoformat(),
-                        'providerTimestamp': observed_ms,
-                        'providerObservedAt': (datetime.datetime.fromtimestamp(observed_ms / 1000,
-                                                                               datetime.timezone.utc).isoformat()
-                                               if observed_ms is not None else None),
-                        'timestampSource': 'provider' if observed_ms is not None else 'retrieval_only',
-                        'retrievalAgeSec': 0,
-                        'execution': simulation_precision(value)}
-        except (ccxt.BaseError, MarketUnavailable, KeyError, ValueError, TypeError) as exc:
-            failures.append(f'{name}: {exc}')
-    raise MarketUnavailable('QUOTE_UNAVAILABLE', '; '.join(failures))
+    return _cg_quote(item)
 
 
 
@@ -307,64 +229,13 @@ def _valid_closed(rows, received_ms):
 
 
 def daily(asset, limit=400):
-    """Real daily observations for the frozen ID; never synthesize missing bars.
+    """ID-bound completed CoinGecko daily samples, including honest data gaps.
 
-    CoinGecko daily samples have no OHLC ranges and USD-volume units. Exchange
-    OHLCV is only an optional public data fallback, not an eligibility test.
+    The canonical scorer decides whether the actual observations satisfy its
+    required lookback. A missing/short history stays unavailable, never padded
+    with a same-ticker exchange series.
     """
     item = caps.candidate(asset)
     if not item:
         raise MarketUnavailable('ASSET_ID_UNKNOWN', str(asset))
-    failures = []
-    cg = None
-    try:
-        cg = _cg_history(item, limit)
-        report = cg['coverage']
-        if (len(cg['bars']) >= min(limit, MIN_SCORING_CANDLES)
-                and not report['missingIntervalsInFeatureWindow']
-                and report['lastClosedUtcMs'] == report['expectedLastClosedUtcMs']
-                and all(b[5] is not None for b in cg['bars'][-30:])):
-            return cg
-    except MarketUnavailable as exc:
-        failures.append({'provider': 'coingecko', 'code': exc.code, 'detail': exc.detail})
-    for name in PROVIDERS:
-        try:
-            with _locks[name]:
-                ex, listed, item = _market(name, asset)
-                if not ex.has.get('fetchOHLCV'):
-                    raise MarketUnavailable('OHLCV_NOT_SUPPORTED', name)
-                now = int(time.time() * 1000)
-                max_per = 720 if name == 'kraken' else 300
-                requested = min(max(int(limit), 32), 720)
-                since = (now // DAY_MS - requested - 2) * DAY_MS
-                rows = []
-                for _ in range(1 if name == 'kraken' else 3):
-                    batch = ex.fetch_ohlcv(listed['symbol'], timeframe='1d', since=since,
-                                           limit=min(max_per, requested + 2))
-                    if not batch:
-                        break
-                    rows.extend(batch)
-                    last_ts = max(int(b[0]) for b in batch if b and b[0] is not None)
-                    if last_ts + DAY_MS >= now // DAY_MS * DAY_MS or len(rows) >= requested + 2:
-                        break
-                    next_since = last_ts + DAY_MS
-                    if next_since <= since:
-                        break
-                    since = next_since
-                bars = _valid_closed(rows, now)[-requested:]
-                coverage = history_coverage(bars, now)
-                if coverage['lastClosedUtcMs'] != coverage['expectedLastClosedUtcMs']:
-                    raise MarketUnavailable('STALE_DAILY_HISTORY', f'{name} daily feed lacks latest closed date',
-                                            coverage=coverage)
-                return {'assetId': item['id'], 'asset': str(asset).upper(), 'provider': name,
-                        'ccxtAdapter': f'ccxt.{name}', 'ccxtMethod': 'fetch_ohlcv',
-                        'pair': listed['symbol'], 'marketId': listed['id'], 'bars': bars,
-                        'coverage': coverage, 'volumeUnit': 'BASE', 'priceType': 'OHLCV',
-                        'closedCount': len(bars), 'latestClosedTs': bars[-1][0]}
-        except (ccxt.BaseError, MarketUnavailable, KeyError, ValueError, TypeError) as exc:
-            failures.append({'provider': name, 'code': exc.code if isinstance(exc, MarketUnavailable) else type(exc).__name__,
-                             'detail': str(exc), 'coverage': exc.coverage if isinstance(exc, MarketUnavailable) else None})
-    if cg:
-        return cg  # partial history is reported to analysis, not padded or hidden
-    raise MarketUnavailable('DAILY_DATA_UNAVAILABLE', '; '.join(f"{f['provider']}: {f['detail']}" for f in failures),
-                            provider_failures=failures)
+    return _cg_history(item, limit)

@@ -38,7 +38,7 @@ export default function AlbertReplyMeta({ text, sources = [], symbol = 'BTC', pi
   const saveAsStrategy = () => {
     try {
       window.dispatchEvent(new CustomEvent('albert:build-strategy', {
-        detail: { symbol: symbol || 'BTC', seed: String(text || '').slice(0, 1200) },
+        detail: { symbol: symbol || 'BTC', seed: String(text || '') },
       }));
     } catch (e) { /* noop */ }
   };

@@ -15,7 +15,32 @@ const post = (path, body) => fetch(`${API_BASE}${path}`, {
   method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify(body || {}),
 });
-const get = (path) => fetch(`${API_BASE}${path}`, { credentials: 'include', cache: 'no-store' });
+const STUDIO_EXEC_RULES = {
+  entryRules: 'CANONICAL_BUY_ONLY', exitRules: 'CANONICAL_SELL_OR_INVALIDATION',
+  profitTaking: 'CANONICAL_SELL_ONLY', invalidation: 'CANONICAL_INVALIDATION_ONLY',
+  sizing: 'MAX_REVIEWED_ASSET_WEIGHT',
+};
+
+const get = (path, signal) => fetch(`${API_BASE}${path}`, { credentials: 'include', cache: 'no-store', signal });
+
+const readStudio = async (path, valid) => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 25000);
+  try {
+    const response = await get(path, controller.signal);
+    if (!response.ok) {
+      const error = new Error('Studio request failed');
+      error.status = response.status;
+      throw error;
+    }
+    const data = await response.json();
+    if (data?.status !== 'ready' || !valid(data)) throw new Error('Invalid Studio response');
+    return data;
+  } finally { clearTimeout(timeout); }
+};
+const readError = (section, error) => error?.status === 401
+  ? 'Your session expired. Please sign in again.'
+  : `${section} could not load${error?.status ? ` (HTTP ${error.status})` : ''}. Please retry.`;
 
 const usd = (v) => (v == null ? '\u2014' : '$' + Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 }));
 const signed = (v) => (v == null ? '\u2014' : (Number(v) >= 0 ? '+' : '') + usd(v).replace('$-', '-$'));
@@ -25,6 +50,8 @@ const PAPER_STATUS = {
   SAVED: { label: 'Saved · not trading', color: 'text-slate-300', dot: 'bg-slate-500' },
   STOPPED: { label: 'Stopped', color: 'text-amber-300', dot: 'bg-amber-400' },
   LIVE: { label: 'Paper trading', color: 'text-emerald-300', dot: 'bg-emerald-400' },
+  UNAVAILABLE: { label: 'Paper worker unavailable', color: 'text-amber-300', dot: 'bg-amber-400' },
+  NEEDS_CHANGES: { label: 'Needs changes · exits only', color: 'text-amber-300', dot: 'bg-amber-400' },
   HALTED_RISK: { label: 'Halted — drawdown limit', color: 'text-rose-300', dot: 'bg-rose-400' },
   ARCHIVED: { label: 'Archived', color: 'text-slate-500', dot: 'bg-slate-600' },
 };
@@ -32,8 +59,8 @@ const ps = (s) => PAPER_STATUS[s] || PAPER_STATUS.SAVED;
 
 // Trade approval — the ONLY two ways a live strategy can behave. "Observe" is gone.
 const APPROVALS = [
-  { id: 'REVIEW', label: 'Review and approve', desc: 'Albert proposes each trade; nothing happens until you approve it.', Icon: HandCoins },
-  { id: 'AUTOPILOT', label: 'Autopilot', desc: 'Albert places the simulated trades himself, in the background.', Icon: Bot },
+  { id: 'REVIEW', label: 'Review and approve', desc: 'Approve proposed BUY/SELL fills yourself. Protective invalidation exits may still reduce existing holdings.', Icon: HandCoins },
+  { id: 'AUTOPILOT', label: 'Autopilot', desc: 'Albert records virtual fills after the reviewed rules and risk gates pass; no exchange orders.', Icon: Bot },
 ];
 
 function PaperBadge() {
@@ -61,10 +88,10 @@ function ConfirmBtn({ label, icon: Icon, onConfirm, tone = 'sky', busy, disabled
   );
 }
 
-function Builder({ onSaved, onCancel }) {
-  const [goal, setGoal] = useState('');
+function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, revisionId = null }) {
+  const [goal, setGoal] = useState(initialGoal);
   const [drafting, setDrafting] = useState(false);
-  const [draft, setDraft] = useState(null);
+  const [draft, setDraft] = useState(initialDraft);
   const [review, setReview] = useState(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
@@ -88,6 +115,7 @@ function Builder({ onSaved, onCancel }) {
 
   const runDraft = async () => {
     if (!goal.trim()) return;
+    if (goal.length > 4000) { setErr('Needs changes — shorten this request before drafting. No instruction was discarded.'); return; }
     setDrafting(true); setErr('');
     try {
       const r = await post('/v1/albert/studio/draft', { goal });
@@ -111,8 +139,8 @@ function Builder({ onSaved, onCancel }) {
     if (!readyToSave) { setErr('Needs changes — wait for a valid review before saving.'); return; }
     setBusy(true); setErr('');
     try {
-      const r = await post('/v1/albert/studio/save', { draft, name: draft.name, confirm: true,
-        idempotencyKey: idem(), expectedHash: review.hash });
+      const r = await post('/v1/albert/studio/save', { draft, name: draft.name, strategyId: revisionId,
+        confirm: true, idempotencyKey: idem(), expectedHash: review.hash });
       const j = await r.json();
       if (r.ok) onSaved(j.strategyId);
       else setErr(j.detail || 'Save failed.');
@@ -124,13 +152,14 @@ function Builder({ onSaved, onCancel }) {
     <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
       <div className="mb-3 flex items-center gap-2">
         <Sparkles className="h-4 w-4 text-violet-400" />
-        <h3 className="text-sm font-bold text-white">Build a strategy with Albert</h3>
+        <h3 className="text-sm font-bold text-white">{revisionId ? 'Review a new version' : 'Build a strategy with Albert'}</h3>
         <button onClick={onCancel} className="ml-auto rounded p-1 text-slate-400 hover:text-white"><X className="h-4 w-4" /></button>
       </div>
+      {revisionId && <p className="mb-3 text-[12px] text-amber-200">Saving a reviewed version stops new entries under the old version. It keeps this strategy’s existing wallet, cash, holdings, exits and history; select a mode and Start the new version when ready.</p>}
       {!draft && (
         <div>
-          <p className="mb-2 text-[13px] text-slate-400">Describe your objective — assets, timeframe, entries, exits, profit-taking, risk. Albert drafts a structured plan for you to review.</p>
-          <textarea rows={4} value={goal} onChange={(e) => setGoal(e.target.value)} placeholder="e.g. A swing basket of SOL, NEAR and FIL weighted 40/30/30, buy pullbacks to the 20-day average, trail stops, 20% reserve."
+          <p className="mb-2 text-[13px] text-slate-400">Describe the exact plan. Albert can execute canonical BUY/SELL decisions, cap each coin at its reviewed weight, keep a reserve, limit position count and use the existing risk/invalidation gates. Conditional pullbacks, trailing stops and fixed profit targets need changes; they will not silently become different rules.</p>
+          <textarea rows={4} value={goal} onChange={(e) => setGoal(e.target.value)} placeholder="e.g. Paper strategy: BTC 60%, ETH 40%. Follow Albert’s canonical BUY/SELL decisions. Keep 20% reserve and at most 2 positions."
             className="w-full resize-none rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-slate-100 outline-none focus:border-violet-500" />
           <Button onClick={runDraft} disabled={drafting || !goal.trim()} className="mt-3 gap-1.5 bg-violet-600 hover:bg-violet-500">
             {drafting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}Draft with Albert
@@ -160,10 +189,14 @@ function Builder({ onSaved, onCancel }) {
             </div>
             <button onClick={addAsset} className="mt-1.5 inline-flex items-center gap-1 text-[12px] font-semibold text-sky-400 hover:text-sky-300"><Plus className="h-3.5 w-3.5" />Add asset</button>
           </div>
-          {['entryRules', 'exitRules', 'profitTaking', 'invalidation'].map((k) => (
-            <label key={k} className="block text-[12px] text-slate-400 capitalize">{k.replace(/([A-Z])/g, ' $1')}
-              <textarea rows={1} value={draft[k] || ''} onChange={(e) => setField(k, e.target.value)} className="mt-1 w-full resize-none rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-sm text-slate-200 outline-none focus:border-sky-500" /></label>
-          ))}
+          <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-[12px] text-slate-300">
+            <p className="font-semibold text-white">The only executable rules in this plan</p>
+            <p>Entry: Albert’s canonical BUY. Exit / profit-taking: canonical SELL or existing invalidation; no independent targets. Position size: no more than each reviewed asset weight. Existing mandate/risk checks still apply.</p>
+            {Object.entries(STUDIO_EXEC_RULES).some(([k, v]) => draft[k] !== v) &&
+              <p role="alert" className="mt-1 text-amber-300">Needs changes — some proposed rule text is not executable. Edit the request and redraft; nothing will be silently substituted.</p>}
+          </div>
+          {draft.requestedPlan && <details className="text-[12px] text-slate-400"><summary className="cursor-pointer">Original request being reviewed</summary><p className="mt-1 whitespace-pre-wrap">{draft.requestedPlan}</p></details>}
+          <button type="button" onClick={() => { setGoal(draft.requestedPlan || goal); setDraft(null); setReview(null); setErr(''); }} className="text-[12px] font-semibold text-sky-400 hover:text-sky-300">Edit request &amp; redraft</button>
           {review && (
             <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
               <p className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400"><ShieldCheck className="h-3.5 w-3.5" />{(review.errors || []).length ? 'Needs changes' : 'Reviewed'} · hash {review.hash}</p>
@@ -208,7 +241,7 @@ function Methodology({ bt, contractHash }) {
             </div>
           ))}
           <p className="col-span-full text-[10px] leading-relaxed text-slate-500">
-            Deterministic historical replay of daily candles, bound to this exact contract version and data snapshot — the same inputs always produce the same result, and Albert never manufactures these numbers.
+            Historical indicator illustration keyed to this contract and data snapshot. It does not replay the reviewed paper BUY/SELL rules or virtual fills; only the paper wallet above shows actual simulated strategy performance.
           </p>
         </div>
       )}
@@ -225,6 +258,7 @@ function Methodology({ bt, contractHash }) {
    =================================================================== */
 function PaperPanel({ sid, name, onChange }) {
   const [p, setP] = useState(null);
+  const [loadError, setLoadError] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [msg, setMsg] = useState(null);
@@ -234,13 +268,19 @@ function PaperPanel({ sid, name, onChange }) {
   const keysRef = React.useRef({});
 
   const load = useCallback(async () => {
+    setLoadError('');
     try {
-      const r = await get(`/v1/albert/studio/strategies/${sid}/paper`);
-      const j = await r.json();
-      if (r.ok) { setP(j); if (j.approvalMode) setChoice(j.approvalMode); }
-    } catch (e) { /* noop */ }
+      const j = await readStudio(`/v1/albert/studio/strategies/${sid}/paper`,
+        (data) => data.strategyId === sid && typeof data.paperStatus === 'string'
+          && typeof data.canStart === 'boolean');
+      setP(j);
+      if (j.approvalMode) setChoice(j.approvalMode);
+    } catch (error) {
+      setP(null);
+      setLoadError(readError('Paper trading status', error));
+    }
   }, [sid]);
-  useEffect(() => { setP(null); setArming(false); setMsg(null); load(); }, [load]);
+  useEffect(() => { setP(null); setLoadError(''); setArming(false); setMsg(null); load(); }, [load]);
   // Live strategies refresh on their own so the card stays honest without a reload.
   useEffect(() => {
     if (!p?.isLive) return undefined;
@@ -313,18 +353,25 @@ function PaperPanel({ sid, name, onChange }) {
   if (!p) {
     return (
       <div className="mt-4 border-t border-slate-800 pt-3">
-        <Loader2 className="h-4 w-4 animate-spin text-slate-500" />
+        {loadError ? (
+          <div className="space-y-2">
+            <p role="alert" className="text-[12px] text-amber-300">{loadError}</p>
+            <Button size="sm" variant="outline" onClick={load} className="border-slate-700 text-slate-200">Retry paper status</Button>
+          </div>
+        ) : <Loader2 className="h-4 w-4 animate-spin text-slate-500" />}
       </div>
     );
   }
 
-  const meta = !p.canStart && !['LIVE', 'ARCHIVED', 'HALTED_RISK'].includes(p.paperStatus)
+  const meta = !p.canStart && (p.entryBlockers || []).length > 0 && !['LIVE', 'UNAVAILABLE', 'NEEDS_CHANGES', 'ARCHIVED', 'HALTED_RISK'].includes(p.paperStatus)
     ? { label: 'Needs changes', color: 'text-amber-300', dot: 'bg-amber-400' } : ps(p.paperStatus);
   const perf = p.performance || {};
   const live = p.paperStatus === 'LIVE';
+  const runningButUnavailable = ['UNAVAILABLE', 'NEEDS_CHANGES'].includes(p.paperStatus);
   const approvals = p.pendingApprovals || [];
   const positions = p.positions || [];
   const activity = p.activity || [];
+  const proposalHistory = p.proposalHistory || [];
   const stale = p.marketData === 'STALE';
 
   return (
@@ -339,7 +386,7 @@ function PaperPanel({ sid, name, onChange }) {
         </span>
         <PaperBadge />
         <div className="ml-auto flex items-center gap-2">
-          {live ? (
+          {(live || runningButUnavailable) ? (
             arming ? (
               <>
                 <Button size="sm" disabled={busy} onClick={() => cmd('stop-paper')} className="h-7 gap-1 bg-red-600 px-2.5 text-[12px] hover:bg-red-500">
@@ -355,14 +402,14 @@ function PaperPanel({ sid, name, onChange }) {
           ) : (
             arming ? (
               <>
-                <Button size="sm" disabled={busy || !p.canStart} onClick={() => cmd('start-paper', { approvalMode: choice })} className="h-7 gap-1 bg-emerald-600 px-2.5 text-[12px] hover:bg-emerald-500">
+                <Button size="sm" disabled={busy || !p.canStart || !!p.modeBlockers?.[choice]} onClick={() => cmd('start-paper', { approvalMode: choice })} className="h-7 gap-1 bg-emerald-600 px-2.5 text-[12px] hover:bg-emerald-500">
                   {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
                   Confirm start · {choice === 'AUTOPILOT' ? 'Autopilot' : 'Review and approve'}
                 </Button>
                 <button onClick={() => setArming(false)} className="rounded p-1 text-slate-400 hover:text-white"><X className="h-3.5 w-3.5" /></button>
               </>
             ) : (
-              <Button size="sm" disabled={p.paperStatus === 'ARCHIVED' || !p.canStart} onClick={() => setArming(true)} className="h-7 gap-1 bg-emerald-600 px-2.5 text-[12px] hover:bg-emerald-500">
+              <Button size="sm" disabled={p.paperStatus === 'ARCHIVED' || !p.canStart || !!p.modeBlockers?.[choice]} onClick={() => setArming(true)} className="h-7 gap-1 bg-emerald-600 px-2.5 text-[12px] hover:bg-emerald-500">
                 <Play className="h-3.5 w-3.5" />{p.paperStatus === 'STOPPED' ? 'Resume paper trading' : 'Start paper trading'}
               </Button>
             )
@@ -375,10 +422,10 @@ function PaperPanel({ sid, name, onChange }) {
         <p className="mb-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-500">Trade approval</p>
         <div className="grid gap-2 sm:grid-cols-2">
           {APPROVALS.map((a) => {
-            const on = (live || p.approvalMode) ? p.approvalMode === a.id : choice === a.id;
+            const on = (live || runningButUnavailable) ? p.approvalMode === a.id : choice === a.id;
             return (
-              <button key={a.id} disabled={busy}
-                onClick={() => (p.approvalMode ? cmd('approval-mode', { approvalMode: a.id }) : setChoice(a.id))}
+              <button key={a.id} disabled={busy || !!p.modeBlockers?.[a.id] || (p.paperStatus === 'NEEDS_CHANGES' && (p.entryBlockers || []).length > 0)}
+                onClick={() => ((live || runningButUnavailable) ? cmd('approval-mode', { approvalMode: a.id }) : setChoice(a.id))}
                 className={`rounded-xl border p-2.5 text-left transition-colors ${on ? 'border-sky-500/50 bg-sky-500/10' : 'border-slate-800 bg-slate-950/50 hover:border-slate-600'} disabled:opacity-60`}>
                 <span className="flex items-center gap-1.5">
                   <a.Icon className={`h-3.5 w-3.5 ${on ? 'text-sky-300' : 'text-slate-400'}`} />
@@ -391,11 +438,12 @@ function PaperPanel({ sid, name, onChange }) {
           })}
         </div>
         {!p.approvalMode && <p className="mt-1 text-[10.5px] text-slate-500">Pick how hands-on you want to be, then start. You can change this at any time.</p>}
+        {p.modeBlockers?.[choice] && <p role="status" className="mt-1 text-[11px] text-amber-300">{p.modeBlockers[choice]}</p>}
       </div>
 
       {(p.entryBlockers || []).length > 0 && (
         <div role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-[12px] text-amber-200">
-          <strong>{live ? 'New entries blocked' : 'Needs changes'}</strong>: {(p.entryBlockers || []).join(' ')} Existing positions and valid exits are preserved.
+          <strong>{p.paperStatus === 'UNAVAILABLE' ? 'Paper worker unavailable' : live ? 'New entries blocked' : 'Needs changes'}</strong>: {(p.entryBlockers || []).join(' ')} Existing positions and valid exits are preserved.
         </div>
       )}
       {err && <p role="alert" className="text-[12px] font-medium text-red-400">{err}</p>}
@@ -410,7 +458,7 @@ function PaperPanel({ sid, name, onChange }) {
         <p className="flex items-center gap-1.5 text-[12px] font-semibold text-rose-300"><AlertTriangle className="h-3.5 w-3.5" />This strategy hit its drawdown limit and needs a reviewed reset before it can trade again.</p>
       )}
       {live && stale && (
-        <p className="flex items-center gap-1.5 text-[11px] text-amber-300"><AlertTriangle className="h-3.5 w-3.5" />Price data is stale — no new entries until it refreshes.</p>
+        <p role="status" className="flex items-center gap-1.5 text-[11px] text-amber-300"><AlertTriangle className="h-3.5 w-3.5" />Waiting for a price. Your holdings stay as they are; Albert will try again on the next normal paper-trading cycle.</p>
       )}
 
       {/* ---- Performance (this strategy's own money) ---- */}
@@ -489,22 +537,42 @@ function PaperPanel({ sid, name, onChange }) {
           ) : <p className="text-[12px] text-slate-500">Nothing has happened on this strategy yet.</p>}
         </div>
       )}
+      {proposalHistory.length > 0 && (
+        <div>
+          <p className="mb-1 text-[11px] font-bold uppercase tracking-wider text-slate-500">Earlier Review proposals · history only</p>
+          <div className="space-y-1">
+            {proposalHistory.map((pr) => (
+              <p key={pr.proposalId} className="text-[11px] text-slate-400">
+                v{pr.strategyVersion} · {pr.side} {pr.asset} · {String(pr.status || '').replace(/_/g, ' ').toLowerCase()}
+              </p>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function Detail({ sid, onChange }) {
+function Detail({ sid, onChange, onRevise }) {
   const [s, setS] = useState(null);
+  const [loadError, setLoadError] = useState('');
   const [bt, setBt] = useState(null);
   const [btBusy, setBtBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
   const load = useCallback(async () => {
-    const j = await (await get(`/v1/albert/studio/strategies/${sid}`)).json();
-    setS(j); setBt(j.backtest || null);
+    setLoadError('');
+    try {
+      const j = await readStudio(`/v1/albert/studio/strategies/${sid}`,
+        (data) => data.strategyId === sid && !!data.contract);
+      setS(j); setBt(j.backtest || null);
+    } catch (error) {
+      setS(null); setBt(null);
+      setLoadError(readError('Strategy details', error));
+    }
   }, [sid]);
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { setS(null); setBt(null); setLoadError(''); load(); }, [load]);
 
   const runBt = async () => {
     setBtBusy(true); setErr('');
@@ -528,8 +596,17 @@ function Detail({ sid, onChange }) {
     finally { setBusy(false); }
   };
 
-  if (!s) return <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800"><Loader2 className="h-5 w-5 animate-spin text-slate-400" /></Card>;
-  const meta = !s.canStart && !['LIVE', 'ARCHIVED', 'HALTED_RISK'].includes(s.paperStatus)
+  if (!s) return (
+    <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
+      {loadError ? (
+        <div className="space-y-2">
+          <p role="alert" className="text-[12px] text-amber-300">{loadError}</p>
+          <Button size="sm" variant="outline" onClick={load} className="border-slate-700 text-slate-200">Retry strategy details</Button>
+        </div>
+      ) : <Loader2 className="h-5 w-5 animate-spin text-slate-400" />}
+    </Card>
+  );
+  const meta = !s.canStart && (s.entryBlockers || []).length > 0 && !['LIVE', 'UNAVAILABLE', 'NEEDS_CHANGES', 'ARCHIVED', 'HALTED_RISK'].includes(s.paperStatus)
     ? { label: 'Needs changes', color: 'text-amber-300' } : ps(s.paperStatus);
   return (
     <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
@@ -537,6 +614,7 @@ function Detail({ sid, onChange }) {
         <h3 className="text-base font-bold text-white">{s.name}</h3>
         <Badge variant="outline" className={`border-slate-700 text-[11px] ${meta.color}`}>{meta.label}</Badge>
         <span className="text-[11px] text-slate-500">v{s.version}</span>
+        {s.paperStatus !== 'ARCHIVED' && <Button size="sm" variant="outline" onClick={() => onRevise?.(s)} className="ml-auto h-7 border-slate-700 text-[12px] text-slate-200">Revise plan</Button>}
       </div>
       <p className="text-[13px] text-slate-300">{s.summary}</p>
 
@@ -554,14 +632,14 @@ function Detail({ sid, onChange }) {
       {/* Backtest */}
       <div className="mt-4">
         <div className="flex items-center gap-2">
-          <p className="flex items-center gap-1.5 text-[12px] font-semibold uppercase tracking-wider text-slate-400"><FlaskConical className="h-3.5 w-3.5" />Backtest</p>
+          <p className="flex items-center gap-1.5 text-[12px] font-semibold uppercase tracking-wider text-slate-400"><FlaskConical className="h-3.5 w-3.5" />Historical context · not a paper-rule replay</p>
           <Button size="sm" onClick={runBt} disabled={btBusy} className="ml-auto h-7 gap-1 bg-slate-700 px-2.5 text-[12px] hover:bg-slate-600">{btBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}Run backtest</Button>
         </div>
         {bt && !bt.error && (
           <div className="mt-2 space-y-2">
             {/* Decision-useful results stay in plain sight. */}
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-              {[['Strategy return', `${bt.totalReturnPct}%`],
+              {[['Illustrative model return', `${bt.totalReturnPct}%`],
                 ['Bitcoin over the same period', `${bt.benchmarkReturnPct}%`],
                 ['Worst drawdown', `${bt.maxDrawdownPct}%`],
                 ['Tested period', `${bt.sampleSizeDays} days · ${bt.dataCoveragePct}% covered`]].map(([l, v]) => (
@@ -572,7 +650,7 @@ function Detail({ sid, onChange }) {
               ))}
             </div>
             <p className="max-w-[80ch] text-[12.5px] leading-relaxed text-slate-300">
-              Over the last {bt.sampleSizeDays} days this plan would have returned {bt.totalReturnPct}% versus {bt.benchmarkReturnPct}% for simply holding Bitcoin, with a worst peak-to-trough fall of {bt.maxDrawdownPct}%. Trading costs are already deducted. Past behaviour is not a promise.
+              Over the last {bt.sampleSizeDays} days, this separate historical illustration returned {bt.totalReturnPct}% versus {bt.benchmarkReturnPct}% for simply holding Bitcoin, with a worst peak-to-trough fall of {bt.maxDrawdownPct}%. It is not a replay of the reviewed plan’s canonical decisions. Trading costs are included in this illustration; actual virtual results are shown in the paper wallet above.
             </p>
             <Methodology bt={bt} contractHash={s.contractHash} />
           </div>
@@ -584,7 +662,7 @@ function Detail({ sid, onChange }) {
       <PaperPanel sid={sid} name={s.name} onChange={() => { load(); onChange && onChange(); }} />
 
       {/* Archive is only offered when the strategy is not trading. */}
-      {s.paperStatus !== 'LIVE' && s.paperStatus !== 'ARCHIVED' && (
+      {s.paperStatus !== 'LIVE' && s.paperStatus !== 'UNAVAILABLE' && s.paperStatus !== 'NEEDS_CHANGES' && s.paperStatus !== 'ARCHIVED' && (
         <div className="mt-3 flex items-center gap-2 border-t border-slate-800 pt-3">
           <ConfirmBtn label="Archive strategy" icon={Archive} tone="slate" busy={busy} onConfirm={() => doCmd('archive')} />
           <span className="text-[11px] text-slate-500">Archiving hides it from your list; nothing is deleted.</span>
@@ -595,18 +673,31 @@ function Detail({ sid, onChange }) {
   );
 }
 
-export default function StrategyStudio() {
+export default function StrategyStudio({ chatGoal = '', chatDraftKey = null, onChatDismiss }) {
   const [list, setList] = useState([]);
+  const [listError, setListError] = useState('');
   const [sel, setSel] = useState(null);
+  const [revision, setRevision] = useState(null);
   const [building, setBuilding] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
-    setLoading(true);
-    try { const j = await (await get('/v1/albert/studio/strategies')).json(); setList(j.strategies || []); }
-    catch (e) { /* noop */ } finally { setLoading(false); }
+    setLoading(true); setListError('');
+    try {
+      const j = await readStudio('/v1/albert/studio/strategies', (data) => Array.isArray(data.strategies));
+      setList(j.strategies);
+    } catch (error) {
+      setList([]); setSel(null);
+      setListError(readError('Strategy list', error));
+    } finally { setLoading(false); }
   }, []);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { if (chatDraftKey) { setRevision(null); setSel(null); setBuilding(true); } }, [chatDraftKey]);
+  const revise = (s) => {
+    setRevision({ id: s.strategyId, version: s.version, goal: s.contract?.requestedPlan || '',
+      draft: { ...(s.contract || {}), name: s.name } });
+    setSel(null); setBuilding(true); onChatDismiss?.();
+  };
   const liveCount = list.filter((s) => s.paperStatus === 'LIVE').length;
 
   return (
@@ -620,23 +711,29 @@ export default function StrategyStudio() {
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />{liveCount} paper trading
           </span>
         )}
-        <Button size="sm" onClick={() => { setBuilding(true); setSel(null); }} className="ml-auto gap-1.5 bg-violet-600 hover:bg-violet-500"><Plus className="h-4 w-4" />New with Albert</Button>
+        <Button size="sm" onClick={() => { onChatDismiss?.(); setRevision(null); setBuilding(true); setSel(null); }} className="ml-auto gap-1.5 bg-violet-600 hover:bg-violet-500"><Plus className="h-4 w-4" />New with Albert</Button>
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="space-y-2 lg:col-span-1">
           {loading && <p className="text-[13px] text-slate-500">Loading…</p>}
-          {!loading && list.length === 0 && !building && (
+          {!loading && listError && (
+            <Card className="border-0 bg-slate-900 p-5 ring-1 ring-amber-500/30">
+              <p role="alert" className="text-[13px] text-amber-200">{listError}</p>
+              <Button size="sm" variant="outline" onClick={load} className="mt-3 border-slate-700 text-slate-200">Retry strategies</Button>
+            </Card>
+          )}
+          {!loading && !listError && list.length === 0 && !building && (
             <Card className="border-0 border-dashed bg-slate-900 p-5 text-center ring-1 ring-slate-800">
               <p className="text-[13px] text-slate-400">No strategies yet. Build your first with Albert.</p>
               <Button size="sm" onClick={() => setBuilding(true)} className="mt-3 gap-1.5 bg-violet-600 hover:bg-violet-500"><Plus className="h-4 w-4" />New with Albert</Button>
             </Card>
           )}
           {list.map((s) => {
-            const m = !s.canStart && !['LIVE', 'ARCHIVED', 'HALTED_RISK'].includes(s.paperStatus)
+            const m = !s.canStart && (s.entryBlockers || []).length > 0 && !['LIVE', 'UNAVAILABLE', 'NEEDS_CHANGES', 'ARCHIVED', 'HALTED_RISK'].includes(s.paperStatus)
               ? { label: 'Needs changes', color: 'text-amber-300', dot: 'bg-amber-400' } : ps(s.paperStatus);
             return (
-              <button key={s.strategyId} onClick={() => { setSel(s.strategyId); setBuilding(false); }}
+              <button key={s.strategyId} onClick={() => { setSel(s.strategyId); setRevision(null); setBuilding(false); onChatDismiss?.(); }}
                 className={`w-full rounded-lg border p-3 text-left transition-colors ${sel === s.strategyId ? 'border-violet-500/50 bg-violet-500/[0.06]' : 'border-slate-800 bg-slate-900 hover:border-slate-700'}`}>
                 <div className="flex items-center justify-between gap-2">
                   <p className="truncate text-sm font-semibold text-white">{s.name}</p>
@@ -653,8 +750,11 @@ export default function StrategyStudio() {
           })}
         </div>
         <div className="lg:col-span-2">
-          {building ? <Builder onCancel={() => setBuilding(false)} onSaved={(sid) => { setBuilding(false); load(); setSel(sid); }} />
-            : sel ? <Detail sid={sel} onChange={load} />
+          {building ? <Builder key={revision ? `${revision.id}:v${revision.version}` : chatDraftKey || 'new'}
+              initialGoal={revision ? revision.goal : chatGoal} initialDraft={revision?.draft || null} revisionId={revision?.id || null}
+              onCancel={() => { setBuilding(false); if (revision) setSel(revision.id); setRevision(null); onChatDismiss?.(); }}
+              onSaved={(sid) => { setBuilding(false); setRevision(null); onChatDismiss?.(); load(); setSel(sid); }} />
+            : sel ? <Detail key={sel} sid={sel} onChange={load} onRevise={revise} />
             : <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800"><p className="text-[13px] text-slate-400">Select a strategy, or build a new one with Albert.</p></Card>}
         </div>
       </div>

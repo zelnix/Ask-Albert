@@ -1,67 +1,67 @@
-# Frozen top-50 plus original-22: 57-asset capability matrix
+# Ask Albert — frozen 57-asset simulation capability matrix
 
-**Status:** locally IMPLEMENTED adapter, Studio and paper guards; synthetically VERIFIED for selected individual code paths only; **0/57 VERIFIED SUPPORTED**, **0 DEPLOYED**. This is not a live-trading permission list. Frozen CoinGecko ranking retrieved **2026-09-27T09:15:20.053470Z**, source `backend/albert/frozen_coingecko_universe.json`; first 50 qualifying original market-cap ranks plus 7 distinct original-22 IDs; USDC is cash/reserve only. Token names/ranks were chosen before exchange checks. MATIC is retained on old lots/contracts but shares canonical CoinGecko ID `polygon-ecosystem-token` with POL; no implicit conversion of its historical bars or allocations.
+**Product boundary:** Simulation only. `backend/albert/frozen_coingecko_universe.json` pins 50 selected CoinGecko IDs plus seven original assets (USDC is reserve cash, not a strategy leg). This table distinguishes an **implemented code path** from a coin's **verified complete paper workflow**. It does not certify live trading, exchange accounts, venue listings, venue order precision/limits, or any future execution capability.
 
-**Raw inventory cautions:** `PROVIDER_INVENTORY_RESULTS.json` recorded public exchange observations but mislabeled some provider checks VERIFIED; `PROVIDER_INVENTORY_ADJUDICATION.md` explains why they are **not** identity proof. **46/57** CoinGecko ID lookups got HTTP 429; the reported **319 asset + 2 catalog** figure counts CCXT method calls, **not actual HTTP requests**. Consequently identity and HTTP-budget compliance remain UNVERIFIED. In the table, `K`/`C` are *preliminary observed* Kraken/CCXT Coinbase (`coinbase`, Advanced Trade) pair + unique closed-day count—not support certifications. `—` means no proven fresh quote/365-day history; consult raw JSON for precise quote timestamp/limits/gaps. All rows need isolated per-coin canonical BUY/HOLD/WAIT/SELL, Review/Autopilot, exits, ledger and backtest proof before final registration.
+**Interpretation:** “Implemented” means the registered symbol has an ID-bound CoinGecko price/history route, canonical strategy validation/decision path and simulated paper guards in code. It is **not** evidence that CoinGecko currently serves sufficient data for that coin or that its draft → Start → BUY/WAIT → exit → ledger → backtest sequence has been fully observed. “Not demonstrated” means the complete per-coin workflow has not been verified in this matrix; isolated backend tests and BTC paper evidence are narrower. A matching exchange ticker/USD pair provides no CoinGecko identity proof, so the paper adapter never uses Kraken/Coinbase prices or history as a fallback. No exchange certification is part of paper trading.
 
-| Rank | CoinGecko asset ID | Asset | K pair · closed days observed | C pair · closed days observed | Exact current blocker / missing proof | Status |
-|---:|---|---|---|---|---|---|
-| 1 | bitcoin | BTC | BTC/USD · 402 | BTC/USD · 402 | CG identity 429; full journey unproven | IMPLEMENTED / UNVERIFIED |
-| 2 | ethereum | ETH | ETH/USD · 402 | ETH/USD · 402 | CG identity 429; full journey unproven | IMPLEMENTED / UNVERIFIED |
-| 4 | binancecoin | BNB | BNB/USD · 402 | BNB/USD · 340 | CG identity 429; Coinbase year-high short, Kraken data preliminary | IMPLEMENTED / UNVERIFIED |
-| 5 | ripple | XRP | XRP/USD · 402 | XRP/USD · 402 | CG identity 429; full journey unproven | IMPLEMENTED / UNVERIFIED |
-| 7 | solana | SOL | SOL/USD · 402 | SOL/USD · 402 | CG identity 429; full journey unproven | IMPLEMENTED / UNVERIFIED |
-| 8 | tron | TRX | TRX/USD · 402 | — | CG identity 429; Kraken data preliminary, Coinbase no USD spot market | IMPLEMENTED / UNVERIFIED |
-| 9 | zcash | ZEC | ZEC/USD · 402 | ZEC/USD · 402 | CG identity 429; full journey unproven | IMPLEMENTED / UNVERIFIED |
-| 10 | figure-heloc | FIGR_HELOC | — | — | Neither approved venue has exact USD spot pair | BLOCKED: NO_EXACT_SPOT_USD_PAIR |
-| 11 | hyperliquid | HYPE | HYPE/USD · 242 | HYPE/USD · 234 | Both venues lack 365-day year-high/confidence coverage; CG identity 429 | BLOCKED: INSUFFICIENT_YEAR_HIGH_LOOKBACK |
-| 12 | dogecoin | DOGE | DOGE/USD · 402 | DOGE/USD · 402 | CG identity 429; Kraken XDG alias needs ID proof | IMPLEMENTED / UNVERIFIED |
-| 13 | chainlink | LINK | LINK/USD · 402 | LINK/USD · 402 | CG ID matched; native product-ID link, HTTP count, full journey unproven | IMPLEMENTED / UNVERIFIED |
-| 14 | monero | XMR | XMR/USD · — | — | Kraken freshness unproven; Coinbase no USD pair; history unqueried | BLOCKED CURRENT ENTRY: FRESHNESS_UNPROVEN |
-| 15 | whitebit | WBT | WBT/USD · — | — | CG identity 429; Kraken freshness unproven, Coinbase no USD pair | BLOCKED CURRENT ENTRY: FRESHNESS_UNPROVEN |
-| 17 | cardano | ADA | ADA/USD · 402 | ADA/USD · 402 | CG identity 429; full journey unproven | IMPLEMENTED / UNVERIFIED |
-| 18 | rain | RAIN | — | — | Neither approved venue has exact USD spot pair; identity 429 | BLOCKED: NO_EXACT_SPOT_USD_PAIR |
-| 19 | leo-token | LEO | — | — | Neither approved venue has exact USD spot pair; identity 429 | BLOCKED: NO_EXACT_SPOT_USD_PAIR |
-| 20 | stellar | XLM | XLM/USD · 402 | XLM/USD · 402 | CG identity 429; full journey unproven | IMPLEMENTED / UNVERIFIED |
-| 21 | near | NEAR | NEAR/USD · 402 | NEAR/USD · 402 | CG identity 429; full journey unproven | IMPLEMENTED / UNVERIFIED |
-| 22 | bitcoin-cash | BCH | BCH/USD · 402 | BCH/USD · 402 | CG identity 429; full journey unproven | IMPLEMENTED / UNVERIFIED |
-| 23 | uniswap | UNI | UNI/USD · 402 | UNI/USD · 402 | CG identity 429; full journey unproven | IMPLEMENTED / UNVERIFIED |
-| 24 | litecoin | LTC | LTC/USD · 402 | LTC/USD · 402 | CG identity 429; full journey unproven | IMPLEMENTED / UNVERIFIED |
-| 25 | canton-network | CC | CC/USD · 321 | — | Year-high/confidence need 365; ticker ID 429; Coinbase no USD pair | BLOCKED: INSUFFICIENT_YEAR_HIGH_LOOKBACK |
-| 26 | sui | SUI | SUI/USD · 402 | SUI/USD · 402 | CG identity 429; full journey unproven | IMPLEMENTED / UNVERIFIED |
-| 28 | avalanche-2 | AVAX | AVAX/USD · 402 | AVAX/USD · 402 | CG identity 429; full journey unproven | IMPLEMENTED / UNVERIFIED |
-| 30 | the-open-network | GRAM | — | — | No exact GRAM/USD; TON rename NOT proven same-ID market/history | BLOCKED: NO_EXACT_SPOT_USD_PAIR / RENAMED_ID_UNPROVEN |
-| 32 | hedera-hashgraph | HBAR | HBAR/USD · 402 | HBAR/USD · 402 | CG ticker ID differs (hedera); migration evidence missing | UNVERIFIED: ID_MISMATCH |
-| 33 | bittensor | TAO | TAO/USD · 402 | TAO/USD · 402 | CG identity 429; full journey unproven | IMPLEMENTED / UNVERIFIED |
-| 34 | shiba-inu | SHIB | SHIB/USD · — | SHIB/USD · — | Both public quotes lack fresh provider event; history not measured | BLOCKED CURRENT ENTRY: FRESHNESS_UNPROVEN |
-| 35 | crypto-com-chain | CRO | CRO/USD · 402 | CRO/USD · 402 | CG ticker ID differs (cronos); migration evidence missing | UNVERIFIED: ID_MISMATCH |
-| 37 | bitway | BTW | — | — | No exact USD spot market; frozen ID/candidate not corroborated by venue | BLOCKED: NO_EXACT_SPOT_USD_PAIR |
-| 39 | memecore | M | — | — | No exact USD spot market; one-letter ticker ambiguous | BLOCKED: NO_EXACT_SPOT_USD_PAIR |
-| 40 | ethena | ENA | ENA/USD · 402 | ENA/USD · 402 | CG identity 429; full journey unproven | IMPLEMENTED / UNVERIFIED |
-| 41 | tether-gold | XAUT | XAUT/USD · — | — | Kraken freshness unproven, Coinbase no USD pair; CG identity 429 | BLOCKED CURRENT ENTRY: FRESHNESS_UNPROVEN |
-| 42 | ondo-finance | ONDO | ONDO/USD · 402 | ONDO/USD · 402 | CG identity 429; full journey unproven | IMPLEMENTED / UNVERIFIED |
-| 43 | quant-network | QNT | QNT/USD · 402 | QNT/USD · 402 | CG identity 429; full journey unproven | IMPLEMENTED / UNVERIFIED |
-| 44 | okb | OKB | OKB/USD · 177 | — | Only observed venue lacks 365-day year-high; Coinbase no USD spot pair | BLOCKED: INSUFFICIENT_YEAR_HIGH_LOOKBACK |
-| 47 | aave | AAVE | AAVE/USD · 402 | AAVE/USD · 402 | CG identity 429; full journey unproven | IMPLEMENTED / UNVERIFIED |
-| 50 | mantle | MNT | MNT/USD · — | — | Kraken freshness unproven, Coinbase no USD pair; CG identity 429 | BLOCKED CURRENT ENTRY: FRESHNESS_UNPROVEN |
-| 51 | polkadot | DOT | DOT/USD · 402 | DOT/USD · 402 | CG identity 429; full journey unproven | IMPLEMENTED / UNVERIFIED |
-| 52 | pump-fun | PUMP | PUMP/USD · 402 | PUMP/USD · 402 | CG identity 429; full journey unproven | IMPLEMENTED / UNVERIFIED |
-| 53 | worldcoin-wld | WLD | WLD/USD · 402 | WLD/USD · 402 | CG ticker ID differs (worldcoin); migration evidence missing | UNVERIFIED: ID_MISMATCH |
-| 54 | aster-2 | ASTER | ASTER/USD · 342 | ASTER/USD · — | Both venues lack 365-day year-high coverage or fresh mark | BLOCKED: INSUFFICIENT_YEAR_HIGH_LOOKBACK |
-| 55 | morpho | MORPHO | MORPHO/USD · — | MORPHO/USD · 402 | CG identity 429; Coinbase data preliminary, Kraken freshness unproven | IMPLEMENTED / UNVERIFIED |
-| 56 | pax-gold | PAXG | PAXG/USD · 402 | PAXG/USD · — | CG identity 429; Kraken data preliminary, Coinbase freshness unproven | IMPLEMENTED / UNVERIFIED |
-| 57 | pepe | PEPE | PEPE/USD · 402 | PEPE/USD · 402 | CG identity 429; precision/identity/full journey unproven | IMPLEMENTED / UNVERIFIED |
-| 58 | world-liberty-financial | WLFI | WLFI/USD · — | WLFI/USD · — | Both venue quotes freshness unproven; CG identity 429 | BLOCKED CURRENT ENTRY: FRESHNESS_UNPROVEN |
-| 59 | sky | SKY | SKY/USD · — | SKY/USD · — | Both venue quotes freshness unproven; CG identity 429 | BLOCKED CURRENT ENTRY: FRESHNESS_UNPROVEN |
-| 60 | internet-computer | ICP | ICP/USD · 402 | ICP/USD · 402 | CG identity 429; full journey unproven | IMPLEMENTED / UNVERIFIED |
-| 62 | arbitrum | ARB | ARB/USD · 402 | ARB/USD · 402 | CG identity 429; full journey unproven | IMPLEMENTED / UNVERIFIED |
-| 63 | htx-dao | HTX | — | — | Neither approved venue has exact USD spot pair | BLOCKED: NO_EXACT_SPOT_USD_PAIR |
-| 73 | polygon-ecosystem-token | POL (legacy MATIC) | POL/USD · — | POL/USD · 402 | CG identity 429; MATIC→POL migration and identity proof missing | UNVERIFIED: RENAMED_ID / HISTORY_UNJOINED |
-| 82 | cosmos | ATOM | ATOM/USD · — | ATOM/USD · 402 | CG identity 429; Coinbase data preliminary, Kraken freshness unproven | IMPLEMENTED / UNVERIFIED |
-| 84 | filecoin | FIL | FIL/USD · — | FIL/USD · 402 | CG identity 429; Coinbase data preliminary, Kraken freshness unproven | IMPLEMENTED / UNVERIFIED |
-| 94 | aptos | APT | APT/USD · 402 | APT/USD · 402 | CG identity 429; full journey unproven | IMPLEMENTED / UNVERIFIED |
-| 137 | optimism | OP | OP/USD · — | OP/USD · 402 | CG ID matched; Coinbase native product link/HTTP count/full journey unproven | IMPLEMENTED / UNVERIFIED |
-| 90 | injective-protocol | INJ | INJ/USD · 402 | INJ/USD · 402 | CG ticker ID differs (injective); migration evidence missing | UNVERIFIED: ID_MISMATCH |
-| 118 | celestia | TIA | TIA/USD · 402 | TIA/USD · 402 | CG ID matched; native product-ID link/HTTP count/full journey unproven | IMPLEMENTED / UNVERIFIED |
+| Symbol | Frozen CoinGecko ID | Simulation code path | Full per-coin paper workflow |
+|---|---|---|---|
+| BTC | bitcoin | Implemented | Not demonstrated |
+| ETH | ethereum | Implemented | Not demonstrated |
+| BNB | binancecoin | Implemented | Not demonstrated |
+| XRP | ripple | Implemented | Not demonstrated |
+| SOL | solana | Implemented | Not demonstrated |
+| TRX | tron | Implemented | Not demonstrated |
+| ZEC | zcash | Implemented | Not demonstrated |
+| FIGR_HELOC | figure-heloc | Implemented | Not demonstrated |
+| HYPE | hyperliquid | Implemented | Not demonstrated |
+| DOGE | dogecoin | Implemented | Not demonstrated |
+| LINK | chainlink | Implemented | Not demonstrated |
+| XMR | monero | Implemented | Not demonstrated |
+| WBT | whitebit | Implemented | Not demonstrated |
+| ADA | cardano | Implemented | Not demonstrated |
+| RAIN | rain | Implemented | Not demonstrated |
+| LEO | leo-token | Implemented | Not demonstrated |
+| XLM | stellar | Implemented | Not demonstrated |
+| NEAR | near | Implemented | Not demonstrated |
+| BCH | bitcoin-cash | Implemented | Not demonstrated |
+| UNI | uniswap | Implemented | Not demonstrated |
+| LTC | litecoin | Implemented | Not demonstrated |
+| CC | canton-network | Implemented | Not demonstrated |
+| SUI | sui | Implemented | Not demonstrated |
+| AVAX | avalanche-2 | Implemented | Not demonstrated |
+| GRAM | the-open-network | Implemented | Not demonstrated |
+| HBAR | hedera-hashgraph | Implemented | Not demonstrated |
+| TAO | bittensor | Implemented | Not demonstrated |
+| SHIB | shiba-inu | Implemented | Not demonstrated |
+| CRO | crypto-com-chain | Implemented | Not demonstrated |
+| BTW | bitway | Implemented | Not demonstrated |
+| M | memecore | Implemented | Not demonstrated |
+| ENA | ethena | Implemented | Not demonstrated |
+| XAUT | tether-gold | Implemented | Not demonstrated |
+| ONDO | ondo-finance | Implemented | Not demonstrated |
+| QNT | quant-network | Implemented | Not demonstrated |
+| OKB | okb | Implemented | Not demonstrated |
+| AAVE | aave | Implemented | Not demonstrated |
+| MNT | mantle | Implemented | Not demonstrated |
+| DOT | polkadot | Implemented | Not demonstrated |
+| PUMP | pump-fun | Implemented | Not demonstrated |
+| WLD | worldcoin-wld | Implemented | Not demonstrated |
+| ASTER | aster-2 | Implemented | Not demonstrated |
+| MORPHO | morpho | Implemented | Not demonstrated |
+| PAXG | pax-gold | Implemented | Not demonstrated |
+| PEPE | pepe | Implemented | Not demonstrated |
+| WLFI | world-liberty-financial | Implemented | Not demonstrated |
+| SKY | sky | Implemented | Not demonstrated |
+| ICP | internet-computer | Implemented | Not demonstrated |
+| ARB | arbitrum | Implemented | Not demonstrated |
+| HTX | htx-dao | Implemented | Not demonstrated |
+| POL | polygon-ecosystem-token | Implemented | Not demonstrated |
+| ATOM | cosmos | Implemented | Not demonstrated |
+| FIL | filecoin | Implemented | Not demonstrated |
+| APT | aptos | Implemented | Not demonstrated |
+| OP | optimism | Implemented | Not demonstrated |
+| INJ | injective-protocol | Implemented | Not demonstrated |
+| TIA | celestia | Implemented | Not demonstrated |
 
-**Operational rule:** Start is permitted only for a registered, fully attested path (even when the engine says WAIT). A fresh public event-time price, actual market precision/limits, canonical decision and applicable risk gates are still required for a BUY or a valid SELL. Outages cannot fabricate an exit or delete positions/history. The present manifest has **no** `verifiedAssetIds`; all new BUYs fail closed. This is a **not-yet-deployed preview change**, not evidence that any 57-coin trade has executed.
+**Operational rule:** A registered, mandate-allowed strategy can be drafted, saved and Started while market data is unavailable; its engine action is WAIT, never a fabricated BUY. A simulated BUY needs an available, correctly ID-bound CoinGecko price, sufficient actual history for the strategy's indicators, a canonical BUY, user approval or Autopilot and the existing mandate/risk checks. If price is unavailable, show **Waiting for a price**, leave virtual cash and holdings unchanged and try again on the next normal paper-trading cycle—no order queue. Existing positions can SELL only with a usable verified price; losing entry eligibility does not erase a holding, force a sell or rewrite its ledger. Paper quantities/fees/slippage use the app's simulation model, not exchange orders, precision, limits or failure rules. The legacy MATIC alias maps to POL's frozen ID for existing lots; new MATIC entries require explicit POL review. Previous exchange inventory files are historical observations, not support criteria or full-workflow evidence.

@@ -60,9 +60,7 @@ import DailyReportModal from './components/DailyReport';
 import { SECTIONS, LEGACY_SECTIONS, sec, BTC_ONLY_SECTIONS, REMOVED_SECTIONS, PRIMARY_NAV, TECH_GROUPS, PRIMARY_IDS } from './lib/sections';
 import { speakAlbert, stopAlbert, prefetchAlbert, getVoicePref, setVoicePref, previewVoice } from './lib/albertVoice';
 import { CoinIcon, Shimmer, ChartTooltip, QuantGauge, InfoBlock, InfoTip, TapInfo, AiReview, SectionHead, DemoBadge, Spark, LevGauge, ComingSoonSection } from './components/shared';
-import StrategiesSection from './components/Strategies';
 import AlertEngineSection from './components/AlertEngine';
-import { DraftModal as StrategyDraftModal } from './components/Strategies';
 import AnalogsSection from './components/Analogs';
 import CrossMarketSection from './components/CrossMarket';
 import RiskSection from './components/Risk';
@@ -3228,8 +3226,7 @@ export default function DashboardPage() {
   const [active, setActive] = useState('home');
   const [homeParams, setHomeParams] = useState({ horizon: '7D', focus: null, mdHorizon: 'SWING' });
   const skipUrlPush = React.useRef(false);
-  const [chatStrategy, setChatStrategy] = useState(null); // {draft, symbol} — from "Save as strategy" in chat
-  const [chatStrategyBuilding, setChatStrategyBuilding] = useState(false);
+  const [chatStrategy, setChatStrategy] = useState(null); // Unsaved chat plan routed to Studio review
   const [showReport, setShowReport] = useState(false);
   const [news, setNews] = useState(__newsCache);
   const [newsStatus, setNewsStatus] = useState(__newsCache ? 'ready' : 'loading');
@@ -3373,23 +3370,15 @@ export default function DashboardPage() {
     if (btc) setCompareOpen(false);
   }, [symbol, authUser]);
 
-  // "Save as strategy" from a chat answer -> build a draft, then open the review modal.
+  // Chat can initiate only Studio's draft -> review -> save flow. Never create a
+  // separate legacy tracked strategy or discard the chat plan's assets/weights.
   useEffect(() => {
-    const onBuild = async (e) => {
-      const sym = (e.detail && e.detail.symbol) || symbol;
-      const seed = (e.detail && e.detail.seed) || '';
-      setChatStrategyBuilding(true);
-      setChatStrategy({ draft: null, symbol: sym });
-      try {
-        const r = await fetch(`${API_BASE}/v1/albert/strategy/build`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ symbol: sym, goal: seed ? `Turn my own analysis below into a concrete strategy:\n${seed}` : '' }),
-        });
-        const j = await r.json();
-        if (j && j.status === 'ready') setChatStrategy({ draft: j.draft, symbol: sym });
-        else setChatStrategy(null);
-      } catch (err) { setChatStrategy(null); }
-      finally { setChatStrategyBuilding(false); }
+    const onBuild = (e) => {
+      const seed = String(e.detail?.seed || '').trim();
+      const sym = String(e.detail?.symbol || symbol).toUpperCase();
+      setChatStrategy({ goal: seed || `Follow Albert's canonical BUY and SELL decisions for ${sym} at 100% allocation.`,
+        key: `${Date.now()}-${Math.random()}` });
+      setActive('strategies');
     };
     window.addEventListener('albert:build-strategy', onBuild);
     return () => window.removeEventListener('albert:build-strategy', onBuild);
@@ -3697,7 +3686,7 @@ export default function DashboardPage() {
     if (active === 'performance') return <PerformanceHubSection d={d} />;
     if (active === 'timemachine') return <TimeMachineSection />;
     if (active === 'ask') return <AskAlbert onNav={setActive} />;
-    if (active === 'strategies') return <StrategyStudio onNav={setActive} />;
+    if (active === 'strategies') return <StrategyStudio chatGoal={chatStrategy?.goal} chatDraftKey={chatStrategy?.key} onChatDismiss={() => setChatStrategy(null)} />;
     if (active === 'alert-engine') return <AlertEngineSection />;
     if (active === 'alerts') return <AlertsSection d={d} alertsData={alertsData} onAck={ackAlerts} filter={alertFilter} onFilter={setAlertFilter} coins={coins} />;
     if (active === 'settings') return <SettingsSection />;
@@ -3709,24 +3698,6 @@ export default function DashboardPage() {
     <div className="relative min-h-screen bg-slate-950 text-slate-100">
       {albertBioOpen && <AlbertBioModal onClose={() => setAlbertBioOpen(false)} />}
       <AlbertVoiceToast />
-      {chatStrategyBuilding && !chatStrategy?.draft && (
-        <div className="fixed inset-0 z-[95] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
-          <div className="flex items-center gap-3 rounded-2xl border border-slate-700 bg-slate-900 px-6 py-5 shadow-2xl">
-            <img src="/albert.png" alt="Albert" className="h-9 w-9 rounded-full object-cover ring-1 ring-sky-500/40" />
-            <div>
-              <p className="text-sm font-bold text-white">Albert is drafting your strategy…</p>
-              <p className="text-[12px] text-slate-400">Turning his call into a trackable plan</p>
-            </div>
-            <Loader2 className="ml-2 h-5 w-5 animate-spin text-sky-400" />
-          </div>
-        </div>
-      )}
-      {chatStrategy?.draft && (
-        <StrategyDraftModal draft={chatStrategy.draft} symbol={chatStrategy.symbol}
-          onClose={() => setChatStrategy(null)}
-          onRegenerate={() => { window.dispatchEvent(new CustomEvent('albert:build-strategy', { detail: { symbol: chatStrategy.symbol, seed: '' } })); }}
-          onActivated={() => { setChatStrategy(null); setActive('strategies'); }} />
-      )}
       <style>{`img[alt="Albert"]{cursor:pointer}`}</style>
       <div aria-hidden className="pointer-events-none fixed inset-0 bg-[radial-gradient(55rem_38rem_at_-8%_-12%,rgba(247,147,26,0.10),transparent_58%),radial-gradient(52rem_40rem_at_112%_6%,rgba(109,94,246,0.14),transparent_55%)]" />
       {compareOpen && symbol !== 'BTC' && d && (

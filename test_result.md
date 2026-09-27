@@ -16302,3 +16302,113 @@ agent_communication:
       retry UI prevents an infinite spinner but cannot restore a broken gateway.
       Do not claim the preview infrastructure has been fixed. No deployment or
       environment/port changes were made, per the user's explicit constraints.
+
+# Focused simulation-only code-review follow-up (user-approved)
+user_problem_statement: |
+  Fail closed on unverified Kraken/Coinbase fallback identity for quote and history,
+  ensure unavailable paper data means WAIT/no BUY while valid exits still require a
+  usable price; add Strategy Studio list/detail/paper HTTP failure and Retry states;
+  replace outdated exchange-gated capability matrix. Screenshot own-API failures
+  and incomplete-history/invalid-saved-Start states using isolated temporary
+  test-account fixtures only if necessary; cleanup and leave existing strategies
+  and ledger untouched. No third-party API mocks, frontend testing agent, or deploy.
+backend:
+  - task: "Simulation fallback asset-ID verification and paper mark fail-closed"
+    implemented: true
+    working: "NA"
+    file: "backend/albert/market_adapter.py, backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          User corrected product scope mid-task: no exchange certification or
+          new pending-order workflow. The paper adapter now uses ONLY the frozen
+          CoinGecko ID for price/history, not any Kraken/Coinbase same-ticker
+          fallback. Missing data makes the normal cycle WAIT; the paper mark
+          rejects non-CoinGecko or wrong-ID cached quotes. Existing decision,
+          approval/Autopilot, virtual cash/holdings and risk/exit rules remain.
+frontend:
+  - task: "Strategy Studio list/detail/paper failure and Retry states"
+    implemented: true
+    working: "NA"
+    file: "app/components/StrategyStudio.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Own GETs check HTTP status/response shape and abort after timeout;
+          list errors never display the empty-list state, detail and panel show
+          Retry instead of perpetual spinners. Browser screenshots only after
+          backend checks; frontend testing agent forbidden by user.
+metadata:
+  created_by: "main_agent"
+  version: "1.0"
+  test_sequence: 1
+  run_ui: false
+test_plan:
+  current_focus:
+    - "Verify paper price/history are CoinGecko ID-only; no exchange fallback, venue calls or provider mocks"
+    - "Verify unavailable mark/history causes WAIT, no BUY/ledger mutation; normal cycle will retry"
+    - "Verify held-position exit requires a usable ID-bound CoinGecko price"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+agent_communication:
+  - agent: "main"
+    message: |
+      Read this follow-up and Testing Protocol. Test backend first; screenshots
+      later, NEVER invoke frontend testing agent. Use isolated internal cache/mark
+      fixtures only. Do NOT mock response from CoinGecko/Kraken/Coinbase or call
+      public providers; user did not authorize provider mocks. No real Mongo writes,
+      no existing strategy/ledger mutation, no env/port change, no deployment.
+      Existing /app/memory/test_credentials.md has seeded session; only use if
+      needed. Previous 502 preview host/gateway incident remains unresolved.
+      Report exact tests/pass/fail and product defects. Avoid extraneous scripts.
+      User's correction: paper engine stays ordinary decision -> approval or
+      Autopilot -> virtual BUY/SELL with available CoinGecko-ID price. NO pending
+      queue, order types, native-market-ID attestation, exchange restrictions or
+      exchange failures. Missing price = WAIT, holdings unchanged, next normal
+      cycle retries. Studio displays "Waiting for a price" for stale held marks.
+
+# Unified Studio strategy conversion — CODE-ONLY, USER FORBIDS ALL TESTING FOR NOW
+user_problem_statement: |
+  New chat strategies must use Studio draft/review/save, not a separate legacy
+  paper entry. Saved supported entry/exit/allocation/risk rules must govern the
+  existing paper worker; unsupported prose must show Needs changes. Latest
+  owner-owned versions must retain ONE wallet and supersede old Review proposals;
+  Start must reflect enabled, functioning selected mode and Stop must prevent
+  new Review proposals while preserving valid exits. No exchange functionality,
+  order queue, deployment, tests, screenshots or fixtures without fresh approval.
+implementation_status: "Code changed; UNVERIFIED. No tests, screenshots or fixtures run for this request."
+changed_files:
+  - app/page.js
+  - app/components/AlbertReplyMeta.js
+  - app/components/BasketChatCard.js
+  - app/components/Strategies.js
+  - app/components/StrategyStudio.js
+  - backend/server.py
+  - memory/PRODUCT_SCOPE.md
+proposed_checks_requiring_separate_user_approval:
+  backend:
+    - "Legacy POST create/build rejected; legacy GET remains readable; chat BTC/ETH weights retained in Studio and exact reviewed hash saved"
+    - "Conditional pullback/stop/target plan rejected before Save, canonical preset accepted, per-asset weight/reserve/position caps enforced in Review, Autopilot and approval"
+    - "Two versions share wallet ID and preserve cash, lots, exits and ledger; pending old Review proposals become SUPERSEDED and cannot execute"
+    - "Disabled/stale worker or disabled mode prevents truthful Start; Stop makes no new Review proposal or BUY; valid priced exits continue, unavailable marks cause WAIT"
+  screenshots_only_if_approved:
+    - "Chat Save goes to prefilled Studio review; unsupported plan shows Needs changes and disabled Save"
+    - "Revision retains same virtual wallet, shows old proposal supersession, and Review/Autopilot Start/Stop states are accurate"
+    - "Studio list/detail/paper error and Retry screens, and prior incomplete-history and invalid-saved-Start states if test-account fixtures separately permitted"
+remaining_risks: |
+  All four code changes are unverified. No simulated fills, wallet writes or user
+  data mutations were performed by this task. Previous Cloudflare 502 remains
+  unresolved. Third-party provider responses must not be mocked without consent.
+  Version switching spans multiple MongoDB documents without a transaction;
+  interruption may leave a wallet safely paused pending recovery. Free-form chat
+  plans not explicitly limited to the canonical preset are intentionally blocked
+  until the user rewrites/reviews them; no general rule interpreter was added.
