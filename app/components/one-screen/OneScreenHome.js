@@ -114,8 +114,8 @@ const HomeTicker = ({ d, ticker, snapshot, onNav, dashboardStatus }) => {
     <div aria-label="Market snapshot ticker" className="order-last flex w-full shrink-0 items-center justify-between gap-0 overflow-x-auto [scrollbar-width:thin] xl:order-none xl:min-w-0 xl:w-auto xl:flex-1 xl:shrink">
       {items.map((entry, index) => <button type="button" key={entry.title} onClick={() => setItem(index)} aria-label={`${entry.title}: ${entry.value}. Open explanation`}
         className="flex min-h-9 shrink-0 flex-col justify-center whitespace-nowrap rounded-md border border-transparent px-1 text-left hover:border-sky-500/40 hover:bg-slate-800/70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400">
-        <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">{entry.title}{entry.state && entry.state !== 'ready' ? ` · ${entry.state}` : ''}</span>
-        <span className={`text-xs font-bold ${entry.state && entry.state !== 'ready' ? 'text-amber-200' : 'text-white'}`}>{entry.value}</span>
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">{entry.title}</span>
+        <span className="text-xs font-bold text-white">{entry.value}</span>
       </button>)}
     </div>
     {item != null && <ModalShell title={items[item].title} onClose={close} className="max-w-xl">
