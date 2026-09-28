@@ -53,7 +53,7 @@ const DashboardAskPanel = ({ selected, onNav, onEvidence, stateId }) => {
       <div ref={endRef} />
     </div>
     {selected && <div className="border-t border-slate-800 px-3.5 py-2 text-xs text-sky-200">
-      <div className="flex items-center gap-1.5"><MessageCircle className="h-3.5 w-3.5" />Context: {selected.title}<button type="button" onClick={() => send(`Explain ${selected.title}: what is observed, why it matters to me, how the evidence supports it and when it updates.`)} disabled={busy} className="ml-auto font-semibold underline disabled:opacity-50">Explain</button></div>
+      <div className="flex items-center gap-1.5"><MessageCircle className="h-3.5 w-3.5" />Context: {selected.title}<button type="button" onClick={() => send(`Regarding ${selected.title}${selected.commentary ? ': ' + selected.commentary : ''}.\n\nExplain what is observed, why it matters to me, how the evidence supports it and when it updates.`)} disabled={busy} className="ml-auto font-semibold underline disabled:opacity-50">Explain</button></div>
       {selected.source && <p className="mt-1 truncate text-[11px] text-slate-400" title={`Source: ${selected.source}; as of ${selected.asOf || 'unavailable'}; version: ${selected.version || 'unavailable'}`}>Source {selected.source} · {selected.asOf || 'time unavailable'} · {selected.version || 'version unavailable'}{selected.to && <> · <a href={`/?section=${encodeURIComponent(selected.to)}`} onClick={(e) => { e.preventDefault(); onNav(selected.to); }} className="text-sky-300 underline">Detail</a></>}</p>}
     </div>}
     <form onSubmit={(e) => { e.preventDefault(); send(); }} className="flex items-end gap-2 border-t border-slate-800 p-3">

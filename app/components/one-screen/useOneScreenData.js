@@ -7,14 +7,14 @@ const endpoint = (name) => `${API_BASE}/v1/${name}`;
 const previewBody = (assetId) => ({ assetId, horizon: 'P7D', quoteCurrency: 'USD', phaseMode: 'ASSESSED', ...(assetId === 'ETH' ? { modelVersion: 'v1', historyDays: 45 } : {}) });
 
 const FOCUS_SOURCES = {
-  brief: ['sop', 'outlook'], paper: ['paper'], portfolio: ['sop', 'paper'],
+  brief: ['sop', 'outlook', 'brief'], paper: ['paper'], portfolio: ['sop', 'paper'],
   btc: ['outlook'], intelligence: ['sop', 'driver', 'streams', 'outlook', 'eth'], news: ['sop'],
   evidence: ['sop', 'paper', 'outlook'], flows: ['streams', 'etf'],
   radar: ['streams', 'paper'],
 };
-const HOME_SOURCES = ['sop', 'paper', 'outlook', 'streams', 'driver', 'etf', 'eth', 'whales', 'network', 'sentiment'];
-const EMPTY_DATA = { sop: null, paper: null, outlook: null, eth: null, streams: null, driver: null, etf: null, whales: null, network: null, sentiment: null };
-const EMPTY_HEALTH = { sop: 'loading', paper: 'loading', outlook: 'loading', eth: 'loading', streams: 'loading', driver: 'loading', etf: 'loading', whales: 'loading', network: 'loading', sentiment: 'loading' };
+const HOME_SOURCES = ['sop', 'paper', 'outlook', 'streams', 'driver', 'etf', 'eth', 'whales', 'network', 'sentiment', 'brief'];
+const EMPTY_DATA = { sop: null, paper: null, outlook: null, eth: null, streams: null, driver: null, etf: null, whales: null, network: null, sentiment: null, brief: null };
+const EMPTY_HEALTH = { sop: 'loading', paper: 'loading', outlook: 'loading', eth: 'loading', streams: 'loading', driver: 'loading', etf: 'loading', whales: 'loading', network: 'loading', sentiment: 'loading', brief: 'loading' };
 const useOneScreenData = (enabled, focus = 'home', ownerId = null) => {
   const [data, setData] = useState(EMPTY_DATA);
   const [health, setHealth] = useState(EMPTY_HEALTH);
@@ -80,6 +80,7 @@ const useOneScreenData = (enabled, focus = 'home', ownerId = null) => {
     if (wanted.includes('whales')) read('whales', endpoint('whales'));
     if (wanted.includes('network')) read('network', endpoint('network-health'));
     if (wanted.includes('sentiment')) read('sentiment', endpoint('fear-greed'));
+    if (wanted.includes('brief')) read('brief', endpoint('albert/brief'));
   }, [read, wanted]);
   useEffect(() => {
     if (!enabled) { mounted.current = false; return; }

@@ -61,16 +61,17 @@ const MarketSeries = ({ data }) => Array.isArray(data?.series) && data.series.le
 
 /* ── Area ── Render available facts, rows and charts during refresh/loading/error states.
    Show an initial loading state only when that section has NO data at all. */
-const Area = ({ title, route, facts = [], items = [], note, source, onNav, children, state = 'ready', symbol = 'BTC' }) => {
+const Area = ({ title, route, facts = [], items = [], note, source, onNav, children, state = 'ready', symbol = 'BTC', commentary }) => {
   const usable = facts.filter((f) => f?.[1] !== null && f?.[1] !== undefined && f?.[1] !== '');
   const shownItems = items.filter(Boolean);
-  const hasContent = usable.length > 0 || shownItems.length > 0 || children;
+  const hasContent = usable.length > 0 || shownItems.length > 0 || children || commentary;
   return <section className="rounded-lg border border-border bg-card p-4 sm:p-5" aria-label={title}>
     <div className="flex flex-wrap items-center justify-between gap-2">
       <h2 className="text-base font-semibold text-card-foreground">{title}</h2>
       <span className={`rounded-md px-2 py-0.5 text-xs font-semibold ${['stale', 'error', 'unavailable', 'unverified', 'WAIT', 'Needs changes'].includes(state) ? 'bg-amber-500/15 text-amber-200' : 'bg-primary/10 text-primary'}`}>{state}</span>
     </div>
     {source && <p className="mt-0.5 text-[11px] text-muted-foreground">{source}</p>}
+    {commentary && <p className="mt-2 text-sm leading-relaxed text-foreground/90">{commentary}</p>}
     {state === 'stale' && <p role="status" className="mt-2 text-xs text-amber-200">Last published result only — freshness unavailable. Do not treat these figures as current.</p>}
     {usable.length > 0 && <dl className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
       {usable.map(([key, value], i) => <div key={`${key}-${i}`} className="rounded-md border border-border bg-muted/30 px-3 py-2">
@@ -160,24 +161,66 @@ export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboar
     const briefData = extra.brief || {};
     const briefObs = briefData.observations || briefData.brief?.observations || [];
     const briefTake = briefData.take || briefData.brief?.take;
-    area('Unified Brief', 'briefing', { state: healthOf('sop'), source: when(sop?.market?.asOf || sop?.generatedAt || briefData.generated_at), facts: [
+    const briefCommentary = briefTake || firstText(claims.find((x) => x.claimId === 'briefing.direction')?.text, sop?.briefing?.headline) || null;
+    area('Unified Brief', 'briefing', { state: healthOf('sop'), commentary: briefCommentary, source: when(sop?.market?.asOf || sop?.generatedAt || briefData.generated_at), facts: [
       ['Market regime', val(d.regime?.label || d.regime?.regime || sop.market?.regime)],
       ['Published assessment', firstText(claims.find((x) => x.claimId === 'briefing.direction')?.text, sop?.briefing?.headline)],
-      ["Albert’s take", val(briefTake)],
       ['Recorded market changes', val(sop?.changesSinceLastVisit?.length)],
     ], items: [
       ...briefObs.slice(0, 4).map((o) => typeof o === 'string' ? o : o?.text || o?.observation || ''),
-      ...claims.slice(0, 4).map((x) => `${x.claimId || 'Claim'}: ${x.text || 'Unavailable'}`),
+      ...claims.filter((x) => x.claimId !== 'briefing.direction').slice(0, 3).map((x) => `${x.claimId || 'Claim'}: ${x.text || 'Unavailable'}`),
     ].filter(Boolean),
-    note: 'Unified brief combining real-time observations, state-of-play claims and Albert’s take.' });
-    area('Evidence & Data Audit', 'dataaudit', { state: healthOf('sop'), source: `Market run ${sourceTime}`, facts: [
+    note: 'Unified brief combining real-time observations, state-of-play claims and Albert\u2019s take.' });
+    /* Evidence & Engines summary inside brief */
+    const evalChecks = outlook?.validation?.evaluation?.evaluationPoints;
+    const isValidated = outlook?.validation?.predictiveValidation;
+    const ledgerAcc = d?.prediction_ledger?.overall?.accuracy;
+    const ledgerN = d?.prediction_ledger?.overall?.n;
+    const closedTrades = totals?.closedTrades;
+    const winRate = totals?.winRatePct;
+    const evidParts = [];
+    if (isValidated && evalChecks) evidParts.push(`The scenario engine passed ${evalChecks} predictive checks, confirming its forecasts align with observed outcomes.`);
+    else if (evalChecks) evidParts.push(`The scenario engine completed ${evalChecks} evaluation checks but is not yet validated as predictive.`);
+    if (ledgerAcc != null && ledgerN > 0) evidParts.push(`The prediction ledger records ${Number(ledgerAcc).toFixed(0)}% accuracy across ${ledgerN} graded forecasts \u2014 this tracks how often directional calls proved correct.`);
+    if (closedTrades != null && closedTrades > 0) evidParts.push(`Paper trading has closed ${closedTrades} trade${closedTrades > 1 ? 's' : ''} with a ${winRate != null ? `${Number(winRate).toFixed(1)}%` : 'unknown'} win rate \u2014 this measures the simulated portfolio\u2019s execution quality.`);
+    const evidCommentary = evidParts.length ? evidParts.join(' ') : null;
+    area('Evidence & Engines', 'dataaudit', { state: healthOf('sop'), commentary: evidCommentary, source: `Market run ${sourceTime}`, facts: [
       ['Data-health status', val(d.data_health?.level || sop?.dataQuality?.status)],
+      ['Forecast accuracy', ledgerAcc != null ? `${Number(ledgerAcc).toFixed(0)}% \u00b7 ${ledgerN} graded` : null],
+      ['Paper performance', closedTrades != null ? `${closedTrades} trades \u00b7 ${winRate != null ? `${Number(winRate).toFixed(1)}% win` : 'win rate unknown'}` : null],
+      ['Scenario validation', isValidated ? `Validated \u00b7 ${evalChecks} checks` : evalChecks ? `${evalChecks} checks \u00b7 not validated` : 'Unavailable'],
       ['Decision evidence', val(sop.market?.decisionSnapshotId || outlook?.decisionSnapshotId)],
       ['Quant score', val(d.quant_score ?? d.quant?.score, '/100')],
-    ], items: (sop?.dataQuality?.issues || d.data_health?.issues || []).slice(0, 3).map((x) => `${x.code || x.source || 'Issue'} · ${x.detail || x.message || 'Details unavailable'}`) });
+    ], items: (sop?.dataQuality?.issues || d.data_health?.issues || []).slice(0, 3).map((x) => `${x.code || x.source || 'Issue'} \u00b7 ${x.detail || x.message || 'Details unavailable'}`) });
+    /* Opportunity Radar summary inside brief */
+    const findingsSource = s.streams?.researchFindings?.findings || sop?.marketStreams?.researchFindings?.findings;
+    const openFindings = Array.isArray(findingsSource) ? findingsSource.filter((x) => x.status === 'OPEN') : [];
+    const radarCommentary = openFindings.length ? openFindings.slice(0, 2).map((f) => {
+      let line = f.hypothesis || f.title || 'Untitled finding';
+      if (f.confirmIf) line += ` Confirm if: ${f.confirmIf}.`;
+      else if (f.invalidateIf) line += ` Invalidate if: ${f.invalidateIf}.`;
+      if (f.resolveBy) line += ` Resolve by ${f.resolveBy}.`;
+      return line;
+    }).join(' ') : null;
+    area('Opportunity Radar', 'opportunities', { state: openFindings.length ? 'ready' : healthOf('streams'), commentary: radarCommentary, source: when(s.streams?.researchFindings?.asOf || s.streams?.generatedAt), facts: [
+      ['Open findings', val(openFindings.length)],
+    ], items: openFindings.slice(0, 4).map((x) => `${x.asset || x.symbol || 'Market'} \u00b7 ${x.title} \u00b7 ${x.priorityLabel || x.priority} \u00b7 confirm: ${x.confirmIf || 'not specified'} \u00b7 invalidate: ${x.invalidateIf || 'not specified'}`) });
   }
   if (kind === 'paper') {
-    area('Paper Trading', 'paper', { state: healthOf('paper'), source: paperTime, facts: [
+    const pnlUsd = totals.pnlUsd != null ? Number(totals.pnlUsd) : null;
+    const pnlPct = totals.pnlPct != null ? Number(totals.pnlPct) : null;
+    const startCash = totals.startingCash != null ? Number(totals.startingCash) : null;
+    const realised = totals.realizedPnl != null ? Number(totals.realizedPnl) : null;
+    const unrealised = pnlUsd != null && realised != null ? pnlUsd - realised : null;
+    let paperComm = null;
+    if (pnlUsd != null && startCash != null) {
+      const status = Math.abs(pnlUsd) < 0.01 ? 'flat' : pnlUsd > 0 ? 'in profit' : 'at a loss';
+      paperComm = `The portfolio is ${status}, ${amount(Math.abs(pnlUsd))} (${pnlPct != null ? `${pnlPct > 0 ? '+' : ''}${pnlPct.toFixed(1)}%` : ''}) relative to ${amount(startCash)} starting capital.`;
+      if (realised != null && unrealised != null && (Math.abs(realised) >= 0.01 || Math.abs(unrealised) >= 0.01)) {
+        paperComm += ` Realised results account for ${amount(Math.abs(realised))}; open holdings for ${amount(Math.abs(unrealised))}.`;
+      }
+    }
+    area('Paper Trading', 'paper', { state: healthOf('paper'), commentary: paperComm, source: paperTime, facts: [
       ['Wallet records', paper.accountResolution?.status === 'RESOLVED' ? val(paper.accountResolution.count) : null],
       ['Active strategies', val(totals.liveStrategies)],
       ['Starting cash', amount(totals.startingCash)],
@@ -207,7 +250,20 @@ export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboar
     const risk = d.risk || {};
     const lev = extra.leverage;
     const smart = d.smart_money || d.smartmoney;
-    area('Owner Portfolio', 'paper', { state: healthOf('paper'), source: paperTime, facts: [
+    const totalEquity = Number(totals.value) || 0;
+    const cashVal = paper.cashAvailable ? Number(paper.cashTotal) : null;
+    const riskPct = paper.openRiskAvailable ? Number(paper.openRiskPct) : null;
+    const riskLim = paper.openRiskAvailable ? Number(paper.openRiskLimitPct) : null;
+    let portfolioComm = null;
+    if (marked.length && totalEquity > 0) {
+      portfolioComm = `Exposure is concentrated in ${marked[0].asset} at ${(marked[0].value / totalEquity * 100).toFixed(1)}% of portfolio`;
+      if (cashVal != null) portfolioComm += `, with ${(cashVal / totalEquity * 100).toFixed(1)}% held in cash`;
+      portfolioComm += '.';
+      if (riskPct != null && riskLim != null) portfolioComm += ` Open risk uses ${riskPct.toFixed(1)}% of the ${riskLim.toFixed(1)}% limit.`;
+    } else if (!positions.length) {
+      portfolioComm = 'No open holdings. All capital is held in cash.';
+    }
+    area('Owner Portfolio', 'paper', { state: healthOf('paper'), commentary: portfolioComm, source: paperTime, facts: [
       ['Wallet records', paper.accountResolution?.status === 'RESOLVED' ? val(paper.accountResolution.count) : null],
       ['Starting cash', amount(totals.startingCash)],
       ['Equity value', amount(totals.value)],
@@ -238,7 +294,8 @@ export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboar
     const bitmark = d.bitmark || {};
     const shortForecast = forecasts.find((x) => x.horizon === '24H');
     const weeklyForecast = forecasts.find((x) => x.horizon === '7D');
-    area('Scenario Outlook', 'scenarios', { state: healthOf('outlook'), source: when(outlook.baseline?.observedAt), facts: [
+    const btcComm = band.statement || (band.lowerPct != null ? `Historical 7-day scenarios show outcomes from ${band.lowerPct > 0 ? '+' : ''}${band.lowerPct}% to ${band.upperPct > 0 ? '+' : ''}${band.upperPct}% from the observed anchor${outlook.baseline?.close ? ` at ${amount(outlook.baseline.close)}` : ''}.` : band.reasonText || null);
+    area('Scenario Outlook', 'scenarios', { state: healthOf('outlook'), commentary: btcComm, source: when(outlook.baseline?.observedAt), facts: [
       ['Asset', val(outlook.baseline?.asset || 'BTC')],
       ['Observed anchor', amount(outlook.baseline?.price ?? outlook.baseline?.close)],
       ['Historical horizon', band.horizonDays ? val(band.horizonDays, ' days') : null],
@@ -311,7 +368,8 @@ export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboar
       ...(mi.top_positive || []).slice(0, 2).map((x) => `Positive: ${x}`),
       ...(mi.top_risk || []).slice(0, 2).map((x) => `Risk: ${x}`),
     ].filter(Boolean) });
-    area('Market Drivers', 'drivers', { state: healthOf('driver'), source: when(driver.asOf), facts: [
+    const driverComm = driver.currentLeader?.detail || (driver.currentLeader ? `${driver.currentLeader.label || driver.currentLeader.actor} leads with a ${driver.marketPosture || 'neutral'} posture.` : null);
+    area('Market Drivers', 'drivers', { state: healthOf('driver'), commentary: driverComm, source: when(driver.asOf), facts: [
       ['Posture', val(driver.marketPosture)],
       ['Leading driver', val(driver.currentLeader?.label || driver.currentLeader?.actor)],
       ['Driver explanation', val(driver.currentLeader?.detail)],
@@ -341,7 +399,8 @@ export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboar
     const headlines = [...(Array.isArray(news?.cards) ? news.cards : Array.isArray(news) ? news : [])].sort((a, b) => (b.impact || 0) - (a.impact || 0));
     const latest = headlines[0];
     const headlineTime = latest?.published || latest?.published_at;
-    area('News', 'news', { state: latest ? 'ready' : newsStatus || 'unavailable', source: `${latest?.source || 'News feed'} · ${when(headlineTime)}`, facts: [
+    const newsComm = latest ? (firstText(latest.ai?.summary, latest.ai?.why_it_matters) || latest.title) : null;
+    area('News', 'news', { state: latest ? 'ready' : newsStatus || 'unavailable', commentary: newsComm, source: `${latest?.source || 'News feed'} · ${when(headlineTime)}`, facts: [
       ['Headlines', val(headlines.length)],
       ['Leading', firstText(latest?.title)],
       ['Why it matters', firstText(latest?.ai?.why_it_matters)],
@@ -420,7 +479,12 @@ export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboar
     const sentiment = extra.sentiment || {};
     const hist = extra.history || {};
     const inst = d.institutional;
-    area('ETF Flows', 'etf', { state: etf.net_1d != null ? 'ready' : healthOf('etf'), source: `${etf.source || 'ETF issuer data'} · session ${etf.latest_date || 'unavailable'}`, facts: [
+    const flowParts = [];
+    if (etf.net_1d != null) { const dir = etf.net_1d > 0 ? 'positive' : etf.net_1d < 0 ? 'negative' : 'flat'; flowParts.push(`ETF flows were ${dir} at ${etf.net_1d > 0 ? '+' : ''}${Number(etf.net_1d).toFixed(1)}m USD for ${etf.latest_date || 'the latest session'}`); }
+    const wl = whales.whales || [];
+    if (wl.length) { const acc = wl.filter((w) => w.signal && /accumulat/i.test(w.signal)).length; const dis = wl.filter((w) => w.signal && /distribut/i.test(w.signal)).length; flowParts.push(acc > dis ? 'tracked whale wallets lean toward accumulation' : dis > acc ? 'tracked whale wallets lean toward distribution' : `${wl.length} whale wallets tracked with mixed signals`); }
+    const flowComm = flowParts.length ? (flowParts.join('; ').replace(/^./, (c) => c.toUpperCase()) + '.') : null;
+    area('ETF Flows', 'etf', { state: etf.net_1d != null ? 'ready' : healthOf('etf'), commentary: flowComm, source: `${etf.source || 'ETF issuer data'} · session ${etf.latest_date || 'unavailable'}`, facts: [
       ['Last net flow', val(etf.net_1d, 'm USD')],
       ['7-session net', val(etf.net_7d, 'm USD')],
       ['Top issuer', val(etf.top_issuer || etf.leaderboard?.[0]?.ticker)],
@@ -447,7 +511,8 @@ export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboar
     const findingsSource = s.streams?.researchFindings?.findings || s.findings?.findings;
     // Display all open findings with their classification — no additional exclusions.
     const findings = Array.isArray(findingsSource) ? findingsSource.filter((x) => x.status === 'OPEN') : [];
-    area('Opportunity Research', 'opportunities', { state: findings.length ? 'ready' : healthOf('streams'), source: when(s.streams?.researchFindings?.asOf || s.streams?.generatedAt), facts: [
+    const radarComm = findings.length ? findings.slice(0, 2).map((f) => { let line = f.hypothesis || f.title || 'Untitled'; if (f.confirmIf) line += ` Confirm if: ${f.confirmIf}.`; else if (f.invalidateIf) line += ` Invalidate if: ${f.invalidateIf}.`; if (f.resolveBy) line += ` Resolve by ${f.resolveBy}.`; return line; }).join(' ') : null;
+    area('Opportunity Research', 'opportunities', { state: findings.length ? 'ready' : healthOf('streams'), commentary: radarComm, source: when(s.streams?.researchFindings?.asOf || s.streams?.generatedAt), facts: [
       ['Open findings', val(findings.length)],
       ['Top', val(findings[0]?.title)],
     ], items: findings.slice(0, 5).map((x) => `${x.asset || x.symbol || 'Market'} · ${x.title} · ${x.priorityLabel || x.priority} · confirm: ${x.confirmIf || 'not specified'} · invalidate: ${x.invalidateIf || 'not specified'}`) });
