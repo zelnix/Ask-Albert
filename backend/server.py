@@ -17014,8 +17014,56 @@ def _normalize_basket_draft(raw):
         horizon = max(3, min(180, int(raw.get('horizon_days') or 30)))
     except Exception:
         horizon = 30
-    return {'title': (raw.get('title') or 'Multi-Coin Strategy')[:70],
-            'thesis': (raw.get('thesis') or '')[:500], 'horizon_days': horizon, 'legs': legs}
+    # Preserve capital, currency, reserve, rules and unresolved instructions
+    # so the saved proposal retains the agreed plan faithfully.
+    result = {'title': (raw.get('title') or 'Multi-Coin Strategy')[:70],
+              'thesis': (raw.get('thesis') or '')[:500], 'horizon_days': horizon, 'legs': legs}
+    # Capital and currency
+    for field in ('startingCapital', 'capital'):
+        val = raw.get(field)
+        if val is not None:
+            try:
+                result['startingCapital'] = str(round(float(val), 2))
+            except (ValueError, TypeError):
+                pass
+            break
+    if raw.get('currency'):
+        result['currency'] = str(raw['currency'])[:10].upper()
+    # Reserve
+    for field in ('reservePct', 'protectedReserve', 'reserve_pct'):
+        val = raw.get(field)
+        if val is not None:
+            try:
+                result['reservePct'] = max(0, min(100, float(val)))
+            except (ValueError, TypeError):
+                pass
+            break
+    # Typed rules (entry conditions, profit taking, stops, management, custom)
+    rules = []
+    for key in ('entryConditions', 'profitTaking', 'stopLoss', 'managementRules'):
+        val = raw.get(key)
+        if val:
+            rules.append({'type': key, 'description': str(val)[:500]})
+    for r in (raw.get('rules') or [])[:20]:
+        if isinstance(r, str):
+            rules.append({'type': 'OTHER', 'description': r[:500]})
+        elif isinstance(r, dict):
+            rules.append({k: v for k, v in r.items() if k in ('type', 'kind', 'side', 'symbol', 'value',
+                          'operator', 'indicator', 'description', 'portionPct', 'portionOf', 'deadline')})
+    if rules:
+        result['rules'] = rules
+    # Unresolved instructions — visible start blockers, not silently dropped.
+    unresolved = raw.get('unresolvedInstructions') or raw.get('unsupportedInstructions') or []
+    if isinstance(unresolved, str):
+        unresolved = [unresolved]
+    if unresolved:
+        result['unresolvedInstructions'] = [str(u)[:200] for u in unresolved[:10]]
+    # Objective / allocation notes
+    if raw.get('objective'):
+        result['objective'] = str(raw['objective'])[:500]
+    if raw.get('allocation'):
+        result['allocation'] = str(raw['allocation'])[:500]
+    return result
 
 
 def _fallback_basket_draft(goal=''):
