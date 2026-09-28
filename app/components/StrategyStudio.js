@@ -50,7 +50,9 @@ const PAPER_STATUS = {
   SAVED: { label: 'Saved · not trading', color: 'text-slate-300', dot: 'bg-slate-500' },
   STOPPED: { label: 'Stopped', color: 'text-amber-300', dot: 'bg-amber-400' },
   LIVE: { label: 'Paper trading', color: 'text-emerald-300', dot: 'bg-emerald-400' },
+  WAIT: { label: 'WAIT · awaiting conditions', color: 'text-amber-300', dot: 'bg-amber-400' },
   UNAVAILABLE: { label: 'Paper worker unavailable', color: 'text-amber-300', dot: 'bg-amber-400' },
+  RESTRICTED_IN_WALLET: { label: 'Restricted in this wallet · exits preserved', color: 'text-amber-300', dot: 'bg-amber-400' },
   NEEDS_CHANGES: { label: 'Needs changes · exits only', color: 'text-amber-300', dot: 'bg-amber-400' },
   HALTED_RISK: { label: 'Halted — drawdown limit', color: 'text-rose-300', dot: 'bg-rose-400' },
   ARCHIVED: { label: 'Archived', color: 'text-slate-500', dot: 'bg-slate-600' },
@@ -59,12 +61,40 @@ const ps = (s) => PAPER_STATUS[s] || PAPER_STATUS.SAVED;
 
 // Trade approval — the ONLY two ways a live strategy can behave. "Observe" is gone.
 const APPROVALS = [
-  { id: 'REVIEW', label: 'Review and approve', desc: 'Approve proposed BUY/SELL fills yourself. Protective invalidation exits may still reduce existing holdings.', Icon: HandCoins },
+  { id: 'REVIEW', label: 'Review and approve', desc: 'Every proposed simulated BUY or SELL, including reviewed protective exits, waits for your approval. Manual close remains your choice.', Icon: HandCoins },
   { id: 'AUTOPILOT', label: 'Autopilot', desc: 'Albert records virtual fills after the reviewed rules and risk gates pass; no exchange orders.', Icon: Bot },
 ];
 
 function PaperBadge() {
   return <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-300"><FlaskConical className="h-3 w-3" />Paper only</span>;
+}
+
+function CoinCapability({ item }) {
+  const [open, setOpen] = useState(false);
+  if (!item) return null;
+  const missing = item.missingCapabilities || [];
+  const label = item.supportState === 'UNSUPPORTED' ? 'Unsupported' :
+    item.supportState === 'RESTRICTED_IN_WALLET' ? 'Restricted in this wallet' :
+    item.supportState === 'WAITING_FOR_DATA' ? 'Waiting for data' : 'Supported · not verified';
+  const warning = item.supportState !== 'SUPPORTED';
+  return (
+    <span className="inline-block text-[11px]">
+      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open}
+        className={`rounded-md border px-2 py-0.5 font-semibold underline underline-offset-2 ${warning ? 'border-amber-500/30 text-amber-300' : 'border-emerald-500/30 text-emerald-300'}`}>
+        {item.symbol}: {label}
+      </button>
+      {open && <span role="region" aria-label={`${item.symbol} paper support explanation`}
+        className="mt-2 block rounded-lg border border-slate-700 bg-slate-950 p-3 text-left text-slate-200">
+        <strong className="block text-[12px]">{item.symbol} · {label}</strong>
+        {missing.length ? <span className="mt-1 block">Missing for simulated trading:</span> : null}
+        {missing.map((entry) => <span key={entry.capability} className="mt-1 block">• {entry.reason}</span>)}
+        {item.restrictionReason && <span className="mt-1 block">{item.restrictionReason}</span>}
+        {item.dataReason && <span className="mt-1 block">{item.dataReason}</span>}
+        <span className="mt-1 block text-slate-400">Implementation and current data are separate from full workflow verification. Existing holdings and valid exits remain available with usable data. Simulation only.</span>
+        <button type="button" onClick={() => setOpen(false)} className="mt-2 font-semibold text-sky-300 underline underline-offset-2">← Back to strategy</button>
+      </span>}
+    </span>
+  );
 }
 
 function ConfirmBtn({ label, icon: Icon, onConfirm, tone = 'sky', busy, disabled = false }) {
@@ -89,9 +119,14 @@ function ConfirmBtn({ label, icon: Icon, onConfirm, tone = 'sky', busy, disabled
 }
 
 function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, revisionId = null }) {
+  const [unsupportedAssets, setUnsupportedAssets] = useState([]);
   const [goal, setGoal] = useState(initialGoal);
   const [drafting, setDrafting] = useState(false);
-  const [draft, setDraft] = useState(initialDraft);
+  const [draft, setDraft] = useState(initialDraft ? {
+    ...initialDraft, rules: initialDraft.rules || [],
+    walletName: initialDraft.walletName || `${initialDraft.name || 'Strategy'} wallet`,
+    startingCash: initialDraft.startingCash || '100000.00',
+  } : null);
   const [review, setReview] = useState(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
@@ -104,7 +139,7 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
         const r = await post('/v1/albert/studio/validate', { draft });
         const j = await r.json();
         if (active) setReview(r.ok ? { contract: j.contract, hash: j.contractHash,
-          summary: j.summary, errors: j.validationErrors || [], for: JSON.stringify(draft) } : null);
+          summary: j.summary, errors: j.validationErrors || [], capabilities: j.assetCapabilities || [], for: JSON.stringify(draft) } : null);
       } catch (e) { if (active) { setReview(null); setErr('Validation unavailable; nothing can be saved.'); } }
     }, 300);
     return () => { active = false; clearTimeout(t); };
@@ -116,14 +151,18 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
   const runDraft = async () => {
     if (!goal.trim()) return;
     if (goal.length > 4000) { setErr('Needs changes — shorten this request before drafting. No instruction was discarded.'); return; }
-    setDrafting(true); setErr('');
+    setDrafting(true); setErr(''); setUnsupportedAssets([]);
     try {
       const r = await post('/v1/albert/studio/draft', { goal });
       const j = await r.json();
-      if (!r.ok) { setErr(j.detail || 'Albert could not draft a strategy. Nothing was substituted.'); return; }
+      if (!r.ok) {
+        setUnsupportedAssets(j.detail?.assetCapabilities || []);
+        setErr(typeof j.detail === 'object' ? j.detail.message : (j.detail || 'Albert could not draft a strategy. Nothing was substituted.'));
+        return;
+      }
       setDraft(j.draft);
       setReview({ contract: j.contract, hash: j.contractHash, summary: j.summary,
-        errors: j.validationErrors || [], for: JSON.stringify(j.draft) });
+        errors: j.validationErrors || [], capabilities: j.assetCapabilities || [], for: JSON.stringify(j.draft) });
     } catch (e) { setErr('Could not draft — try again. No strategy was saved.'); }
     finally { setDrafting(false); }
   };
@@ -134,6 +173,9 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
   const addAsset = () => updateDraft({ ...draft, assets: [...(draft.assets || []), { symbol: '', weightPct: 0 }] });
   const removeAsset = (i) => updateDraft({ ...draft, assets: draft.assets.filter((_, ix) => ix !== i) });
   const setField = (k, v) => updateDraft({ ...draft, [k]: v });
+  const setRule = (i, changes) => updateDraft({ ...draft, rules: (draft.rules || []).map((r, ix) => ix === i ? { ...r, ...changes } : r) });
+  const addRule = () => updateDraft({ ...draft, rules: [...(draft.rules || []), {
+    symbol: draft.assets?.[0]?.symbol || '', side: 'BUY', kind: 'PRICE', operator: 'BELOW', value: '', indicator: '' }] });
 
   const save = async () => {
     if (!readyToSave) { setErr('Needs changes — wait for a valid review before saving.'); return; }
@@ -158,13 +200,14 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
       {revisionId && <p className="mb-3 text-[12px] text-amber-200">Saving a reviewed version stops new entries under the old version. It keeps this strategy’s existing wallet, cash, holdings, exits and history; select a mode and Start the new version when ready.</p>}
       {!draft && (
         <div>
-          <p className="mb-2 text-[13px] text-slate-400">Describe the exact plan. Albert can execute canonical BUY/SELL decisions, cap each coin at its reviewed weight, keep a reserve, limit position count and use the existing risk/invalidation gates. Conditional pullbacks, trailing stops and fixed profit targets need changes; they will not silently become different rules.</p>
-          <textarea rows={4} value={goal} onChange={(e) => setGoal(e.target.value)} placeholder="e.g. Paper strategy: BTC 60%, ETH 40%. Follow Albert’s canonical BUY/SELL decisions. Keep 20% reserve and at most 2 positions."
+          <p className="mb-2 text-[13px] text-slate-400">Describe the exact simulated plan: coins, weights, wallet name and starting cash, optional price or 24-hour percentage conditions, RSI/SMA/EMA/MACD indicators, and stop-loss, trailing-stop or take-profit percentages. Albert checks each rule before Save. Macro and tokenomics inform assessment, never automatic trade triggers.</p>
+          <textarea rows={4} value={goal} onChange={(e) => setGoal(e.target.value)} placeholder="e.g. BTC 60%, ETH 40%; Buy BTC if price below $80000 and RSI(14) below 30; Take-profit 12% for BTC; Start with $5000; Consider macro and supply in my review."
             className="w-full resize-none rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-slate-100 outline-none focus:border-violet-500" />
           <Button onClick={runDraft} disabled={drafting || !goal.trim()} className="mt-3 gap-1.5 bg-violet-600 hover:bg-violet-500">
             {drafting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}Draft with Albert
           </Button>
           {err && <p role="alert" className="mt-2 text-[12px] font-medium text-amber-300">{err}</p>}
+          {(unsupportedAssets || []).length > 0 && <div className="mt-2 flex flex-wrap gap-2">{unsupportedAssets.map((asset) => <CoinCapability key={asset.symbol} item={asset} />)}</div>}
         </div>
       )}
       {draft && (
@@ -172,8 +215,12 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="text-[12px] text-slate-400">Name
               <input value={draft.name || ''} onChange={(e) => setField('name', e.target.value)} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-sm text-white outline-none focus:border-sky-500" /></label>
-            <label className="text-[12px] text-slate-400">Timeframe
-              <input value={draft.timeframe || ''} onChange={(e) => setField('timeframe', e.target.value)} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-sm text-white outline-none focus:border-sky-500" /></label>
+            <label className="text-[12px] text-slate-400">Paper wallet name
+              <input value={draft.walletName || ''} disabled={!!revisionId} onChange={(e) => setField('walletName', e.target.value)} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-sm text-white outline-none focus:border-sky-500 disabled:opacity-60" /></label>
+            <label className="text-[12px] text-slate-400">Virtual starting amount (USD)
+              <input type="number" min="10" step="0.01" max="1000000000" value={draft.startingCash ?? ''} disabled={!!revisionId} onChange={(e) => setField('startingCash', e.target.value)} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-sm text-white outline-none focus:border-sky-500 disabled:opacity-60" /></label>
+            <label className="text-[12px] text-slate-400">Protected cash reserve (%)
+              <input type="number" min="0" max="100" value={draft.reservePct ?? 0} onChange={(e) => setField('reservePct', Number(e.target.value))} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-sm text-white outline-none focus:border-sky-500" /></label>
           </div>
           <div>
             <p className="mb-1 text-[12px] font-semibold text-slate-400">Assets &amp; weights</p>
@@ -190,10 +237,39 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
             <button onClick={addAsset} className="mt-1.5 inline-flex items-center gap-1 text-[12px] font-semibold text-sky-400 hover:text-sky-300"><Plus className="h-3.5 w-3.5" />Add asset</button>
           </div>
           <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-[12px] text-slate-300">
-            <p className="font-semibold text-white">The only executable rules in this plan</p>
-            <p>Entry: Albert’s canonical BUY. Exit / profit-taking: canonical SELL or existing invalidation; no independent targets. Position size: no more than each reviewed asset weight. Existing mandate/risk checks still apply.</p>
+            <p className="font-semibold text-white">Executable strategy rules · checked every paper cycle</p>
+            <p className="mt-1">BUY: all of that coin’s triggers and canonical BUY must pass. SELL: any reviewed exit trigger may reduce that coin’s holding. Missing indicator or price data means WAIT, not a substitute. Review always asks before a proposed trade; Autopilot uses only your approved strategy.</p>
+            <label className="mt-2 block text-slate-400">Maximum open positions
+              <input type="number" min="1" max="8" value={draft.riskLimits?.maxPositions ?? draft.assets?.length ?? 1}
+                onChange={(e) => updateDraft({ ...draft, riskLimits: { ...(draft.riskLimits || {}), maxPositions: Number(e.target.value) } })}
+                className="ml-2 w-20 rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-white" /></label>
+            <div className="mt-3 space-y-2">
+              {(draft.rules || []).map((rule, i) => <div key={i} className="flex flex-wrap items-center gap-1.5 rounded-md border border-slate-800 p-2">
+                <select aria-label={`Rule ${i + 1} coin`} value={rule.symbol || ''} onChange={(e) => setRule(i, { symbol: e.target.value })} className="rounded-md bg-slate-800 p-1 text-white">
+                  {(draft.assets || []).map((a) => <option key={a.symbol} value={a.symbol}>{a.symbol}</option>)}
+                </select>
+                <select aria-label={`Rule ${i + 1} side`} value={rule.side || 'BUY'} onChange={(e) => setRule(i, { side: e.target.value })} className="rounded-md bg-slate-800 p-1 text-white">
+                  <option value="BUY">BUY</option><option value="SELL">SELL</option>
+                </select>
+                <select aria-label={`Rule ${i + 1} kind`} value={rule.kind || 'PRICE'}
+                  onChange={(e) => setRule(i, { kind: e.target.value, side: ['STOP_LOSS_PCT', 'TAKE_PROFIT_PCT', 'TRAILING_STOP_PCT'].includes(e.target.value) ? 'SELL' : rule.side,
+                    operator: ['STOP_LOSS_PCT', 'TAKE_PROFIT_PCT', 'TRAILING_STOP_PCT'].includes(e.target.value) ? '' : (rule.operator || 'BELOW'), indicator: e.target.value === 'INDICATOR' ? 'RSI_14' : '' })}
+                  className="rounded-md bg-slate-800 p-1 text-white">
+                  <option value="PRICE">Price (USD)</option><option value="CHANGE_PCT_24H">Rolling 24h change (%)</option>
+                  <option value="INDICATOR">Indicator (closed daily)</option><option value="STOP_LOSS_PCT">Stop-loss from entry (%)</option>
+                  <option value="TRAILING_STOP_PCT">Trailing stop from observed peak (%)</option><option value="TAKE_PROFIT_PCT">Take-profit from entry (%)</option>
+                </select>
+                {rule.kind === 'INDICATOR' && <select aria-label={`Rule ${i + 1} indicator`} value={rule.indicator || 'RSI_14'} onChange={(e) => setRule(i, { indicator: e.target.value })} className="rounded-md bg-slate-800 p-1 text-white">
+                  <option value="RSI_14">RSI 14</option><option value="SMA_20">SMA 20</option><option value="EMA_20">EMA 20</option><option value="MACD_HIST">MACD histogram</option>
+                </select>}
+                {['PRICE', 'CHANGE_PCT_24H', 'INDICATOR'].includes(rule.kind) && <select aria-label={`Rule ${i + 1} comparison`} value={rule.operator || 'BELOW'} onChange={(e) => setRule(i, { operator: e.target.value })} className="rounded-md bg-slate-800 p-1 text-white"><option value="BELOW">Below</option><option value="ABOVE">Above</option></select>}
+                <input type="number" aria-label={`Rule ${i + 1} threshold`} value={rule.value ?? ''} onChange={(e) => setRule(i, { value: e.target.value })} placeholder="threshold" className="w-24 rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-white" />
+                <button type="button" onClick={() => updateDraft({ ...draft, rules: draft.rules.filter((_, ix) => ix !== i) })} aria-label={`Remove rule ${i + 1}`} className="rounded p-1 text-rose-300"><X className="h-4 w-4" /></button>
+              </div>)}
+              <button type="button" onClick={addRule} className="inline-flex items-center gap-1 font-semibold text-sky-300"><Plus className="h-3.5 w-3.5" />Add executable rule</button>
+            </div>
             {Object.entries(STUDIO_EXEC_RULES).some(([k, v]) => draft[k] !== v) &&
-              <p role="alert" className="mt-1 text-amber-300">Needs changes — some proposed rule text is not executable. Edit the request and redraft; nothing will be silently substituted.</p>}
+              <p role="alert" className="mt-1 text-amber-300">Needs changes — the canonical base gates were altered. Use the typed triggers above; nothing will be silently substituted.</p>}
           </div>
           {draft.requestedPlan && <details className="text-[12px] text-slate-400"><summary className="cursor-pointer">Original request being reviewed</summary><p className="mt-1 whitespace-pre-wrap">{draft.requestedPlan}</p></details>}
           <button type="button" onClick={() => { setGoal(draft.requestedPlan || goal); setDraft(null); setReview(null); setErr(''); }} className="text-[12px] font-semibold text-sky-400 hover:text-sky-300">Edit request &amp; redraft</button>
@@ -201,6 +277,7 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
             <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
               <p className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400"><ShieldCheck className="h-3.5 w-3.5" />{(review.errors || []).length ? 'Needs changes' : 'Reviewed'} · hash {review.hash}</p>
               <p className="text-[13px] text-slate-200">{review.summary}</p>
+              {(review.capabilities || []).length > 0 && <div className="mt-2 flex flex-wrap gap-1.5">{review.capabilities.map((cap) => <CoinCapability key={cap.symbol} item={cap} />)}</div>}
               {(review.errors || []).length > 0 && (
                 <ul className="mt-2 space-y-0.5 text-[12px] text-red-400">
                   {review.errors.map((e, i) => <li key={i} className="flex items-start gap-1.5"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />{e}</li>)}
@@ -363,11 +440,11 @@ function PaperPanel({ sid, name, onChange }) {
     );
   }
 
-  const meta = !p.canStart && (p.entryBlockers || []).length > 0 && !['LIVE', 'UNAVAILABLE', 'NEEDS_CHANGES', 'ARCHIVED', 'HALTED_RISK'].includes(p.paperStatus)
+  const meta = !p.canStart && (p.entryBlockers || []).length > 0 && !['LIVE', 'WAIT', 'UNAVAILABLE', 'NEEDS_CHANGES', 'RESTRICTED_IN_WALLET', 'ARCHIVED', 'HALTED_RISK'].includes(p.paperStatus)
     ? { label: 'Needs changes', color: 'text-amber-300', dot: 'bg-amber-400' } : ps(p.paperStatus);
   const perf = p.performance || {};
-  const live = p.paperStatus === 'LIVE';
-  const runningButUnavailable = ['UNAVAILABLE', 'NEEDS_CHANGES'].includes(p.paperStatus);
+  const live = ['LIVE', 'WAIT'].includes(p.paperStatus);
+  const runningButUnavailable = ['UNAVAILABLE', 'NEEDS_CHANGES', 'RESTRICTED_IN_WALLET'].includes(p.paperStatus);
   const approvals = p.pendingApprovals || [];
   const positions = p.positions || [];
   const activity = p.activity || [];
@@ -457,6 +534,22 @@ function PaperPanel({ sid, name, onChange }) {
       {p.paperStatus === 'HALTED_RISK' && (
         <p className="flex items-center gap-1.5 text-[12px] font-semibold text-rose-300"><AlertTriangle className="h-3.5 w-3.5" />This strategy hit its drawdown limit and needs a reviewed reset before it can trade again.</p>
       )}
+      {p.assessment && <div className="rounded-lg border border-slate-700 bg-slate-950/60 p-3 text-[12px] text-slate-300">
+        <p className="font-semibold text-white">Albert’s latest assessment · {p.assessment.state}</p>
+        <p className="text-[11px] text-slate-500">As of {p.assessment.at || 'unavailable'} · reviewed version {p.assessment.strategyVersion}</p>
+        {(p.assessment.conditions || []).map((condition) => <div key={condition.symbol} className="mt-1.5">
+          <span className="font-semibold text-slate-100">{condition.symbol}: {condition.state}</span>
+          {condition.reason && <span className="ml-1 text-amber-200">{condition.reason}</span>}
+          {(condition.rules || []).filter((r) => r.state === 'WAIT').map((r) => <p key={r.ruleId} className="ml-2 text-amber-300">{r.reason}</p>)}
+        </div>)}
+        <div className="mt-2 border-t border-slate-800 pt-2">
+          <p className="font-semibold text-slate-200">Existing macro &amp; tokenomics context · advisory only</p>
+          {(p.assessment.context?.impact || []).map((impact, i) => <p key={i} className="mt-1 text-slate-400">{impact}</p>)}
+          {p.assessment.context?.proposedRevision && <p className="mt-1.5 rounded-md border border-sky-700/40 bg-sky-950/20 p-2 text-sky-200">
+            Suggested revision (not applied): {p.assessment.context.proposedRevision.reason} Open “Change strategy” to make and approve any change on this same wallet.
+          </p>}
+        </div>
+      </div>}
       {live && stale && (
         <p role="status" className="flex items-center gap-1.5 text-[11px] text-amber-300"><AlertTriangle className="h-3.5 w-3.5" />Waiting for a price. Your holdings stay as they are; Albert will try again on the next normal paper-trading cycle.</p>
       )}
@@ -491,6 +584,7 @@ function PaperPanel({ sid, name, onChange }) {
           <p className="mt-0.5 text-[14px] font-bold text-white">{pr.side} {pr.asset} · {usd(pr.notionalValue)}</p>
           <p className="text-[11.5px] text-slate-400">Ref {usd(pr.referencePrice)} · est. fees {usd(pr.estimatedFees)}{pr.invalidationPrice ? ` · invalidation ${usd(pr.invalidationPrice)}` : ''}</p>
           {pr.reason && <p className="mt-1 text-[12px] leading-relaxed text-slate-300">{pr.reason}</p>}
+          {(pr.typedRuleResults || []).map((rule) => <p key={rule.ruleId} className="text-[11px] text-sky-200">{rule.kind}: {rule.state}{rule.observed != null ? ` · observed ${rule.observed} vs ${rule.threshold}` : ''}</p>)}
           <div className="mt-2 flex gap-2">
             <Button size="sm" disabled={!!pending[pr.proposalId]} onClick={() => approve(pr)} className="h-7 gap-1 bg-emerald-600 px-2.5 text-[12px] hover:bg-emerald-500">
               {pending[pr.proposalId] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}Approve
@@ -606,7 +700,7 @@ function Detail({ sid, onChange, onRevise }) {
       ) : <Loader2 className="h-5 w-5 animate-spin text-slate-400" />}
     </Card>
   );
-  const meta = !s.canStart && (s.entryBlockers || []).length > 0 && !['LIVE', 'UNAVAILABLE', 'NEEDS_CHANGES', 'ARCHIVED', 'HALTED_RISK'].includes(s.paperStatus)
+  const meta = !s.canStart && (s.entryBlockers || []).length > 0 && !['LIVE', 'WAIT', 'UNAVAILABLE', 'NEEDS_CHANGES', 'RESTRICTED_IN_WALLET', 'ARCHIVED', 'HALTED_RISK'].includes(s.paperStatus)
     ? { label: 'Needs changes', color: 'text-amber-300' } : ps(s.paperStatus);
   return (
     <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
@@ -617,6 +711,10 @@ function Detail({ sid, onChange, onRevise }) {
         {s.paperStatus !== 'ARCHIVED' && <Button size="sm" variant="outline" onClick={() => onRevise?.(s)} className="ml-auto h-7 border-slate-700 text-[12px] text-slate-200">Revise plan</Button>}
       </div>
       <p className="text-[13px] text-slate-300">{s.summary}</p>
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {(s.assetCapabilities || []).map((cap) => <CoinCapability key={cap.symbol} item={cap} />)}
+      </div>
+      <p className="mt-2 text-[12px] text-slate-400">Wallet: <span className="font-semibold text-slate-200">{s.walletName || 'Not started'}</span> · Starting virtual balance: {usd(s.startingCash || s.contract?.startingCash)}. Revisions keep the same wallet, holdings and history.</p>
 
       <div className="mt-3 overflow-hidden rounded-lg border border-slate-800">
         <table className="w-full text-[13px]">
@@ -662,7 +760,7 @@ function Detail({ sid, onChange, onRevise }) {
       <PaperPanel sid={sid} name={s.name} onChange={() => { load(); onChange && onChange(); }} />
 
       {/* Archive is only offered when the strategy is not trading. */}
-      {s.paperStatus !== 'LIVE' && s.paperStatus !== 'UNAVAILABLE' && s.paperStatus !== 'NEEDS_CHANGES' && s.paperStatus !== 'ARCHIVED' && (
+      {!['LIVE', 'WAIT', 'UNAVAILABLE', 'NEEDS_CHANGES', 'RESTRICTED_IN_WALLET', 'ARCHIVED'].includes(s.paperStatus) && (
         <div className="mt-3 flex items-center gap-2 border-t border-slate-800 pt-3">
           <ConfirmBtn label="Archive strategy" icon={Archive} tone="slate" busy={busy} onConfirm={() => doCmd('archive')} />
           <span className="text-[11px] text-slate-500">Archiving hides it from your list; nothing is deleted.</span>
@@ -695,10 +793,12 @@ export default function StrategyStudio({ chatGoal = '', chatDraftKey = null, onC
   useEffect(() => { if (chatDraftKey) { setRevision(null); setSel(null); setBuilding(true); } }, [chatDraftKey]);
   const revise = (s) => {
     setRevision({ id: s.strategyId, version: s.version, goal: s.contract?.requestedPlan || '',
-      draft: { ...(s.contract || {}), name: s.name } });
+      draft: { ...(s.contract || {}), name: s.name, rules: s.contract?.rules || [],
+        walletName: s.walletName || `${s.name} wallet`,
+        startingCash: s.startingCash || '100000.00' } });
     setSel(null); setBuilding(true); onChatDismiss?.();
   };
-  const liveCount = list.filter((s) => s.paperStatus === 'LIVE').length;
+  const liveCount = list.filter((s) => s.isLive).length;
 
   return (
     <div className="space-y-4">
@@ -730,7 +830,7 @@ export default function StrategyStudio({ chatGoal = '', chatDraftKey = null, onC
             </Card>
           )}
           {list.map((s) => {
-            const m = !s.canStart && (s.entryBlockers || []).length > 0 && !['LIVE', 'UNAVAILABLE', 'NEEDS_CHANGES', 'ARCHIVED', 'HALTED_RISK'].includes(s.paperStatus)
+            const m = !s.canStart && (s.entryBlockers || []).length > 0 && !['LIVE', 'WAIT', 'UNAVAILABLE', 'NEEDS_CHANGES', 'RESTRICTED_IN_WALLET', 'ARCHIVED', 'HALTED_RISK'].includes(s.paperStatus)
               ? { label: 'Needs changes', color: 'text-amber-300', dot: 'bg-amber-400' } : ps(s.paperStatus);
             return (
               <button key={s.strategyId} onClick={() => { setSel(s.strategyId); setRevision(null); setBuilding(false); onChatDismiss?.(); }}

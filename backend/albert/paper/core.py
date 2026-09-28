@@ -533,7 +533,8 @@ def reconcile_multi(acct):
 
 
 def apply_buy_atomic(col, acct_id, pid, expected_version, idem_key, proposal_id,
-                     sizing, canonical, base_currency='USDC', asset=None, price_q=PRICE_Q):
+                     sizing, canonical, base_currency='USDC', asset=None, price_q=PRICE_Q,
+                     strategy_version=None, strategy_hash=None, required_mode=None):
     """Apply a BUY as ONE conditional update. Idempotent + concurrency-safe.
     `asset` (M5) defaults to the canonical/sizing asset (BTC for M1-M4).
     Returns (result_dict, error_code, http_status)."""
@@ -542,6 +543,11 @@ def apply_buy_atomic(col, acct_id, pid, expected_version, idem_key, proposal_id,
         acct = col.find_one({'paperAccountId': acct_id, 'ownerId': pid})
         if not acct:
             return None, 'NOT_FOUND', 404
+        if strategy_version is not None and (acct.get('runtimeState') != 'RUNNING' or
+                                              acct.get('strategyVersion') != strategy_version or
+                                              acct.get('strategyContractHash') != strategy_hash or
+                                              (required_mode is not None and acct.get('mode') != required_mode)):
+            return None, 'STRATEGY_CHANGED_OR_STOPPED', 409
         # Idempotent replay?
         for ap in (acct.get('appliedApprovals') or []):
             if ap.get('idemKey') == idem_key:
@@ -604,7 +610,8 @@ def apply_buy_atomic(col, acct_id, pid, expected_version, idem_key, proposal_id,
 
 
 def apply_sell_atomic(col, acct_id, pid, sizing, source='approval', idem_key=None,
-                      proposal_id=None, canonical=None, base_currency='USDC', asset=None, price_q=PRICE_Q):
+                      proposal_id=None, canonical=None, base_currency='USDC', asset=None, price_q=PRICE_Q,
+                      strategy_version=None, strategy_hash=None, required_mode=None):
     """Apply a reduce-only SELL as ONE conditional update. `asset` (M5) defaults
     to the sizing/canonical asset (BTC for M1-M4)."""
     asset = (asset or sizing.get('asset') or (canonical or {}).get('asset') or 'BTC').upper()
@@ -612,6 +619,10 @@ def apply_sell_atomic(col, acct_id, pid, sizing, source='approval', idem_key=Non
         acct = col.find_one({'paperAccountId': acct_id, 'ownerId': pid})
         if not acct:
             return None, 'NOT_FOUND', 404
+        if strategy_version is not None and (acct.get('strategyVersion') != strategy_version or
+                                              acct.get('strategyContractHash') != strategy_hash or
+                                              (required_mode is not None and acct.get('mode') != required_mode)):
+            return None, 'STRATEGY_CHANGED', 409
         if idem_key:
             for ap in (acct.get('appliedApprovals') or []):
                 if ap.get('idemKey') == idem_key:

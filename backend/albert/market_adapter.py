@@ -50,6 +50,14 @@ def _positive(value, label):
     return result
 
 
+def _strategy_supply_positive(value):
+    try:
+        amount = Decimal(str(value))
+        return amount.is_finite() and amount > 0
+    except (InvalidOperation, TypeError, ValueError):
+        return False
+
+
 def simulation_precision(price):
     """Fractional-paper precision; not exchange tick/quantity rules."""
     value = _positive(price, 'simulated mark')
@@ -104,7 +112,19 @@ def _cg_quote(item):
         raise MarketUnavailable('STALE_COINGECKO_PRICE', f"Asset {item['id']} reported update {reported}")
     if time.time() - retrieved > PRICE_CACHE_TTL:
         raise MarketUnavailable('STALE_RETRIEVAL', f"Asset {item['id']} quote cache expired")
+    supply = {k: str(row[k]) if _strategy_supply_positive(row.get(k)) else None
+              for k in ('circulating_supply', 'total_supply', 'max_supply')}
+    change = row.get('price_change_percentage_24h')
+    try:
+        change_24h = str(Decimal(str(change))) if Decimal(str(change)).is_finite() else None
+    except (InvalidOperation, TypeError, ValueError):
+        change_24h = None
     return {'assetId': item['id'], 'asset': item['symbol'], 'price': str(value),
+            'changePct24h': change_24h,
+            'tokenomics': {'source': 'coingecko', 'assetId': item['id'],
+                           'circulatingSupply': supply['circulating_supply'],
+                           'totalSupply': supply['total_supply'], 'maxSupply': supply['max_supply'],
+                           'asOf': reported if observed_ms is not None else None},
             'provider': 'coingecko', 'pair': None, 'marketId': None, 'marketBase': None,
             'quote': 'USD', 'receivedAt': datetime.datetime.fromtimestamp(retrieved, datetime.timezone.utc).isoformat(),
             'providerTimestamp': observed_ms, 'providerObservedAt': reported if observed_ms is not None else None,

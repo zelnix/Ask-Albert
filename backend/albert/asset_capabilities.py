@@ -58,49 +58,72 @@ def expected_pairs(symbol):
 
 
 def capability(symbol, mandate=None, data_availability='UNVERIFIED'):
+    """Code-path capability, distinct from observed availability and approved QA.
+
+    These checks describe configured routes, not evidence of an end-to-end run.
+    Generic multi-asset accounting is implemented for the frozen, unambiguous
+    ID-bound asset; a ticker or top-50 ranking alone never grants paper support.
+    """
     sym = str(symbol or '').strip().upper()
     m = mandate or {}
     approved = {str(x).upper() for x in (m.get('approved_coins') or [])}
     excluded = {str(x).upper() for x in (m.get('excluded_coins') or [])}
     item = candidate(sym)
-    known = item is not None
-    canonical = known and sym != 'MATIC'  # selected symbols enter the same engine on demand
-    data_route = known  # CoinGecko by frozen ID, public CCXT only as optional fallback
-    if not known:
-        reason = 'NOT_IN_FROZEN_UNIVERSE'
-    elif sym == 'MATIC':
-        reason = 'RENAMED_TO_POL_NEW_ENTRIES_REQUIRE_REVIEW'
-    elif item.get('ambiguousTicker'):
-        reason = 'AMBIGUOUS_ASSET_IDENTITY'
-    elif sym in excluded:
-        reason = 'EXCLUDED_BY_MANDATE'
-    elif approved and sym not in approved:
-        reason = 'NOT_IN_APPROVED_UNIVERSE'
-    else:
-        reason = None
-    can_start = reason is None
-    data_reason = 'MARKET_DATA_UNAVAILABLE' if data_availability in ('STALE', 'MISSING') else None
+    unique_id = bool(item and sym != 'MATIC' and item.get('symbol') == sym
+                     and item.get('id') and not item.get('ambiguousTicker')
+                     and sum(r.get('id') == item['id'] for r in CANDIDATES) == 1)
+    # market_adapter.ticker/daily both resolve the pinned ID from CANDIDATES;
+    # _daily_ohlcv feeds scoring through that same route (no ticker fallback).
+    own_data = bool(unique_id and item['id'] in CANDIDATES_BY_ID)
+    # decision.build_decisions(strategy_symbols=...) injects requested symbols;
+    # scoring.score_asset uses deps.daily_ohlcv and its own asset price.
+    decisions = bool(own_data and sym in ENTRY_ASSETS)
+    # portfolio.compute_portfolio_equity + core.size_buy/size_sell and atomic
+    # apply_buy_atomic/apply_sell_atomic use the same symbol's account lot.
+    wallet = bool(decisions and sym in ENTRY_ASSETS)
+    capabilities = {
+        'uniqueAssetIdentity': {'implemented': unique_id, 'reasonCode': None if unique_id else 'NO_UNIQUE_ASSET_IDENTITY',
+                                'reason': None if unique_id else (f'{sym} has no unique, unambiguous frozen asset identity.' if sym != 'MATIC' else 'MATIC was renamed; request POL explicitly for new paper entries.')},
+        'ownPriceAndDailyHistory': {'implemented': own_data, 'reasonCode': None if own_data else 'OWN_PRICE_HISTORY_ROUTE_MISSING',
+                                    'reason': None if own_data else f'Albert cannot obtain an ID-bound {sym} price and completed daily history.'},
+        'entryAndExitDecisions': {'implemented': decisions, 'reasonCode': None if decisions else 'ENTRY_EXIT_DECISION_ROUTE_MISSING',
+                                  'reason': None if decisions else f'Albert cannot yet evaluate entry and exit decisions for {sym}.'},
+        'walletBuyHoldSell': {'implemented': wallet, 'reasonCode': None if wallet else 'WALLET_BUY_HOLD_SELL_MISSING',
+                              'reason': None if wallet else f'Paper-wallet BUY, holding and SELL accounting is not implemented for {sym}.'},
+    }
+    missing = [{'capability': key, 'reasonCode': value['reasonCode'], 'reason': value['reason']}
+               for key, value in capabilities.items() if not value['implemented']]
+    implemented = not missing
+    restriction = ('EXCLUDED_BY_MANDATE' if sym in excluded else
+                   'NOT_IN_APPROVED_UNIVERSE' if approved and sym not in approved else None)
+    restriction_reason = (f'{sym} is excluded by this wallet’s trading mandate.' if restriction == 'EXCLUDED_BY_MANDATE' else
+                          f'{sym} is not in this wallet’s approved coin list.' if restriction else None)
+    data_reason = ('STALE_OWN_DAILY_HISTORY_OR_PRICE' if data_availability == 'STALE' else
+                   'OWN_DAILY_HISTORY_OR_PRICE_MISSING' if data_availability == 'MISSING' else None)
+    state = ('UNSUPPORTED' if not implemented else 'RESTRICTED_IN_WALLET' if restriction else
+             'WAITING_FOR_DATA' if data_reason else 'SUPPORTED')
     return {
         'symbol': sym, 'assetId': item['id'] if item else None,
         'originalRank': item.get('rank') if item else None,
         'selectedBy': item.get('selectedBy', 'market_cap') if item else None,
         'legacySymbol': item.get('legacySymbol') if item else None,
         'expectedPairsUnverified': expected_pairs(sym) if item else [],
-        'known': known,
-        'verificationStatus': ('DATA_AVAILABLE' if data_availability == 'FRESH' and can_start else
-                               'DATA_UNAVAILABLE' if data_reason else
-                               'IMPLEMENTED_DATA_UNVERIFIED' if can_start else 'UNAVAILABLE'),
-        'implemented': {'canonicalDecision': canonical, 'dailyScoringRoute': data_route,
-                        'paperSimulation': known, 'idBoundPriceAndHistory': data_route},
-        'entrySupported': can_start,  # not permission to BUY without live data/decision/risk
-        'dataAvailability': data_availability,
-        'mandateStatus': ('EXCLUDED' if sym in excluded else 'NOT_APPROVED' if approved and sym not in approved
-                          else 'ALLOWED'),
-        'startEligible': can_start,  # WAIT may Start; it cannot place a trade
-        'entryEligible': can_start and data_availability == 'FRESH',
-        'reasonCode': reason or data_reason,
-        'missingCapability': data_reason,
-        'needsImplementation': not known,
+        'known': item is not None, 'capabilities': capabilities, 'missingCapabilities': missing,
+        'implemented': {'canonicalDecision': decisions, 'dailyScoringRoute': own_data,
+                        'paperSimulation': wallet, 'idBoundPriceAndHistory': own_data},
+        'paperSupported': implemented, 'paperSupportVerified': False,
+        'verificationStatus': 'NOT_END_TO_END_VERIFIED',
+        'supportState': state, 'restrictionReason': restriction_reason,
+        'dataReason': (f'Waiting for current {sym} price or complete daily history; no quote or candle is substituted.' if data_reason else None),
+        'entrySupported': implemented, 'dataAvailability': data_availability,
+        'mandateStatus': ('EXCLUDED' if restriction == 'EXCLUDED_BY_MANDATE' else 'NOT_APPROVED' if restriction else 'ALLOWED'),
+        'startEligible': implemented and not restriction,
+        'entryEligible': implemented and not restriction and data_availability == 'FRESH',
+        'reasonCode': (missing[0]['reasonCode'] if missing else restriction or data_reason),
+        'reason': (missing[0]['reason'] if missing else restriction_reason or
+                   (f'Waiting for current {sym} price or complete daily history.' if data_reason else None)),
+        'missingCapability': missing[0] if missing else None,
+        'needsImplementation': not implemented,
     }
 
 
@@ -134,17 +157,10 @@ def validate_assets(draft, canonical_assets, mandate=None):
         if row['assetId'] and row['assetId'] in seen_ids:
             errors.append(f'{sym} duplicates the same underlying asset identity; allocations cannot be merged.')
         seen_ids.add(row['assetId'])
-        reason = row['reasonCode']
-        if reason == 'RENAMED_TO_POL_NEW_ENTRIES_REQUIRE_REVIEW':
-            errors.append('MATIC is now POL. Existing MATIC holdings and exits remain; request POL explicitly for a new strategy.')
-        elif reason == 'NO_CANONICAL_ENTRY_DECISION':
-            errors.append(f'{sym} cannot start: the decision engine does not evaluate new entries for it.')
-        elif reason == 'EXCLUDED_BY_MANDATE':
-            errors.append(f'{sym} is on your mandate excluded list.')
-        elif reason == 'NOT_IN_APPROVED_UNIVERSE':
-            errors.append(f'{sym} is not in your mandate approved list.')
-        elif reason:
-            errors.append(f'{sym} is not a supported strategy entry asset.')
+        if row['missingCapabilities']:
+            errors.append(f'{sym}: Unsupported for paper trading. ' + ' '.join(x['reason'] for x in row['missingCapabilities']))
+        elif row['mandateStatus'] != 'ALLOWED':
+            errors.append(f'{sym}: Restricted in this wallet. {row["restrictionReason"]}')
         if not math.isfinite(a['weightPct']) or a['weightPct'] <= 0:
             errors.append(f'{sym} must have a finite, positive weight.')
     total = sum(a['weightPct'] for a in canonical_assets)

@@ -22,6 +22,10 @@ const STATUS = {
   SAVED: { label: 'Saved · not trading', color: 'text-slate-300', dot: 'bg-slate-500' },
   STOPPED: { label: 'Stopped', color: 'text-amber-300', dot: 'bg-amber-400' },
   LIVE: { label: 'Paper trading', color: 'text-emerald-300', dot: 'bg-emerald-400' },
+  WAIT: { label: 'WAIT · awaiting conditions or data', color: 'text-amber-300', dot: 'bg-amber-400' },
+  RESTRICTED_IN_WALLET: { label: 'Restricted in this wallet', color: 'text-amber-300', dot: 'bg-amber-400' },
+  NEEDS_CHANGES: { label: 'Needs changes', color: 'text-amber-300', dot: 'bg-amber-400' },
+  UNAVAILABLE: { label: 'Worker unavailable', color: 'text-amber-300', dot: 'bg-amber-400' },
   HALTED_RISK: { label: 'Halted — drawdown limit', color: 'text-rose-300', dot: 'bg-rose-400' },
   ARCHIVED: { label: 'Archived', color: 'text-slate-500', dot: 'bg-slate-600' },
 };
@@ -104,7 +108,7 @@ export default function PaperTradingBot({ onNav }) {
   const t = d.totals || {};
   const rows = d.strategies || [];
   const traded = rows.filter((r) => r.paperAccountId);
-  const live = rows.filter((r) => r.paperStatus === 'LIVE');
+  const live = rows.filter((r) => r.isLive);
   const activity = d.activity || [];
   const positions = d.positions || [];
   const needsApproval = d.pendingApprovals || [];
