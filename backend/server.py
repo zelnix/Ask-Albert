@@ -7023,6 +7023,16 @@ def _run_diagnostics(mode='checkup', client=None, context=None, pid=''):
     return result
 
 
+@app.get('/api/v1/albert/diagnostics/latest')
+def albert_diagnostics_latest(user: dict = Depends(get_current_user)):
+    """Owner-scoped last completed checkup; reading this never runs diagnostics."""
+    doc = diagnostics_runs_col.find_one(
+        {'ownerPid': owner_pid(user), 'mode': 'checkup', 'status': 'completed'},
+        {'_id': 0, 'run_id': 1, 'completed_at': 1, 'summary': 1, 'diagnosis.public_code': 1},
+        sort=[('completed_at', -1)])
+    return {'status': 'ready', 'checkup': doc, 'hasRecordedCheckup': doc is not None}
+
+
 @app.post('/api/v1/albert/diagnostics/checkups')
 def albert_diagnostics_checkup(payload: dict = Body(default={}), user: dict = Depends(get_current_user)):
     pid = owner_pid(user)
@@ -8668,8 +8678,12 @@ def _paper_dashboard_payload(a):
         pause_reason = 'DRAWDOWN_BREAKER'
     else:
         pause_reason = None
+    public_wallet = {**_paper_acct_public(a), 'strategyId': a.get('strategyId'),
+                     'strategyVersion': a.get('strategyVersion'),
+                     'cash': _paper_core.dstr(a.get('cash')) if a.get('cash') is not None else None,
+                     'protectedReserve': _paper_core.dstr(a.get('protectedReserve')) if a.get('protectedReserve') is not None else None}
     return {'status': 'ready', 'paperOnly': True, 'asOf': datetime.datetime.utcnow().isoformat(),
-            'account': _paper_acct_public(a), 'equity': eqc, 'positions': positions,
+            'account': public_wallet, 'equity': eqc, 'positions': positions,
             'openOrders': [], 'pendingProposals': proposals, 'recentActivity': activity,
             'performance': {'closedTrades': len(closed), 'wins': wins,
                             'winRatePct': round(wins / len(closed) * 100, 1) if closed else None,
@@ -12948,10 +12962,29 @@ def paper_overview(user: dict = Depends(get_current_user)):
     REVIEW surface only — there is no setup here; strategies are started from the
     strategy itself."""
     pid = owner_pid(user)
+    # Authoritative owner-scoped existence is the account collection, not the
+    # strategy list (an older or unlinked wallet can still have holdings/history).
+    owner_account_docs = list(paper_accounts_col.find({'ownerId': pid}))
+    owned_accounts = [
+        {'paperAccountId': a.get('paperAccountId'), 'name': a.get('name') or 'Paper wallet',
+         'strategyId': a.get('strategyId'), 'runtimeState': a.get('runtimeState'),
+         'startingCash': _paper_core.dstr(a.get('startingCash')) if a.get('startingCash') is not None else None,
+         'createdAt': a.get('createdAt')}
+        for a in owner_account_docs
+    ]
+    ledger_checks = []
+    for a in owner_account_docs:
+        try:
+            check = _paper_core.reconcile_multi(a)
+            ledger_checks.append({'paperAccountId': a.get('paperAccountId'),
+                                  'status': 'MATCH' if check['ok'] else 'MISMATCH'})
+        except Exception:  # A failed read must not be reported as a matching ledger.
+            ledger_checks.append({'paperAccountId': a.get('paperAccountId'), 'status': 'UNAVAILABLE'})
     strategies, positions, approvals, activity, recent_fills = [], [], [], [], []
     tot_value = Decimal('0'); tot_start = Decimal('0')
     tot_cash = Decimal('0'); tot_risk = Decimal('0'); tot_risk_limit = Decimal('0')
-    value_known = True; cash_known = True; risk_known = True; wallets = 0
+    tot_protected = Decimal('0'); tot_deployable = Decimal('0')
+    value_known = True; cash_known = True; risk_known = True; reserve_known = True; wallets = 0
     realized = Decimal('0'); fees = Decimal('0')
     closed_trades = 0; wins = 0
     for doc in strategy_contracts_col.find({'ownerId': pid, 'latest': True}).sort('updatedAt', -1):
@@ -12981,6 +13014,12 @@ def paper_overview(user: dict = Depends(get_current_user)):
                 cash_known = False
             else:
                 tot_cash += cash
+            protected = _paper_core.D(eq.get('protectedReserve'))
+            deployable = _paper_core.D(eq.get('deployableCash'))
+            if protected is None or deployable is None or not eq.get('available'):
+                reserve_known = False
+            else:
+                tot_protected += protected; tot_deployable += deployable
             allocation_risk = (d.get('allocation') or {}).get('openRisk') or {}
             risk_usd = _paper_core.D(allocation_risk.get('usd'))
             limit_usd = _paper_core.D(allocation_risk.get('limitUsd'))
@@ -13019,31 +13058,54 @@ def paper_overview(user: dict = Depends(get_current_user)):
         strategies.append(row)
     activity.sort(key=lambda e: e.get('recordedAt') or e.get('effectiveAt') or '', reverse=True)
     recent_fills.sort(key=lambda e: e.get('recordedAt') or e.get('effectiveAt') or '', reverse=True)
-    live = [s for s in strategies if s.get('paperStatus') == 'LIVE']
-    totals = {'wallets': wallets, 'liveStrategies': len(live),
+    linked_wallet_ids = {s.get('paperAccountId') for s in strategies if s.get('paperAccountId')}
+    account_ids = {a.get('paperAccountId') for a in owned_accounts if a.get('paperAccountId')}
+    rollup_complete = account_ids == linked_wallet_ids and len(owned_accounts) == wallets
+    if not rollup_complete:
+        value_known = False  # Never present a partial roll-up as the owner's total.
+        cash_known = False; risk_known = False; reserve_known = False
+    live = [s for s in strategies if s.get('isLive')]
+    totals = {'wallets': len(owned_accounts), 'linkedWallets': wallets,
+              'rollupComplete': rollup_complete,
+              'liveStrategies': len(live),
               'savedStrategies': len([s for s in strategies if s.get('paperStatus') == 'SAVED']),
               'value': _paper_core.dstr(tot_value) if (value_known and wallets) else None,
-              'startingCash': _paper_core.dstr(tot_start) if wallets else None,
+              'startingCash': _paper_core.dstr(tot_start) if (wallets and rollup_complete) else None,
               'valueAvailable': bool(value_known and wallets),
               'pnlUsd': (_paper_core.dstr(tot_value - tot_start) if (value_known and wallets) else None),
               'pnlPct': (_paper_core.dstr((tot_value - tot_start) / tot_start * Decimal('100'),
                                           _paper_core.PCT_Q)
                          if (value_known and wallets and tot_start > 0) else None),
-              'realizedPnl': _paper_core.dstr(realized) if wallets else None,
-              'fees': _paper_core.dstr(fees) if wallets else None,
-              'closedTrades': closed_trades, 'wins': wins,
-              'winRatePct': round(wins / closed_trades * 100, 1) if closed_trades else None,
-              'openPositions': len(positions), 'pendingApprovals': len(approvals),
+              'realizedPnl': _paper_core.dstr(realized) if (wallets and rollup_complete) else None,
+              'fees': _paper_core.dstr(fees) if (wallets and rollup_complete) else None,
+              'closedTrades': closed_trades if rollup_complete else None,
+              'wins': wins if rollup_complete else None,
+              'winRatePct': round(wins / closed_trades * 100, 1) if closed_trades and rollup_complete else None,
+              'openPositions': len(positions) if rollup_complete else None,
+              'pendingApprovals': len(approvals) if rollup_complete else None,
               'autopilotStrategies': len([s for s in live if s.get('approvalMode') == 'AUTOPILOT'])}
     combined_usable = bool(wallets and value_known and tot_value > 0)
     cash_usable = bool(combined_usable and cash_known)
+    reserve_usable = bool(combined_usable and reserve_known)
     risk_usable = bool(combined_usable and risk_known)
     return {'status': 'ready', 'paperOnly': True,
             'asOf': datetime.datetime.utcnow().isoformat(),
+            'accountResolution': {'status': 'RESOLVED', 'count': len(owned_accounts),
+                                  'linkedCount': wallets, 'rollupComplete': rollup_complete,
+                                  'reason': None if rollup_complete else 'Owner has a paper wallet outside the latest strategy roll-up; combined totals are withheld.'},
+            'accounts': owned_accounts,
+            'ledgerIntegrity': {'status': 'NO_WALLETS' if not ledger_checks else
+                                'MISMATCH' if any(x['status'] == 'MISMATCH' for x in ledger_checks) else
+                                'UNAVAILABLE' if any(x['status'] == 'UNAVAILABLE' for x in ledger_checks) else 'MATCH',
+                                'checkedAt': datetime.datetime.utcnow().isoformat(),
+                                'wallets': ledger_checks},
             'strategies': strategies, 'totals': totals, 'positions': positions,
             'cashAvailable': cash_usable,
             'cashTotal': _paper_core.dstr(tot_cash) if cash_usable else None,
             'cashPct': _paper_core.dstr(tot_cash / tot_value * Decimal('100'), _paper_core.PCT_Q) if cash_usable else None,
+            'protectedCashAvailable': reserve_usable,
+            'protectedCashTotal': _paper_core.dstr(tot_protected) if reserve_usable else None,
+            'deployableCashTotal': _paper_core.dstr(tot_deployable) if reserve_usable else None,
             'openRiskAvailable': risk_usable,
             'openRiskUsd': _paper_core.dstr(tot_risk) if risk_usable else None,
             'openRiskPct': _paper_core.dstr(tot_risk / tot_value * Decimal('100'), _paper_core.PCT_Q) if risk_usable else None,

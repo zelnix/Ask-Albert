@@ -774,7 +774,7 @@ function Detail({ sid, onChange, onRevise }) {
 export default function StrategyStudio({ chatGoal = '', chatDraftKey = null, onChatDismiss }) {
   const [list, setList] = useState([]);
   const [listError, setListError] = useState('');
-  const [sel, setSel] = useState(null);
+  const [sel, setSel] = useState(() => typeof window !== 'undefined' ? window.sessionStorage.getItem('dashboard:selectedStrategyId') || null : null);
   const [revision, setRevision] = useState(null);
   const [building, setBuilding] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -790,6 +790,15 @@ export default function StrategyStudio({ chatGoal = '', chatDraftKey = null, onC
     } finally { setLoading(false); }
   }, []);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (sel) window.sessionStorage.setItem('dashboard:selectedStrategyId', sel);
+    else window.sessionStorage.removeItem('dashboard:selectedStrategyId');
+  }, [sel]);
+  useEffect(() => {
+    const requested = typeof window !== 'undefined' ? window.sessionStorage.getItem('dashboard:strategyId') : null;
+    if (requested) { window.sessionStorage.removeItem('dashboard:strategyId'); setSel(requested); setBuilding(false); }
+  }, []);
   useEffect(() => { if (chatDraftKey) { setRevision(null); setSel(null); setBuilding(true); } }, [chatDraftKey]);
   const revise = (s) => {
     setRevision({ id: s.strategyId, version: s.version, goal: s.contract?.requestedPlan || '',

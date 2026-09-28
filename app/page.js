@@ -49,6 +49,7 @@ import DiagnosticsCheckup from './components/DiagnosticsCheckup';
 import PaperTradingBot from './components/PaperTradingBot';
 import AlbertHome from './components/AlbertHome';
 import OneScreenHome, { HomeTicker } from './components/one-screen/OneScreenHome';
+import ConsolidatedDetail, { DASHBOARD_AREAS } from './components/one-screen/ConsolidatedDetail';
 import GlobalMenu from './components/one-screen/GlobalMenu';
 import useOneScreenData from './components/one-screen/useOneScreenData';
 import { ScenarioEvaluation, OpportunityResearch } from './components/one-screen/DetailScreens';
@@ -3255,7 +3256,11 @@ export default function DashboardPage() {
   }, [authRetry]);
   // One owner-scoped read set feeds the entire Home, including its global ticker.
   // Keep it mounted on evaluation/research deep links so Back restores the snapshot.
-  const oneScreen = useOneScreenData(!!authUser && ['home', 'scenario-evaluation', 'opportunities'].includes(active));
+  const oneScreen = useOneScreenData(
+    !!authUser && (['home', 'scenario-evaluation', 'opportunities'].includes(active) || active.startsWith('dashboard-')),
+    active.startsWith('dashboard-') ? active.slice('dashboard-'.length) : active === 'scenario-evaluation' ? 'btc' : active === 'opportunities' ? 'radar' : 'home',
+    authUser?.id || null
+  );
   const navigate = useCallback((id) => {
     if (id === 'home') setSymbol('BTC');
     setActive(id);
@@ -3517,16 +3522,16 @@ export default function DashboardPage() {
       const res = await fetch(symbol === 'BTC' ? `${API_BASE}/v1/dashboard` : `${API_BASE}/v1/dashboard?symbol=${encodeURIComponent(symbol)}`, { cache: 'no-store' });
       const json = await res.json();
       if (json.status === 'ready') { failCount.current = 0; if (symbol === 'BTC') __dashCache = json; setData(json); setStatus('ready'); setRefreshing(false); }
-      else if (json.status === 'error') { setError(json.error || 'Unknown error'); setStatus('error'); }
-      else { failCount.current = 0; setStatus('computing'); }
+      else if (json.status === 'error') { setError(json.error || 'Unknown error'); setStatus((s) => s === 'ready' || s === 'stale' ? 'stale' : 'error'); }
+      else { failCount.current = 0; setStatus((s) => s === 'ready' || s === 'stale' ? 'stale' : 'computing'); }
     } catch (e) {
       // Transient during cold start: the ingress can return an HTML page before the
       // backend is ready, which fails JSON.parse. Keep showing the skeleton and
       // auto-retry a few times before surfacing a hard error, so a brief restart
       // never strands the user on the "Engine error" screen.
       failCount.current += 1;
-      if (failCount.current <= 6) setStatus((s) => (s === 'ready' ? s : 'computing'));
-      else { setError(String(e)); setStatus('error'); }
+      if (failCount.current <= 6) setStatus((s) => s === 'ready' || s === 'stale' ? 'stale' : 'computing');
+      else { setError(String(e)); setStatus((s) => s === 'ready' || s === 'stale' ? 'stale' : 'error'); }
     }
   }, [symbol]);
 
@@ -3635,7 +3640,10 @@ export default function DashboardPage() {
 
   // Strategy Studio owns its data. A slow market dashboard must not hide paper
   // strategy review/validation behind an unrelated analytics skeleton.
-  if (active !== 'strategies' && !data && (status === 'loading' || status === 'computing')) {
+  const dashboardFirst = active === 'home' || active === 'scenario-evaluation' || active === 'opportunities' || active.startsWith('dashboard-');
+  // The published market run is only one source. Keep the Home/header and its
+  // independently loaded owner/market results visible while it is unavailable.
+  if (!dashboardFirst && active !== 'strategies' && active !== 'paper' && !data && (status === 'loading' || status === 'computing')) {
     return (
       <>
         <DashboardSkeleton ticker={ticker} />
@@ -3643,7 +3651,7 @@ export default function DashboardPage() {
       </>
     );
   }
-  if (active !== 'strategies' && !data && status === 'error') {
+  if (!dashboardFirst && active !== 'strategies' && active !== 'paper' && !data && status === 'error') {
     return (
       <main className="flex min-h-screen flex-col items-center justify-center gap-4 bg-slate-950 px-6">
         <div className="rounded-full bg-red-500/10 p-4"><Activity className="h-8 w-8 text-red-400" /></div>
@@ -3654,11 +3662,14 @@ export default function DashboardPage() {
     );
   }
 
-  const d = data;
+  const d = data || {};
   const activeSection = sec(active);
   const visibleSections = SECTIONS.filter((s) => !REMOVED_SECTIONS.includes(s.id) && (symbol === 'BTC' || !BTC_ONLY_SECTIONS.includes(s.id)));
   const renderSection = () => {
-    if (active === 'home') return <OneScreenHome d={d} ticker={ticker} news={news} newsStatus={newsStatus} snapshot={oneScreen} onNav={navigate} />;
+    if (active === 'home') return <OneScreenHome d={data} dashboardStatus={status} ticker={ticker} news={news} newsStatus={newsStatus} snapshot={oneScreen} onNav={navigate} />;
+    if (active.startsWith('dashboard-') && DASHBOARD_AREAS[active.slice('dashboard-'.length)]) return <ConsolidatedDetail
+      key={`${active}-${symbol}`} kind={active.slice('dashboard-'.length)} dashboard={data} dashboardStatus={status} news={news} newsStatus={newsStatus} snapshot={oneScreen}
+      symbol={symbol} onNav={navigate} onBack={() => navigate('home')} />;
     if (active === 'scenarios') return <AlbertHome onNav={navigate} />;
     if (active === 'scenario-evaluation') return <ScenarioEvaluation snapshot={oneScreen} levels={d?.created_at && (Date.now() - new Date(d.created_at).getTime() < 72 * 3600000) ? d?.chart?.sr_levels : []} onNav={navigate} />;
     if (active === 'opportunities') return <OpportunityResearch snapshot={oneScreen} onNav={navigate} />;
@@ -3679,6 +3690,7 @@ export default function DashboardPage() {
     if (active === 'admin') return <AdminSection user={authUser} onSignOut={handleSignOut} />;
     if (active === 'leverage') return <LeverageSection />;
     if (active === 'institutional') return (<div className="space-y-5"><DemoMetricsCard title="Institutional & Derivatives" icon={Landmark} panel={d.institutional} sectionId="institutional" />{(d.symbol || 'BTC') === 'BTC' && <EtfFlowsCard />}</div>);
+    if (active === 'etf') return <EtfFlowsCard />;
     if (active === 'macro') return <PolicySection d={d} />;
     if (active === 'news') return <NewsSection news={news} status={newsStatus} onRefresh={handleNewsRefresh} refreshing={newsRefreshing} ohlc={data?.chart?.ohlc} />;
     if (active === 'risk') return <RiskSection d={d} />;
@@ -3713,7 +3725,7 @@ export default function DashboardPage() {
               <img src="/ask-albert-logo.png" alt="" className="h-9 w-auto max-w-[90px] object-contain" /><span className="hidden text-xs font-bold text-amber-300 sm:inline">Ask Albert</span>
             </a>
             <div className="hidden shrink-0 sm:block"><PublishStamp publishedAt={d?.created_at} compact /></div>
-            {active === 'home' ? <HomeTicker d={d} ticker={ticker} snapshot={oneScreen} onNav={navigate} /> : <div className="flex min-w-0 flex-1 items-center gap-2">
+            {active === 'home' ? <HomeTicker d={data} ticker={ticker} snapshot={oneScreen} dashboardStatus={status} onNav={navigate} /> : <div className="flex min-w-0 flex-1 items-center gap-2">
               <CoinPicker coins={coins} symbol={symbol} onSelect={setSymbol} />
               {symbol !== 'BTC' && <button type="button" onClick={() => setCompareOpen(true)} title="Overlay this coin vs Bitcoin" className="flex items-center gap-1.5 rounded-md border border-slate-700 bg-slate-900 px-2 py-1.5 text-xs font-semibold text-slate-200 hover:border-sky-500/50"><Scale className="h-4 w-4" /><span className="hidden sm:inline">vs Bitcoin</span></button>}
               <span className="hidden truncate text-sm font-semibold text-white lg:inline">{ticker?.price ? `${fmtUsd(ticker.price)} · ${ticker.change24h ?? '—'}%` : 'Quote unavailable'}</span>
@@ -3774,7 +3786,7 @@ export default function DashboardPage() {
             <AccountMenu user={authUser} onSignOut={handleSignOut} />
           </header>
 
-          <main className={`mx-auto ${active === 'home' ? 'max-w-[1920px] px-3 py-3 md:px-4' : 'max-w-6xl px-4 py-6 md:px-8'}`}><ErrorBoundary label={activeSection?.label || active} resetKey={active}>{renderSection()}</ErrorBoundary></main>
+          <main className={`mx-auto ${active === 'home' || active.startsWith('dashboard-') ? 'max-w-[1920px] px-3 py-3 md:px-4' : 'max-w-6xl px-4 py-6 md:px-8'}`}><ErrorBoundary label={activeSection?.label || DASHBOARD_AREAS[active.slice('dashboard-'.length)]?.title || active} resetKey={active}>{renderSection()}</ErrorBoundary></main>
           <footer className="space-y-2 px-4 pb-8 text-center md:px-8">
             <p className="mx-auto max-w-3xl rounded-lg border border-slate-800 bg-slate-900/40 px-4 py-2.5 text-[11px] leading-relaxed text-slate-500">
               Ask Albert provides Bitcoin market analysis, probability-based forecasts and educational information. It does not provide personalised financial advice or guarantee future outcomes.

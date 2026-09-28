@@ -94,14 +94,14 @@ const ExpandedChart = ({ type, outlook, eth, levels, runAsOf, onClose, onNav, on
   const lastShared = marketRows.filter((p) => p.BTC != null && p.ETH != null).at(-1);
   const btc = type === 'btc';
   const destination = btc ? 'scenarios' : 'crossmarket';
-  return <ModalShell title={btc ? 'BTC · observed history & historical scenarios' : 'Cross-market · observed BTC vs ETH'} onClose={onClose} className="max-w-[1500px]">
+  return <ModalShell title={btc ? 'BTC · observed history & historical scenarios' : 'Cross-market · observed BTC vs ETH'} onClose={onClose} placement="full">
     <div className="space-y-4">
       <p className="text-sm leading-relaxed text-slate-300">{btc
         ? 'White is observed BTC daily closes through Now. Dashed blue and pink paths describe bull and bear outcomes from comparable past conditions only when their historical range passed the evaluation gate. Outcomes can fall outside this range.'
         : 'BTC and ETH are rebased to 100 on their first shared closed-candle date. Each point uses an actual observation; when one feed misses a date, its line has a gap rather than an estimated point.'}</p>
       <div className="rounded-lg border border-slate-700 bg-slate-950/70 p-2 sm:p-4">
-        {btc ? <BTCChart outlook={outlook} levels={levels} height={Math.min(440, Math.max(280, (typeof window !== 'undefined' ? window.innerHeight : 700) - 340))} expanded />
-          : <MarketChart btc={outlook} eth={eth} height={Math.min(440, Math.max(280, (typeof window !== 'undefined' ? window.innerHeight : 700) - 340))} expanded />}
+        {btc ? <BTCChart outlook={outlook} levels={levels} height={Math.max(320, (typeof window !== 'undefined' ? window.innerHeight : 700) - 220)} expanded />
+          : <MarketChart btc={outlook} eth={eth} height={Math.max(320, (typeof window !== 'undefined' ? window.innerHeight : 700) - 220)} expanded />}
       </div>
       <div className="grid gap-2 text-xs text-slate-300 sm:grid-cols-2">
         <p><strong className="text-white">What:</strong> {btc ? (band?.available ? `20th–80th percentile of ${band.matchedDays ?? 'the'} matched historical days, ${band.horizonDays} days ahead; ${band.lowerPct}% to ${band.upperPct}%.` : `No evaluated scenario: ${band?.reasonText || 'evaluation unavailable'}`) : (lastShared ? `BTC ${lastShared.BTC - 100 >= 0 ? '+' : ''}${(lastShared.BTC - 100).toFixed(1)}%, ETH ${lastShared.ETH - 100 >= 0 ? '+' : ''}${(lastShared.ETH - 100).toFixed(1)}% across shared days.` : 'A comparable series is not available.')}</p>

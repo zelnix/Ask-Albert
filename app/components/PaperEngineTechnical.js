@@ -141,7 +141,12 @@ export default function PaperEngineTechnical({ onNav }) {
       try {
         const j = await (await fetch(`${API_BASE}/v1/albert/paper/accounts`, { cache: 'no-store' })).json();
         setAccounts(j.accounts || []);
-        if (j.accounts && j.accounts.length) setAcctId((cur) => cur || j.accounts[0].paperAccountId);
+        if (j.accounts && j.accounts.length) {
+          const requested = typeof window !== 'undefined' ? window.sessionStorage.getItem('dashboard:paperAccountId') : null;
+          if (requested) window.sessionStorage.removeItem('dashboard:paperAccountId');
+          setAcctId((cur) => cur && j.accounts.some((a) => a.paperAccountId === cur) ? cur :
+            j.accounts.some((a) => a.paperAccountId === requested) ? requested : j.accounts[0].paperAccountId);
+        }
       } catch (e) { setAccounts([]); }
     })();
   }, []);

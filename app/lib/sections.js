@@ -39,7 +39,9 @@ const SECTIONS = [
   { id: 'whales', label: 'Whale Watch', icon: Fish,
     blurb: 'Live balances of the largest, publicly-labeled Bitcoin wallets — major exchanges, ETF/treasury custody, governments and famous whales. Track who is accumulating or distributing, with balances fetched live on-chain. Names are curated from public labels.' },
   { id: 'institutional', label: 'Institutional & Derivatives', icon: Landmark,
-    blurb: 'Institutional & derivatives footprint — futures open interest, funding, long/short positioning and taker flow (live via OKX), plus REAL US spot Bitcoin ETF net flows (live via Farside/bitbo).' },
+    blurb: 'Institutional and derivatives observations. Paper decisions use the approved strategy, not this narrative feed.' },
+  { id: 'etf', label: 'ETF Flows', icon: Landmark,
+    blurb: 'Observed US spot Bitcoin ETF fund flows and source freshness. Market context, never a paper order.' },
   { id: 'leverage', label: 'Leverage', icon: Gauge,
     blurb: 'Long & short positioning, market leverage and liquidation pressure — is leverage high or low, are traders leaning long or short, and where is the greater squeeze/liquidation risk right now.' },
   { id: 'macro', label: 'Macro & Policy', icon: Globe,
@@ -116,7 +118,7 @@ const TECH_GROUPS = [
   { label: 'Market Intelligence', ids: ['briefing', 'scenarios', 'scenario-evaluation', 'overview', 'forecasts', 'market-intel', 'drivers', 'crossmarket', 'analogs', 'news', 'macro'] },
   { label: 'Portfolio & Risk', ids: ['risk', 'leverage', 'events', 'smartmoney'] },
   { label: 'Trading Evidence', ids: ['opportunities', 'performance', 'paperengine', 'alert-engine'] },
-  { label: 'On-chain & Flows', ids: ['whales', 'institutional', 'network', 'timemachine'] },
+  { label: 'On-chain & Flows', ids: ['etf', 'whales', 'institutional', 'network', 'timemachine'] },
   { label: 'Data Trust', ids: ['dataaudit', 'alerts'] },
   { label: 'System', ids: ['admin', 'checkup', 'settings'] },
 ];
@@ -124,7 +126,7 @@ const TECH_GROUPS = [
 const PRIMARY_IDS = PRIMARY_NAV.map(s => s.id);
 
 // Sections that are Bitcoin-specific and hidden from the nav when an altcoin is selected.
-const BTC_ONLY_SECTIONS = ['smartmoney', 'whales', 'macro', 'events', 'timemachine', 'leverage', 'network', 'dataaudit', 'admin', 'drivers', 'scenarios', 'scenario-evaluation', 'opportunities'];
+const BTC_ONLY_SECTIONS = ['smartmoney', 'whales', 'etf', 'macro', 'events', 'timemachine', 'leverage', 'network', 'dataaudit', 'admin', 'drivers', 'scenarios', 'scenario-evaluation', 'opportunities'];
 // Sections removed from the app entirely (superseded by the global coin picker).
 const REMOVED_SECTIONS = ['compare'];
 

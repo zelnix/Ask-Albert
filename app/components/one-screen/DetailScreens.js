@@ -13,8 +13,11 @@ const ScenarioEvaluation = ({ snapshot, onNav, levels }) => {
   const band = outlook?.band;
   const validation = outlook?.validation || band?.validation;
   const ev = validation?.evaluation || {};
-  const predictive = validation?.predictiveValidation === true;
-  const state = !validation ? 'Evaluation unavailable' : predictive ? 'Validated predictive performance' : 'Not validated as predictive';
+  const evaluatedAt = ev.lastEvaluatedAt ? new Date(/(Z|[+-]\d\d:?\d\d)$/.test(ev.lastEvaluatedAt) ? ev.lastEvaluatedAt : `${ev.lastEvaluatedAt}Z`).getTime() : NaN;
+  const predictive = validation?.predictiveValidation === true && ev.evaluationPoints > 0 && Number.isFinite(evaluatedAt)
+    && Date.now() - evaluatedAt >= 0 && Date.now() - evaluatedAt < 240 * 60 * 60 * 1000 && snapshot?.health?.outlook === 'ready';
+  const state = snapshot?.health?.outlook === 'error' || snapshot?.health?.outlook === 'stale' ? 'Stale evaluation · current validation unavailable'
+    : !validation || !Number.isFinite(evaluatedAt) ? 'Evaluation unavailable' : predictive ? 'Validated predictive performance' : 'Not validated as predictive';
   return <div className="mx-auto max-w-5xl space-y-4">
     <div className="flex items-center gap-2"><Microscope className="h-5 w-5 text-sky-300" /><h1 className="text-xl font-bold text-white">Scenario Evaluation</h1><button type="button" onClick={snapshot.refresh} aria-label="Refresh evaluation read" className="ml-auto rounded-md border border-slate-700 p-2 text-slate-300 hover:text-white"><RefreshCw className="h-4 w-4" /></button></div>
     <p className="text-sm text-slate-300">This is the measured walk-forward report card for the 7-day BTC historical scenario. A plausible-looking historical range is never proof of predictive performance.</p>
@@ -33,7 +36,13 @@ const ScenarioEvaluation = ({ snapshot, onNav, levels }) => {
 const OpportunityResearch = ({ snapshot, onNav }) => {
   const [evidenceId, setEvidenceId] = useState(null);
   const research = snapshot?.streams?.researchFindings || snapshot?.sop?.marketStreams?.researchFindings;
-  return <div className="mx-auto max-w-5xl space-y-4"><h1 className="text-xl font-bold text-white">Opportunity research</h1><p className="text-sm text-slate-300">Falsifiable setups under observation — not recommendations, approvals or completed paper trades. The strategy workflow validates risk and mandate fit separately.</p><ResearchFindings research={research} onEvidence={setEvidenceId} onAsk={(f) => { window.__albertPendingAsk = { question: `Explain research finding ${f.title}, its confirmation and invalidation, using its attached evidence.`, context: { findingId: f.findingId, snapshotId: f.snapshotId } }; onNav('ask'); }} /><NavigateLink id="home" onNav={onNav}>← Back to dashboard</NavigateLink>{evidenceId && <EvidenceDrawer snapshotId={evidenceId} onClose={() => setEvidenceId(null)} />}</div>;
+  const findings = Array.isArray(research?.findings) ? research.findings : [];
+  const relevantProposal = (snapshot?.paper?.pendingApprovals || []).find((proposal) =>
+    findings.some((finding) => (finding.asset || finding.symbol) === proposal.asset));
+  return <div className="mx-auto max-w-5xl space-y-4"><h1 className="text-xl font-bold text-white">Opportunity research</h1><p className="text-sm text-slate-300">Falsifiable setups under observation — not recommendations, approvals or completed paper trades. The strategy workflow validates risk and mandate fit separately.</p>{snapshot?.health?.streams !== 'ready' && <p role="status" className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-200">{snapshot?.health?.streams === 'loading' && !research ? 'Loading research observations…' : research ? 'Stale research · the latest market-stream read was unavailable. These findings are not confirmed current.' : 'Research unavailable · no setup is inferred.'}</p>}<ResearchFindings research={research} onEvidence={setEvidenceId} onAsk={(f) => { window.__albertPendingAsk = { question: `Explain research finding ${f.title}, its confirmation and invalidation, using its attached evidence.`, context: { findingId: f.findingId, snapshotId: f.snapshotId } }; onNav('ask'); }} />
+    {findings.length > 0 && <section className="rounded-lg border border-slate-700 bg-slate-900 p-3 text-sm text-slate-300"><p>Research findings are observations. A paper BUY requires an explicitly reviewed, supported strategy and a matching current decision.</p><NavigateLink id="strategies" onNav={onNav}>Review strategies in Studio →</NavigateLink></section>}
+    {relevantProposal && <section className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100">A separate {relevantProposal.asset} paper proposal is waiting for approval in its wallet. This research did not place the trade.<div><NavigateLink id="paper" onNav={onNav}>Open paper proposal →</NavigateLink></div></section>}
+    <NavigateLink id="home" onNav={onNav}>← Back to dashboard</NavigateLink>{evidenceId && <EvidenceDrawer snapshotId={evidenceId} onClose={() => setEvidenceId(null)} />}</div>;
 };
 
 export { ScenarioEvaluation, OpportunityResearch };

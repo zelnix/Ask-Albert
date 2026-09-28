@@ -1,53 +1,79 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { API_BASE } from '../../lib/api';
 
 const endpoint = (name) => `${API_BASE}/v1/${name}`;
 const previewBody = (assetId) => ({ assetId, horizon: 'P7D', quoteCurrency: 'USD', phaseMode: 'ASSESSED', ...(assetId === 'ETH' ? { modelVersion: 'v1', historyDays: 45 } : {}) });
 
-const useOneScreenData = (enabled) => {
-  const [data, setData] = useState({ sop: null, paper: null, outlook: null, eth: null, streams: null, driver: null, etf: null });
-  const [health, setHealth] = useState({ sop: 'loading', paper: 'loading', outlook: 'loading', eth: 'loading', streams: 'loading', driver: 'loading', etf: 'loading' });
+const FOCUS_SOURCES = {
+  brief: ['sop', 'outlook'], paper: ['paper'], portfolio: ['sop', 'paper'],
+  btc: ['outlook'], intelligence: ['sop', 'driver', 'streams', 'outlook', 'eth'], news: ['sop'],
+  evidence: ['sop', 'paper', 'outlook'], flows: ['streams', 'etf'],
+  radar: ['streams', 'paper'],
+};
+const HOME_SOURCES = ['sop', 'paper', 'outlook', 'streams', 'driver', 'etf', 'eth', 'whales', 'network', 'sentiment'];
+const EMPTY_DATA = { sop: null, paper: null, outlook: null, eth: null, streams: null, driver: null, etf: null, whales: null, network: null, sentiment: null };
+const EMPTY_HEALTH = { sop: 'loading', paper: 'loading', outlook: 'loading', eth: 'loading', streams: 'loading', driver: 'loading', etf: 'loading', whales: 'loading', network: 'loading', sentiment: 'loading' };
+const useOneScreenData = (enabled, focus = 'home', ownerId = null) => {
+  const [data, setData] = useState(EMPTY_DATA);
+  const [health, setHealth] = useState(EMPTY_HEALTH);
   const mounted = useRef(false);
+  const ownerRef = useRef(ownerId);
+  const generation = useRef(0);
   const inflight = useRef(new Set());
+  useEffect(() => {
+    if (ownerRef.current === ownerId) return;
+    ownerRef.current = ownerId;
+    generation.current += 1;
+    dataRef.current = EMPTY_DATA;
+    setData(EMPTY_DATA);
+    setHealth(EMPTY_HEALTH);
+  }, [ownerId]);
   const read = useCallback(async (key, url, options) => {
-    if (inflight.current.has(key)) return;
-    inflight.current.add(key);
+    const requestGeneration = generation.current;
+    const requestKey = `${requestGeneration}:${key}`;
+    if (inflight.current.has(requestKey)) return;
+    inflight.current.add(requestKey);
     try {
       const response = await fetch(url, { credentials: 'include', cache: 'no-store', ...options });
       if (!response.ok) throw new Error(String(response.status));
       const body = await response.json();
-      if (!mounted.current) return;
+      if (!mounted.current || generation.current !== requestGeneration) return;
       if (body.status && !['ready', 'partial'].includes(body.status)) {
-        setHealth((h) => ({ ...h, [key]: body.status === 'computing' || body.status === 'preparing' ? 'loading' : 'unavailable' }));
+        setHealth((h) => ({ ...h, [key]: ['computing', 'preparing'].includes(body.status)
+          ? (dataRef.current[key] ? 'stale' : 'loading') : (dataRef.current[key] ? 'stale' : 'unavailable') }));
         return;
       }
       setData((old) => ({ ...old, [key]: body }));
-      setHealth((h) => ({ ...h, [key]: 'ready' }));
+      setHealth((h) => ({ ...h, [key]: body.status === 'partial' ? 'stale' : 'ready' }));
     } catch (error) {
-      if (mounted.current) {
+      if (mounted.current && generation.current === requestGeneration) {
         setHealth((h) => ({ ...h, [key]: dataRef.current[key] ? 'stale' : 'error' }));
       }
-    } finally { inflight.current.delete(key); }
+    } finally { inflight.current.delete(requestKey); }
   }, []);
   const dataRef = useRef(data);
   dataRef.current = data;
+  const wanted = useMemo(() => FOCUS_SOURCES[focus] || HOME_SOURCES, [focus]);
   const core = useCallback(() => {
-    read('sop', endpoint('albert/state-of-play'));
-    read('paper', endpoint('albert/paper/overview'));
-    read('outlook', endpoint('albert/scenario-outlooks/preview'), {
+    if (wanted.includes('sop')) read('sop', endpoint('albert/state-of-play'));
+    if (wanted.includes('paper')) read('paper', endpoint('albert/paper/overview'));
+    if (wanted.includes('outlook')) read('outlook', endpoint('albert/scenario-outlooks/preview'), {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(previewBody('BTC')),
     });
-  }, [read]);
+  }, [read, wanted]);
   const optional = useCallback(() => {
-    read('streams', endpoint('albert/market-streams?participants=1'));
-    read('driver', endpoint('albert/market-driver/btc?horizon=SWING'));
-    read('etf', endpoint('etf-flows'));
-    read('eth', endpoint('albert/scenario-outlooks/preview'), {
+    if (wanted.includes('streams')) read('streams', endpoint('albert/market-streams?participants=1'));
+    if (wanted.includes('driver')) read('driver', endpoint('albert/market-driver/btc?horizon=SWING'));
+    if (wanted.includes('etf')) read('etf', endpoint('etf-flows'));
+    if (wanted.includes('eth')) read('eth', endpoint('albert/scenario-outlooks/preview'), {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(previewBody('ETH')),
     });
-  }, [read]);
+    if (wanted.includes('whales')) read('whales', endpoint('whales'));
+    if (wanted.includes('network')) read('network', endpoint('network-health'));
+    if (wanted.includes('sentiment')) read('sentiment', endpoint('fear-greed'));
+  }, [read, wanted]);
   useEffect(() => {
     if (!enabled) { mounted.current = false; return; }
     mounted.current = true;
@@ -67,7 +93,7 @@ const useOneScreenData = (enabled) => {
       window.removeEventListener('albert:paper-updated', onEvent);
       window.removeEventListener('albert:mandate-updated', onEvent);
     };
-  }, [enabled, core, optional]);
+  }, [enabled, core, optional, ownerId]);
   // The scenario provider computes its gate asynchronously on a cold cache. Only
   // retry the *read* while pending; no background trading/engine cycle is triggered.
   useEffect(() => {
@@ -77,7 +103,7 @@ const useOneScreenData = (enabled) => {
     }), 4000);
     return () => clearTimeout(retry);
   }, [enabled, data.outlook, read]);
-  return { ...data, health, refresh: () => { core(); optional(); } };
+  return { ...(ownerRef.current === ownerId ? data : EMPTY_DATA), health: ownerRef.current === ownerId ? health : EMPTY_HEALTH, refresh: () => { core(); optional(); } };
 };
 
 export default useOneScreenData;

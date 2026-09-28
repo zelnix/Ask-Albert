@@ -51,6 +51,9 @@ function timeAgo(iso) {
 export default function PaperTradingBot({ onNav }) {
   const [d, setD] = React.useState(null);
   const [state, setState] = React.useState('loading'); // loading | ready | signedout | error
+  const [selectedWalletId, setSelectedWalletId] = React.useState(() => typeof window !== 'undefined' ? window.sessionStorage.getItem('dashboard:selectedWalletId') || '' : '');
+  const [walletDetail, setWalletDetail] = React.useState(null);
+  const [walletState, setWalletState] = React.useState('idle');
 
   const load = React.useCallback(async () => {
     try {
@@ -65,13 +68,51 @@ export default function PaperTradingBot({ onNav }) {
   }, []);
 
   React.useEffect(() => { load(); }, [load]);
+  // Wallet existence comes from the authoritative account list, not a strategy count.
+  const accountIds = (d?.accounts || []).map((a) => a.paperAccountId).filter(Boolean).join('|');
+  React.useEffect(() => {
+    const accounts = d?.accounts || [];
+    if (!accounts.some((a) => a.paperAccountId === selectedWalletId)) {
+      setSelectedWalletId(accounts[0]?.paperAccountId || '');
+      setWalletDetail(null);
+    }
+  }, [accountIds, selectedWalletId]);
+  React.useEffect(() => {
+    if (selectedWalletId && typeof window !== 'undefined') window.sessionStorage.setItem('dashboard:selectedWalletId', selectedWalletId);
+  }, [selectedWalletId]);
+  const loadWallet = React.useCallback(async (accountId, signal) => {
+    if (!accountId) return;
+    setWalletState('loading');
+    try {
+      const response = await fetch(`${API_BASE}/v1/albert/paper/accounts/${encodeURIComponent(accountId)}/dashboard`,
+        { credentials: 'include', cache: 'no-store', signal });
+      if (!response.ok) throw new Error('Wallet read unavailable');
+      const record = await response.json();
+      if (record?.status !== 'ready') throw new Error('Wallet read unavailable');
+      if (signal?.aborted) return;
+      setWalletDetail(record); setWalletState('ready');
+    } catch (error) {
+      if (signal?.aborted) return;
+      setWalletDetail(null); setWalletState('error');
+    }
+  }, []);
+  React.useEffect(() => {
+    if (!selectedWalletId) { setWalletState('idle'); return; }
+    const controller = new AbortController();
+    loadWallet(selectedWalletId, controller.signal);
+    const timer = setInterval(() => loadWallet(selectedWalletId, controller.signal), 30000);
+    return () => { clearInterval(timer); controller.abort(); };
+  }, [selectedWalletId, loadWallet]);
   // Aggregate figures refresh quietly; this screen never writes anything.
   React.useEffect(() => {
     const t = setInterval(load, 30000);
     return () => clearInterval(t);
   }, [load]);
 
-  const goStrategies = () => onNav && onNav('strategies');
+  const goStrategies = (strategyId) => {
+    if (typeof strategyId === 'string' && strategyId && typeof window !== 'undefined') window.sessionStorage.setItem('dashboard:strategyId', strategyId);
+    onNav?.('strategies');
+  };
 
   const Header = ({ children }) => (
     <div className="flex flex-wrap items-start justify-between gap-3">
@@ -106,6 +147,10 @@ export default function PaperTradingBot({ onNav }) {
   }
 
   const t = d.totals || {};
+  const accounts = d.accounts || [];
+  const resolution = d.accountResolution || {};
+  const accountsResolved = resolution.status === 'RESOLVED';
+  const rollupComplete = accountsResolved && resolution.rollupComplete === true;
   const rows = d.strategies || [];
   const traded = rows.filter((r) => r.paperAccountId);
   const live = rows.filter((r) => r.isLive);
@@ -113,8 +158,8 @@ export default function PaperTradingBot({ onNav }) {
   const positions = d.positions || [];
   const needsApproval = d.pendingApprovals || [];
 
-  // ---- Nothing is trading yet: point at the one journey, don't offer a setup ----
-  if (!traded.length) {
+  // An empty strategy list is NOT proof that no owner wallet exists.
+  if (accountsResolved && accounts.length === 0 && !traded.length) {
     return (
       <div className="space-y-4">
         <Header />
@@ -138,20 +183,22 @@ export default function PaperTradingBot({ onNav }) {
   }
 
   // ---- Plain-English roll-up, composed straight from the payload ----
-  const summary = [
-    live.length
-      ? `${live.length} of your ${rows.length} ${rows.length === 1 ? 'strategy is' : 'strategies are'} paper trading right now${t.autopilotStrategies ? ` (${t.autopilotStrategies} on autopilot)` : ''}.`
-      : `None of your strategies are trading right now — ${traded.length} ${traded.length === 1 ? 'has' : 'have'} a wallet with history you can pick back up.`,
-    t.valueAvailable && t.value != null
-      ? `Together they hold ${usd(t.value)} of the ${usd(t.startingCash)} they started with, so you are ${Number(t.pnlUsd) >= 0 ? 'up' : 'down'} ${signed(t.pnlUsd).replace('+', '')}${t.pnlPct != null ? ` (${t.pnlPct}%)` : ''}.`
-      : 'Live valuation is unavailable for at least one wallet right now, so the combined total is being withheld rather than guessed.',
-    t.closedTrades
-      ? `${t.closedTrades} ${t.closedTrades === 1 ? 'trade has' : 'trades have'} closed${t.winRatePct != null ? ` with a ${t.winRatePct}% win rate` : ''}, and ${positions.length} ${positions.length === 1 ? 'position is' : 'positions are'} open.`
-      : `${positions.length} ${positions.length === 1 ? 'position is' : 'positions are'} open and nothing has closed yet.`,
-    needsApproval.length
-      ? `${needsApproval.length} ${needsApproval.length === 1 ? 'trade needs' : 'trades need'} your approval — you approve those on the strategy itself.`
-      : 'Nothing is waiting on you.',
-  ].join(' ');
+  const summary = !accountsResolved ? 'The owner wallet list is unavailable; no zero balance or empty history is inferred.'
+    : !rollupComplete ? `${accounts.length} owner paper-wallet record(s) exist. The latest strategy list does not cover every wallet, so combined cash, holdings and profit/loss are withheld. Select a wallet below for its own ledger.`
+      : [
+        live.length
+          ? `${live.length} of your ${rows.length} ${rows.length === 1 ? 'strategy is' : 'strategies are'} paper trading right now${t.autopilotStrategies ? ` (${t.autopilotStrategies} on autopilot)` : ''}.`
+          : `None of your strategies are trading right now — ${traded.length} ${traded.length === 1 ? 'has' : 'have'} a wallet with history you can pick back up.`,
+        t.valueAvailable && t.value != null
+          ? `Together they hold ${usd(t.value)} of the ${usd(t.startingCash)} they started with, so you are ${Number(t.pnlUsd) >= 0 ? 'up' : 'down'} ${signed(t.pnlUsd).replace('+', '')}${t.pnlPct != null ? ` (${t.pnlPct}%)` : ''}.`
+          : 'Live valuation is unavailable for at least one wallet right now, so the combined total is being withheld rather than guessed.',
+        t.closedTrades
+          ? `${t.closedTrades} ${t.closedTrades === 1 ? 'trade has' : 'trades have'} closed${t.winRatePct != null ? ` with a ${t.winRatePct}% win rate` : ''}, and ${positions.length} ${positions.length === 1 ? 'position is' : 'positions are'} open.`
+          : `${positions.length} ${positions.length === 1 ? 'position is' : 'positions are'} open and nothing has closed yet.`,
+        needsApproval.length
+          ? `${needsApproval.length} ${needsApproval.length === 1 ? 'trade needs' : 'trades need'} your approval — you approve those on the strategy itself.`
+          : 'Nothing is waiting on you.',
+      ].join(' ');
 
   return (
     <div className="space-y-4">
@@ -170,24 +217,24 @@ export default function PaperTradingBot({ onNav }) {
         <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
           <div>
             <p className="text-[10px] uppercase tracking-wide text-slate-500">Total value</p>
-            <p className="text-2xl font-bold text-white">{t.valueAvailable ? usd(t.value) : 'unavailable'}</p>
+            <p className="text-2xl font-bold text-white">{rollupComplete && t.valueAvailable ? usd(t.value) : 'unavailable'}</p>
           </div>
           <div>
             <p className="text-[10px] uppercase tracking-wide text-slate-500">Profit / loss</p>
-            <p className={`text-2xl font-bold ${pnlColor(t.pnlUsd)}`}>
-              {signed(t.pnlUsd)}{t.pnlPct != null ? <span className="ml-1.5 text-sm font-semibold">{t.pnlPct}%</span> : null}
+            <p className={`text-2xl font-bold ${rollupComplete && t.valueAvailable ? pnlColor(t.pnlUsd) : 'text-slate-400'}`}>
+              {rollupComplete && t.valueAvailable ? <>{signed(t.pnlUsd)}{t.pnlPct != null ? <span className="ml-1.5 text-sm font-semibold">{t.pnlPct}%</span> : null}</> : 'unavailable'}
             </p>
           </div>
         </div>
         <div className="mt-3 grid grid-cols-2 gap-2 text-[12px] sm:grid-cols-4">
-          {[['Started with', usd(t.startingCash)],
+          {[['Started with', rollupComplete ? usd(t.startingCash) : '—'],
             ['Strategies trading', `${t.liveStrategies ?? 0} of ${rows.length}`],
-            ['Open positions', String(positions.length)],
-            ['Closed trades', String(t.closedTrades ?? 0)],
-            ['Win rate', t.winRatePct != null ? `${t.winRatePct}%` : '—'],
-            ['Booked profit', signed(t.realizedPnl)],
-            ['Costs paid', usd(t.fees)],
-            ['Awaiting you', String(needsApproval.length)]].map(([k, v]) => (
+            ['Open positions', rollupComplete ? String(positions.length) : '—'],
+            ['Closed trades', rollupComplete ? String(t.closedTrades ?? 0) : '—'],
+            ['Win rate', rollupComplete && t.winRatePct != null ? `${t.winRatePct}%` : '—'],
+            ['Booked profit', rollupComplete ? signed(t.realizedPnl) : '—'],
+            ['Costs paid', rollupComplete ? usd(t.fees) : '—'],
+            ['Awaiting you', rollupComplete ? String(needsApproval.length) : '—']].map(([k, v]) => (
             <div key={k} className="min-w-0 rounded-lg border border-slate-800 bg-slate-950/60 p-2">
               <p className="text-[10px] uppercase tracking-wide text-slate-500">{k}</p>
               <p className="truncate font-semibold text-slate-200" title={String(v)}>{v}</p>
@@ -196,6 +243,49 @@ export default function PaperTradingBot({ onNav }) {
         </div>
         <p className="mt-3 max-w-[85ch] text-[13px] leading-relaxed text-slate-200">{summary}</p>
       </div>
+
+      {/* A wallet record is authoritative even when no latest strategy points to it. */}
+      {accountsResolved && accounts.length > 0 && <section className="rounded-lg border border-slate-700 bg-slate-900/70 p-4" aria-label="Selected paper wallet">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div><h3 className="text-sm font-bold text-white">Selected virtual wallet</h3><p className="mt-0.5 text-[11px] text-slate-400">Owner-scoped account ledger · combined balances are withheld when any wallet is unlinked.</p></div>
+          <label className="text-[11px] text-slate-400">Wallet
+            <select value={selectedWalletId} onChange={(e) => { setWalletDetail(null); setSelectedWalletId(e.target.value); }}
+              className="ml-2 max-w-[220px] rounded-md border border-slate-600 bg-slate-950 px-2 py-1.5 text-xs text-white">
+              {accounts.map((a) => <option key={a.paperAccountId} value={a.paperAccountId}>{a.name || a.paperAccountId} · {a.paperAccountId}</option>)}
+            </select>
+          </label>
+        </div>
+        {walletState === 'loading' && <p role="status" className="mt-3 text-sm text-slate-400">Loading this wallet’s holdings and ledger…</p>}
+        {walletState === 'error' && <div role="alert" className="mt-3 flex items-center gap-3 text-sm text-amber-200">Wallet data unavailable; no zero balance inferred. <button type="button" onClick={() => loadWallet(selectedWalletId)} className="font-semibold underline">Retry wallet read</button></div>}
+        {walletState === 'ready' && walletDetail && <div className="mt-3 space-y-3 text-xs text-slate-300">
+          <p className="text-[11px] text-slate-400">Wallet ledger read {relative(walletDetail.asOf)} · ID {walletDetail.account?.paperAccountId} · {walletDetail.account?.runtimeState || 'state unavailable'}</p>
+          <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+            {[
+              ['Starting virtual cash', usd(walletDetail.account?.startingCash)],
+              ['Current cash', usd(walletDetail.account?.cash)],
+              ['Marked equity', walletDetail.equity?.available ? usd(walletDetail.equity?.value) : 'Unavailable · mark missing'],
+              ['Open positions', String((walletDetail.positions || []).length)],
+              ['Realized P/L', signed(walletDetail.performance?.realizedPnl)],
+              ['Fees paid', usd(walletDetail.performance?.fees)],
+              ['Pending proposals', String((walletDetail.pendingProposals || []).length)],
+              ['Ledger reconciliation', walletDetail.integrity?.ok === true ? 'MATCH' : walletDetail.integrity?.ok === false ? 'MISMATCH' : 'Unavailable']
+            ].map(([label, value]) => <div key={label} className="rounded-md border border-slate-700 bg-slate-950/50 p-2"><p className="text-[10px] uppercase text-slate-500">{label}</p><p className="mt-0.5 break-words font-semibold text-slate-100">{value}</p></div>)}
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="rounded-md border border-slate-700 p-3"><p className="font-semibold text-white">Open holdings</p>
+              {(walletDetail.positions || []).length ? (walletDetail.positions || []).map((p) => <p key={p.paperPositionId || p.asset} className="mt-1.5">{p.asset} · {p.netQuantity} units · entry {usd(p.averageEntryPrice)} · {p.currentPrice ? `mark ${usd(p.currentPrice)}` : 'mark unavailable'} · unrealized {p.unrealizedPnl != null ? signed(p.unrealizedPnl) : 'unavailable'}</p>) : <p className="mt-1.5 text-slate-400">No open holdings in this wallet.</p>}
+            </div>
+            <div className="rounded-md border border-slate-700 p-3"><p className="font-semibold text-white">Completed trade log</p>
+              {(walletDetail.recentActivity || []).filter((e) => e.eventType === 'FILL').length ? (walletDetail.recentActivity || []).filter((e) => e.eventType === 'FILL').slice(0, 10).map((e, i) => <p key={e.ledgerEventId || i} className="mt-1.5">{e.side} {e.asset} · {e.qty} @ {usd(e.fillPx)} · fee {usd(e.fee)} · {relative(e.recordedAt || e.effectiveAt)}</p>) : <p className="mt-1.5 text-slate-400">No completed fills in this wallet’s recent ledger. Proposals are not fills.</p>}
+              {(walletDetail.recentActivity || []).length >= 20 && <p className="mt-2 text-amber-200">Latest 20 ledger entries shown. Open Paper Engine for the full audit.</p>}
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-3">
+            {walletDetail.account?.strategyId && <button type="button" onClick={() => goStrategies(walletDetail.account.strategyId)} className="inline-flex items-center gap-1.5 font-semibold text-sky-300 hover:underline">Open this wallet’s strategy <ArrowRight className="h-3.5 w-3.5" /></button>}
+            <button type="button" onClick={() => { if (typeof window !== 'undefined') window.sessionStorage.setItem('dashboard:paperAccountId', selectedWalletId); onNav?.('paperengine'); }} className="inline-flex items-center gap-1.5 font-semibold text-sky-300 hover:underline">Open this wallet’s Paper Engine evidence <ArrowRight className="h-3.5 w-3.5" /></button>
+          </div>
+        </div>}
+      </section>}
 
       {/* ---- Anything waiting on you (approved on the strategy, not here) ---- */}
       {needsApproval.length > 0 && (
@@ -223,7 +313,7 @@ export default function PaperTradingBot({ onNav }) {
           {rows.map((r) => {
             const m = st(r.paperStatus);
             return (
-              <button key={r.strategyId} onClick={goStrategies}
+              <button key={r.strategyId} onClick={() => goStrategies(r.strategyId)}
                 className="w-full rounded-xl border border-slate-800 bg-slate-950/60 p-3 text-left transition-colors hover:border-sky-500/40">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${m.dot}`} />
