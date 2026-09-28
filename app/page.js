@@ -214,9 +214,12 @@ function reviewOverview(d) {
 }
 function reviewPerformance(d) {
   const sb = d.scoreboard;
+  if (!sb) return 'Performance data is not available for this asset.';
   const edge = (sb.winRate - 50).toFixed(1);
   const streak = sb.currentStreak >= 0 ? `${sb.currentStreak} correct in a row` : `${Math.abs(sb.currentStreak)} wrong in a row`;
-  return `Across ${sb.total} graded out-of-sample predictions the engine is right ${sb.winRate}% of the time — ${edge >= 0 ? `+${edge}` : edge} points versus a coin-flip — with a best run of ${sb.bestWinStreak} straight wins and currently ${streak}. These are honest, non-deleted results. Forward-live tracking has ${d.live_record.tracked} signal(s) logged and grades automatically as each new daily candle closes${d.live_record.winRate != null ? ` (live hit-rate ${d.live_record.winRate}%)` : ''}.`;
+  const lr = d.live_record;
+  const liveText = lr ? `Forward-live tracking has ${lr.tracked} signal(s) logged and grades automatically as each new daily candle closes${lr.winRate != null ? ` (live hit-rate ${lr.winRate}%)` : ''}.` : '';
+  return `Across ${sb.total} graded out-of-sample predictions the engine is right ${sb.winRate}% of the time — ${edge >= 0 ? `+${edge}` : edge} points versus a coin-flip — with a best run of ${sb.bestWinStreak} straight wins and currently ${streak}. These are honest, non-deleted results. ${liveText}`;
 }
 /* --------------------------- sections -------------------------------- */
 const riskRing = (lvl) => ({
@@ -1313,6 +1316,11 @@ function OverviewSection({ d, ticker }) {
 
 function PerformanceSection({ d }) {
   const sb = d.scoreboard;
+  if (!sb) return (<div className="space-y-5">
+    <SectionHead icon={Trophy} title="Performance" blurb={SECTIONS[3]?.blurb} coin={d.symbol || 'BTC'} />
+    <AiReview text={reviewPerformance(d)} section="performance" />
+    <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800"><p className="text-sm text-slate-400">Scoreboard and trade history are not yet available for {d.symbol || 'this asset'}. The engine's graded results will appear here once sufficient predictions have been logged and evaluated.</p></Card>
+  </div>);
   return (
     <div className="space-y-5">
       <SectionHead icon={Trophy} title="Performance" blurb={SECTIONS[3].blurb} coin={d.symbol || 'BTC'} />
@@ -1330,19 +1338,19 @@ function PerformanceSection({ d }) {
           </div>
           <div className="mt-4 flex items-start gap-2 rounded-lg border border-slate-800 bg-slate-950/50 p-3">
             <Radio className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
-            <div className="text-xs text-slate-400"><span className="font-semibold text-slate-200">Live forward record:</span> {d.live_record.tracked} tracked · {d.live_record.resolved} resolved{d.live_record.winRate != null ? ` · ${d.live_record.winRate}% hit` : ' · grading begins on the next daily candle'}</div>
+            <div className="text-xs text-slate-400"><span className="font-semibold text-slate-200">Live forward record:</span> {d.live_record ? <>{d.live_record.tracked} tracked · {d.live_record.resolved} resolved{d.live_record.winRate != null ? ` · ${d.live_record.winRate}% hit` : ' · grading begins on the next daily candle'}</> : 'Not available for this asset'}</div>
           </div>
         </Card>
 
         <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800 lg:col-span-2">
-          <div className="mb-3 flex items-center gap-2"><History className="h-5 w-5 text-slate-400" /><h3 className="flex items-center gap-1 font-semibold text-slate-100">Trade Log<InfoTip below text="Every recent prediction the model made, graded against what actually happened on the next candle — its date, signal, confidence and win/loss." /></h3><span className="text-sm text-slate-500">last {d.trades.length} graded predictions</span></div>
+          <div className="mb-3 flex items-center gap-2"><History className="h-5 w-5 text-slate-400" /><h3 className="flex items-center gap-1 font-semibold text-slate-100">Trade Log<InfoTip below text="Every recent prediction the model made, graded against what actually happened on the next candle — its date, signal, confidence and win/loss." /></h3><span className="text-sm text-slate-500">last {(d.trades || []).length} graded predictions</span></div>
           <div className="max-h-[300px] overflow-y-auto pr-1">
             <table className="w-full text-sm">
               <thead className="sticky top-0 bg-slate-900 text-left text-xs uppercase tracking-wider text-slate-500">
                 <tr><th className="py-2">Date</th><th className="py-2">Signal</th><th className="py-2 text-right">Conf.</th><th className="hidden py-2 text-right sm:table-cell">Close → Next</th><th className="py-2 text-right">Result</th></tr>
               </thead>
               <tbody>
-                {d.trades.map((t, i) => (
+                {(d.trades || []).map((t, i) => (
                   <tr key={i} className="border-t border-slate-800/60">
                     <td className="py-2 font-mono text-xs text-slate-400">{t.date}</td>
                     <td className="py-2"><span className={`inline-flex items-center gap-1 font-semibold ${t.signal === 'UP' ? 'text-emerald-400' : 'text-red-400'}`}>{t.signal === 'UP' ? <TrendingUp className="h-3.5 w-3.5" /> : <TrendingDown className="h-3.5 w-3.5" />}{t.signal}</span></td>
@@ -2838,9 +2846,11 @@ function PerformanceHubSection({ d }) {
   const isBtc = React.useContext(SymbolContext) === 'BTC';
   return (
     <div className="space-y-8">
-      {isBtc && <ScorecardSection d={d} />}
+      {!isBtc && <p className="text-xs font-semibold text-slate-400">Bitcoin engine scorecard (independently sourced)</p>}
+      <ScorecardSection d={d} />
       <PerformanceSection d={d} />
-      {isBtc && <DataTrustSection d={d} />}
+      {!isBtc && <p className="text-xs font-semibold text-slate-400">Bitcoin data-trust audit (independently sourced)</p>}
+      <DataTrustSection d={d} />
     </div>
   );
 }
@@ -3164,7 +3174,7 @@ function AccountMenu({ user, onSignOut }) {
 
 // Screens whose asset is always Bitcoin (no picker).
 const FIXED_BTC_SCREENS = new Set([
-  'home', 'scenarios', 'scenario-evaluation', 'smartmoney', 'whales', 'etf',
+  'home', 'scenario-evaluation', 'smartmoney', 'whales', 'etf',
   'leverage', 'timemachine', 'drivers', 'network',
 ]);
 // Screens with no single-coin dimension (market, portfolio, system, chat).
@@ -3205,7 +3215,7 @@ export default function DashboardPage() {
   const [newsRefreshing, setNewsRefreshing] = useState(false);
   const [alertsData, setAlertsData] = useState(__alertsCache);
   const [notif, setNotif] = useState(__notifCache);
-  const [alertFilter, setAlertFilter] = useState('BTC');
+  const [alertFilter, setAlertFilter] = useState('ALL');
   const [compareOpen, setCompareOpen] = useState(false);
   const [albertBioOpen, setAlbertBioOpen] = useState(false);
   const [switching, setSwitching] = useState(false);
@@ -3272,6 +3282,9 @@ export default function DashboardPage() {
     return () => document.removeEventListener('click', onDocClick, true);
   }, []);
   const failCount = React.useRef(0);
+  // Track the current effective symbol so in-flight requests can detect staleness.
+  const activeSymbol = React.useRef(symbol);
+  useEffect(() => { activeSymbol.current = symbol; }, [symbol]);
 
   // Load the supported coin list after authentication.
   useEffect(() => {
@@ -3326,7 +3339,9 @@ export default function DashboardPage() {
         skipUrlPush.current = true;
         const sec = q.get('section') || 'home';
         const s = (q.get('symbol') || '').toUpperCase();
-        if (s) setScreenSymbols((prev) => ({ ...prev, [sec]: s }));
+        // Explicitly restore BTC when the URL has no symbol parameter, so returning
+        // to an earlier BTC view does not keep a newer ETH selection active.
+        setScreenSymbols((prev) => ({ ...prev, [sec]: s || 'BTC' }));
         setActive(sec);
         setHomeParams({ horizon: q.get('horizon') || '7D', focus: q.get('focus') || null, mdHorizon: q.get('mdh') || 'SWING' });
       } catch (e) { /* noop */ }
@@ -3480,12 +3495,14 @@ export default function DashboardPage() {
   }, [loadNotif, authUser]);
 
   const loadNews = useCallback(async () => {
+    const reqSym = symbol;
     try {
-      const r = await fetch(symbol === 'BTC' ? `${API_BASE}/v1/news` : `${API_BASE}/v1/news?symbol=${encodeURIComponent(symbol)}`, { cache: 'no-store' });
+      const r = await fetch(reqSym === 'BTC' ? `${API_BASE}/v1/news` : `${API_BASE}/v1/news?symbol=${encodeURIComponent(reqSym)}`, { cache: 'no-store' });
       const j = await r.json();
-      if (j.status === 'ready') { if (symbol === 'BTC') __newsCache = j; setNews(j); setNewsStatus('ready'); setNewsRefreshing(false); }
+      if (activeSymbol.current !== reqSym) return; // Stale — symbol changed while fetching
+      if (j.status === 'ready') { if (reqSym === 'BTC') __newsCache = j; setNews(j); setNewsStatus('ready'); setNewsRefreshing(false); }
       else setNewsStatus(j.status || 'computing');
-    } catch (e) { setNewsStatus('error'); }
+    } catch (e) { if (activeSymbol.current === reqSym) setNewsStatus('error'); }
   }, [symbol]);
 
   useEffect(() => {
@@ -3504,17 +3521,16 @@ export default function DashboardPage() {
   };
 
   const load = useCallback(async () => {
+    const reqSym = symbol;
     try {
-      const res = await fetch(symbol === 'BTC' ? `${API_BASE}/v1/dashboard` : `${API_BASE}/v1/dashboard?symbol=${encodeURIComponent(symbol)}`, { cache: 'no-store' });
+      const res = await fetch(reqSym === 'BTC' ? `${API_BASE}/v1/dashboard` : `${API_BASE}/v1/dashboard?symbol=${encodeURIComponent(reqSym)}`, { cache: 'no-store' });
       const json = await res.json();
-      if (json.status === 'ready') { failCount.current = 0; if (symbol === 'BTC') __dashCache = json; setData(json); setStatus('ready'); setRefreshing(false); }
+      if (activeSymbol.current !== reqSym) return; // Stale — symbol changed during fetch
+      if (json.status === 'ready') { failCount.current = 0; if (reqSym === 'BTC') __dashCache = json; setData(json); setStatus('ready'); setRefreshing(false); }
       else if (json.status === 'error') { setError(json.error || 'Unknown error'); setStatus((s) => s === 'ready' || s === 'stale' ? 'stale' : 'error'); }
       else { failCount.current = 0; setStatus((s) => s === 'ready' || s === 'stale' ? 'stale' : 'computing'); }
     } catch (e) {
-      // Transient during cold start: the ingress can return an HTML page before the
-      // backend is ready, which fails JSON.parse. Keep showing the skeleton and
-      // auto-retry a few times before surfacing a hard error, so a brief restart
-      // never strands the user on the "Engine error" screen.
+      if (activeSymbol.current !== reqSym) return;
       failCount.current += 1;
       if (failCount.current <= 6) setStatus((s) => s === 'ready' || s === 'stale' ? 'stale' : 'computing');
       else { setError(String(e)); setStatus((s) => s === 'ready' || s === 'stale' ? 'stale' : 'error'); }
@@ -3531,8 +3547,9 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!authUser) return;
     let alive = true;
+    const reqSym = symbol;
     const loadTicker = async () => {
-      try { const r = await fetch(symbol === 'BTC' ? `${API_BASE}/v1/ticker` : `${API_BASE}/v1/ticker?symbol=${encodeURIComponent(symbol)}`, { cache: 'no-store' }); const j = await r.json(); if (alive && j && j.price) { if (symbol === 'BTC') __tickerCache = j; setTicker(j); } } catch (e) { /* noop */ }
+      try { const r = await fetch(reqSym === 'BTC' ? `${API_BASE}/v1/ticker` : `${API_BASE}/v1/ticker?symbol=${encodeURIComponent(reqSym)}`, { cache: 'no-store' }); const j = await r.json(); if (alive && activeSymbol.current === reqSym && j && j.price) { if (reqSym === 'BTC') __tickerCache = j; setTicker(j); } } catch (e) { /* noop */ }
     };
     loadTicker();
     const t = setInterval(loadTicker, 10000);
@@ -3681,7 +3698,7 @@ export default function DashboardPage() {
     if (active === 'market-intel') return <>{researchBar}<MarketIntelligenceSection d={d} /></>;
     if (active === 'crossmarket') return <>{researchBar}<CrossMarketSection /></>;
     if (active === 'analogs') return <>{researchBar}<AnalogsSection /></>;
-    if (active === 'institutional') return <>{researchBar}<div className="space-y-5"><DemoMetricsCard title="Institutional & Derivatives" icon={Landmark} panel={d.institutional} sectionId="institutional" />{symbol === 'BTC' && <EtfFlowsCard />}</div></>;
+    if (active === 'institutional') return <>{researchBar}<div className="space-y-5"><DemoMetricsCard title="Institutional & Derivatives" icon={Landmark} panel={d.institutional} sectionId="institutional" /><div>{symbol !== 'BTC' && <p className="mb-2 text-xs font-semibold text-slate-400">Bitcoin ETF data (independently sourced)</p>}<EtfFlowsCard /></div></div></>;
     if (active === 'news') return <>{researchBar}<NewsSection news={news} status={newsStatus} onRefresh={handleNewsRefresh} refreshing={newsRefreshing} ohlc={data?.chart?.ohlc} /></>;
     if (active === 'risk') return <>{researchBar}<RiskSection d={d} /></>;
     if (active === 'performance') return <>{researchBar}<PerformanceHubSection d={d} /></>;
@@ -3727,10 +3744,10 @@ export default function DashboardPage() {
               <img src="/ask-albert-logo.png" alt="Ask Albert" className="h-14 w-auto max-w-[135px] object-contain" />
             </a>
             {active === 'home' ? <HomeTicker d={data} ticker={ticker} snapshot={oneScreen} dashboardStatus={status} onNav={navigate} /> : <div className="flex min-w-0 flex-1 items-center gap-2">
-              {ticker?.price && <CoinIcon symbol={symbol} size={24} />}
-              <span className="hidden truncate text-sm font-semibold text-white lg:inline">{ticker?.price ? `${(coins.find((c) => c.symbol === symbol) || {}).name || symbol} ${fmtUsd(ticker.price)} · ${ticker.change24h ?? '—'}%` : ''}</span>
+              {!NO_COIN_SCREENS.has(active) && ticker?.price && <CoinIcon symbol={symbol} size={24} />}
+              {!NO_COIN_SCREENS.has(active) && <span className="hidden truncate text-sm font-semibold text-white lg:inline">{ticker?.price ? `${(coins.find((c) => c.symbol === symbol) || {}).name || symbol} ${fmtUsd(ticker.price)} · ${ticker.change24h ?? '—'}%` : ''}</span>}
             </div>}
-            <NotificationBell alertsData={notif} onAck={ackNotif} onViewAll={() => navigate('alerts')} onNavSection={(s) => navigate(s || 'strategies')} onOpenBrief={(sym) => { navigate('briefing'); }} />
+            <NotificationBell alertsData={notif} onAck={ackNotif} onViewAll={() => navigate('alerts')} onNavSection={(s) => navigate(s || 'strategies')} onOpenBrief={(sym) => { if (sym) navigate('briefing', sym.toUpperCase()); else navigate('briefing'); }} />
             {active !== 'home' && <Button onClick={() => setShowReport(true)} size="sm" variant="outline" title="Shareable daily report" className="hidden gap-1.5 border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800 sm:inline-flex"><ClipboardList className="h-4 w-4" /><span className="hidden lg:inline">Report</span></Button>}
             <div className="relative">
               {active !== 'home' && <Button onClick={handleRefresh} disabled={refreshing} size="sm" className="hidden gap-1.5 bg-sky-600 text-white hover:bg-sky-500 sm:inline-flex"><RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} /><span className="hidden lg:inline">{refreshing ? 'Retraining' : 'Retrain'}</span></Button>}
@@ -3794,9 +3811,9 @@ export default function DashboardPage() {
         </div>
       </div>
     </div>
-    {active !== 'home' && <FloatingAlbert active={active} symbol={symbol} onExpand={() => navigate('ask')} />}
+    {active !== 'home' && <FloatingAlbert active={active} symbol={NO_COIN_SCREENS.has(active) ? '' : symbol} onExpand={() => navigate('ask')} />}
     {/* WallAlertToaster removed */}
-    {showReport && <DailyReportModal d={d} onClose={() => setShowReport(false)} />}
+    {showReport && <DailyReportModal d={__dashCache || d} onClose={() => setShowReport(false)} />}
     </SymbolContext.Provider>
   );
 }

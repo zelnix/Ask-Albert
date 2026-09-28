@@ -61,7 +61,7 @@ const MarketSeries = ({ data }) => Array.isArray(data?.series) && data.series.le
 
 /* ── Area ── Render available facts, rows and charts during refresh/loading/error states.
    Show an initial loading state only when that section has NO data at all. */
-const Area = ({ title, route, facts = [], items = [], note, source, onNav, children, state = 'ready' }) => {
+const Area = ({ title, route, facts = [], items = [], note, source, onNav, children, state = 'ready', symbol = 'BTC' }) => {
   const usable = facts.filter((f) => f?.[1] !== null && f?.[1] !== undefined && f?.[1] !== '');
   const shownItems = items.filter(Boolean);
   const hasContent = usable.length > 0 || shownItems.length > 0 || children;
@@ -71,7 +71,7 @@ const Area = ({ title, route, facts = [], items = [], note, source, onNav, child
       <span className={`rounded-md px-2 py-0.5 text-xs font-semibold ${['stale', 'error', 'unavailable', 'unverified', 'WAIT', 'Needs changes'].includes(state) ? 'bg-amber-500/15 text-amber-200' : 'bg-primary/10 text-primary'}`}>{state}</span>
     </div>
     {source && <p className="mt-0.5 text-[11px] text-muted-foreground">{source}</p>}
-    {state === 'stale' && <p role="status" className="mt-2 text-xs text-amber-200">Last published result only \u2014 freshness unavailable. Do not treat these figures as current.</p>}
+    {state === 'stale' && <p role="status" className="mt-2 text-xs text-amber-200">Last published result only — freshness unavailable. Do not treat these figures as current.</p>}
     {usable.length > 0 && <dl className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
       {usable.map(([key, value], i) => <div key={`${key}-${i}`} className="rounded-md border border-border bg-muted/30 px-3 py-2">
         <dt className="text-[11px] text-muted-foreground">{key}</dt>
@@ -84,7 +84,7 @@ const Area = ({ title, route, facts = [], items = [], note, source, onNav, child
     {children}
     {!hasContent && <p role="status" className="mt-3 text-sm text-muted-foreground">{state === 'loading' ? 'Loading this source\u2026' : state === 'error' ? 'This source could not be read. Retry or open its full screen.' : 'Unavailable in latest published data. No value assumed.'}</p>}
     {note && <p className="mt-3 text-xs text-muted-foreground">{note}</p>}
-    <button type="button" onClick={() => onNav(route)} className="mt-3 inline-flex items-center gap-1 border-t border-border pt-2 text-xs font-semibold text-primary hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">Open full {title}<ArrowRight className="h-3.5 w-3.5" /></button>
+    <button type="button" onClick={() => onNav(route, symbol)} className="mt-3 inline-flex items-center gap-1 border-t border-border pt-2 text-xs font-semibold text-primary hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">Open full {title}<ArrowRight className="h-3.5 w-3.5" /></button>
   </section>;
 };
 
@@ -153,7 +153,7 @@ export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboar
   };
 
   const rows = [];
-  const area = (title, route, opts) => rows.push(<Area key={`${title}-${route}`} title={title} route={route} onNav={onNav} state={opts.state || healthOf('sop')} {...opts} />);
+  const area = (title, route, opts) => rows.push(<Area key={`${title}-${route}`} title={title} route={route} onNav={onNav} symbol={symbol} state={opts.state || healthOf('sop')} {...opts} />);
 
   if (kind === 'brief') {
     const claims = sop?.briefing?.claims || [];

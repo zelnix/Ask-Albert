@@ -25,7 +25,9 @@ function DrawableChart({ ohlc, symbol: propSymbol }) {
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
+    // Reset drawing state when switching assets.
     setLayouts({ Default: [] }); setActiveLayout('Default');
+    setPending(null); setHover(null); setMeasure(null); setLivePrice(null);
     try {
       const raw = window.localStorage.getItem(LKEY);
       if (raw) {
@@ -36,13 +38,35 @@ function DrawableChart({ ohlc, symbol: propSymbol }) {
           return;
         }
       }
-      // Migrate BTC legacy drawings once.
+      // Migrate from the preceding btciq_layouts (named layouts without per-asset key).
       if (symbol === 'BTC') {
-        const legacy = JSON.parse(window.localStorage.getItem('btciq_drawings'));
-        if (Array.isArray(legacy)) {
-          const seed = { Default: legacy };
-          setLayouts(seed); setActiveLayout('Default');
-          window.localStorage.setItem(LKEY, JSON.stringify({ active: 'Default', layouts: seed }));
+        const prevKey = 'btciq_layouts';
+        const prev = window.localStorage.getItem(prevKey);
+        if (prev) {
+          try {
+            const o = JSON.parse(prev);
+            if (o && o.layouts && typeof o.layouts === 'object' && Object.keys(o.layouts).length) {
+              setLayouts(o.layouts);
+              setActiveLayout(o.active && o.layouts[o.active] ? o.active : Object.keys(o.layouts)[0]);
+              window.localStorage.setItem(LKEY, prev);
+              window.localStorage.removeItem(prevKey);
+              return;
+            }
+          } catch (_) { /* noop */ }
+        }
+        // Migrate from the oldest btciq_drawings key (flat array, no named layouts).
+        const legacy = window.localStorage.getItem('btciq_drawings');
+        if (legacy) {
+          try {
+            const arr = JSON.parse(legacy);
+            if (Array.isArray(arr) && arr.length) {
+              const seed = { Default: arr };
+              setLayouts(seed); setActiveLayout('Default');
+              window.localStorage.setItem(LKEY, JSON.stringify({ active: 'Default', layouts: seed }));
+              window.localStorage.removeItem('btciq_drawings');
+              return;
+            }
+          } catch (_) { /* noop */ }
         }
       }
     } catch (e) { /* noop */ }

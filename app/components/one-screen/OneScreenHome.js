@@ -77,11 +77,21 @@ const TickerContent = ({ d, ticker, snapshot }) => {
   ];
 };
 
+// Map specialist screen IDs to their correct consolidated dashboard routes.
+const TICKER_DEST_MAP = {
+  'market-intel': 'dashboard-intelligence',
+  'crossmarket': 'dashboard-intelligence',
+  'institutional': 'dashboard-flows',
+  'briefing': 'dashboard-brief',
+  'scenarios': 'dashboard-btc',
+  'scenario-evaluation': 'scenario-evaluation',
+};
+
 const Explanation = ({ item, onNav, onEvidence }) => <div className="space-y-3 text-sm leading-relaxed text-slate-300">
   <p>{item.what || 'Not available.'}</p>
   <p className="border-t border-slate-700 pt-3 text-xs text-slate-400">Source: {item.source || 'unavailable'} · As of {when(item.asOf)}</p>
   {item.snapshotId && <button type="button" onClick={() => onEvidence(item.snapshotId)} className="flex items-center gap-1.5 text-sm font-semibold text-sky-300 underline"><ShieldCheck className="h-4 w-4" />Open evidence</button>}
-  {item.to && <NavigateLink id={item.to.startsWith('dashboard-') ? item.to : `dashboard-${item.to}`} onNav={onNav} className="text-sm">Open detailed screen<ArrowUpRight className="h-3.5 w-3.5" /></NavigateLink>}
+  {item.to && <NavigateLink id={TICKER_DEST_MAP[item.to] || (item.to.startsWith('dashboard-') ? item.to : `dashboard-${item.to}`)} onNav={onNav} className="text-sm">Open detailed screen<ArrowUpRight className="h-3.5 w-3.5" /></NavigateLink>}
 </div>;
 
 const HomeTicker = ({ d, ticker, snapshot, onNav }) => {

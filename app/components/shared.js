@@ -126,6 +126,8 @@ function TapInfo({ text, className = '', below = true, children }) {
 
 function AiReview({ text, voice = true, section, footer }) {
   const symbol = React.useContext(SymbolContext);
+  const symbolRef = React.useRef(symbol);
+  React.useEffect(() => { symbolRef.current = symbol; }, [symbol]);
   const [speaking, setSpeaking] = React.useState(false);
   const [warming, setWarming] = React.useState(false);
   const [techOpen, setTechOpen] = React.useState(false);
@@ -136,10 +138,11 @@ function AiReview({ text, voice = true, section, footer }) {
 
   const load = React.useCallback((m, force) => {
     if (!section) return;
+    const reqSym = symbol;
     setLoading(true);
-    fetch(`${API_BASE}/v1/albert/insight?section=${encodeURIComponent(section)}&mode=${m}&symbol=${encodeURIComponent(symbol)}${force ? '&refresh=1' : ''}`)
+    fetch(`${API_BASE}/v1/albert/insight?section=${encodeURIComponent(section)}&mode=${m}&symbol=${encodeURIComponent(reqSym)}${force ? '&refresh=1' : ''}`)
       .then((r) => r.json())
-      .then((j) => { if (j && j.status === 'ready' && j.text) { setCache((c) => ({ ...c, [m]: j.text })); setGenAt((g) => ({ ...g, [m]: j.generated_at || new Date().toISOString() })); } })
+      .then((j) => { if (j && j.status === 'ready' && j.text && symbolRef.current === reqSym) { setCache((c) => ({ ...c, [m]: j.text })); setGenAt((g) => ({ ...g, [m]: j.generated_at || new Date().toISOString() })); } })
       .catch(() => { /* keep fallback */ })
       .finally(() => setLoading(false));
   }, [section, symbol]);

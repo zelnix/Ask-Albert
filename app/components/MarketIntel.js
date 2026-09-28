@@ -265,7 +265,8 @@ function MarketIntelligenceSection({ d }) {
         <DrawableChart ohlc={d.chart?.ohlc} />
       </div>
       <ChartSection d={d} />
-      {isBtc && <CycleSection d={d} />}
+      {!isBtc && <p className="text-xs font-semibold text-slate-400">Bitcoin cycle & dominance context (independently sourced)</p>}
+      <CycleSection d={d} />
       <AnalysisSection d={d} />
     </div>
   );
