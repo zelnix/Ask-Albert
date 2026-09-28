@@ -2301,7 +2301,12 @@ function AskQuantSection({ d }) {
         return;
       }
       setRateUntil(0);
-      setMessages((m) => [...m, { role: 'assistant', text: j.text || 'Sorry, I could not answer that just now.', sources: j.sources || [], basket_draft: j.basket_draft || null, basket_rebalance: j.basket_rebalance || null, basket_close: j.basket_close || null, mandate_change: j.mandate_change || null }]);
+      const assistantMsg = { role: 'assistant', text: j.text || 'Sorry, I could not answer that just now.', sources: j.sources || [], basket_draft: j.basket_draft || null, basket_rebalance: j.basket_rebalance || null, basket_close: j.basket_close || null, mandate_change: j.mandate_change || null };
+      // Track analysis job if Albert triggered one.
+      if (j.analysisJob) {
+        assistantMsg.analysisJob = j.analysisJob;
+      }
+      setMessages((m) => [...m, assistantMsg]);
     } catch (e) {
       const aborted = e && e.name === 'AbortError';
       setMessages((m) => [...m, { role: 'assistant', error: true, retry: msg, text: aborted ? 'That took longer than expected — please try again (or turn off Deep dive for a faster answer).' : 'Network error — please try again.' }]);
@@ -2367,7 +2372,7 @@ function AskQuantSection({ d }) {
             <div key={i} className={`group flex items-end gap-1.5 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               {m.role === 'assistant' && <img src="/albert.png" alt="Albert" className="h-9 w-9 shrink-0 rounded-full object-cover ring-1 ring-sky-500/30" />}
               <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${m.role === 'user' ? 'whitespace-pre-wrap bg-sky-500/15 text-sky-50 ring-1 ring-sky-500/25' : 'bg-slate-950/60 text-slate-200 ring-1 ring-slate-800'}`}>
-                {m.role === 'assistant' ? <><AlbertText text={m.text} />{m.error && m.retry ? <button onClick={() => send(m.retry)} disabled={loading} className="mt-2 flex items-center gap-1.5 rounded-full border border-sky-500/40 bg-sky-500/10 px-3 py-1 text-[11px] font-semibold text-sky-300 transition-colors hover:bg-sky-500/20 disabled:opacity-50"><RefreshCw className="h-3 w-3" />Retry</button> : m.basket_draft ? <BasketChatCard draft={m.basket_draft} pid={pid} /> : m.basket_rebalance ? <BasketRebalanceCard rebalance={m.basket_rebalance} /> : m.basket_close ? <BasketCloseCard close={m.basket_close} /> : m.mandate_change ? <MandateChangeCard change={m.mandate_change} pid={pid} /> : <AlbertReplyMeta text={m.text} sources={m.sources} symbol={symbol} pid={pid} />}</> : m.text}
+                {m.role === 'assistant' ? <><AlbertText text={m.text} />{m.error && m.retry ? <button onClick={() => send(m.retry)} disabled={loading} className="mt-2 flex items-center gap-1.5 rounded-full border border-sky-500/40 bg-sky-500/10 px-3 py-1 text-[11px] font-semibold text-sky-300 transition-colors hover:bg-sky-500/20 disabled:opacity-50"><RefreshCw className="h-3 w-3" />Retry</button> : m.basket_draft ? <BasketChatCard draft={m.basket_draft} pid={pid} /> : m.basket_rebalance ? <BasketRebalanceCard rebalance={m.basket_rebalance} /> : m.basket_close ? <BasketCloseCard close={m.basket_close} /> : m.mandate_change ? <MandateChangeCard change={m.mandate_change} pid={pid} /> : <AlbertReplyMeta msg={m} sessionId={sessionId} onNav={navigate} />}</> : m.text}
               </div>
               {!m.error && (m.text || '').trim() && <CopyButton text={m.text} className="shrink-0 self-center text-slate-500 hover:text-slate-200" />}
             </div>
@@ -3378,7 +3383,7 @@ export default function DashboardPage() {
       const assets = e.detail?.assets || [];
       if (proposal && Array.isArray(proposal.legs) && proposal.legs.length > 0) {
         // Structured proposal — open Studio with it directly for review.
-        setChatStrategy({ proposal, proposalId, revision, assets, key: `${Date.now()}-${Math.random()}` });
+        setChatStrategy({ proposal, proposalId, revision, assets, key: `${proposalId || Date.now()}:r${revision || 1}` });
       } else {
         // Fallback for legacy events without structured data.
         setChatStrategy({ goal: '', key: `${Date.now()}-${Math.random()}` });
@@ -3811,7 +3816,7 @@ export default function DashboardPage() {
         </div>
       </div>
     </div>
-    {active !== 'home' && <FloatingAlbert active={active} symbol={NO_COIN_SCREENS.has(active) ? '' : symbol} onExpand={() => navigate('ask')} />}
+    {active !== 'home' && <FloatingAlbert active={active} symbol={NO_COIN_SCREENS.has(active) ? '' : symbol} onExpand={() => navigate('ask')} onNav={navigate} />}
     {/* WallAlertToaster removed */}
     {showReport && <DailyReportModal d={__dashCache || d} onClose={() => setShowReport(false)} />}
     </SymbolContext.Provider>

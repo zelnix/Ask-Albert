@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { Button } from '@/components/ui/button';
-import { Bookmark, ArrowRight, ExternalLink, Clock, ShieldCheck } from 'lucide-react';
+import { Bookmark, ArrowRight, ExternalLink, Clock, ShieldCheck, RefreshCw, CheckCircle2 } from 'lucide-react';
 import { API_BASE, getPid } from '../lib/api';
 
 /**
@@ -17,6 +17,19 @@ export default function AlbertReplyMeta({ msg, onNav, sessionId }) {
 
   // When the reply has a structured proposal, offer direct review.
   const hasProposal = msg?.basket_draft && Array.isArray(msg.basket_draft.legs) && msg.basket_draft.legs.length > 0;
+  const proposalId = msg?.basket_draft?.proposalId;
+
+  // Listen for the strategy-saved event and match by proposalId.
+  React.useEffect(() => {
+    if (!proposalId) return undefined;
+    const handler = (e) => {
+      if (e.detail?.proposalId === proposalId && e.detail?.strategyId) {
+        setSavedLink(e.detail.strategyId);
+      }
+    };
+    window.addEventListener('albert:strategy-saved', handler);
+    return () => window.removeEventListener('albert:strategy-saved', handler);
+  }, [proposalId]);
 
   // Detect strategy-like discussion (mentions portfolio, allocation, position) but NO structured data.
   const text = (msg?.text || '').toLowerCase();
@@ -111,6 +124,45 @@ export default function AlbertReplyMeta({ msg, onNav, sessionId }) {
           ))}
         </div>
       )}
+
+      {/* Analysis job status */}
+      {msg.analysisJob && (
+        <AnalysisJobBadge job={msg.analysisJob} />
+      )}
+    </div>
+  );
+}
+
+function AnalysisJobBadge({ job }) {
+  const [status, setStatus] = React.useState(job?.status || 'queued');
+  const [results, setResults] = React.useState(null);
+  const jobId = job?.jobId;
+
+  React.useEffect(() => {
+    if (!jobId || status === 'completed' || status === 'failed') return undefined;
+    const poll = setInterval(async () => {
+      try {
+        const r = await fetch(`${API_BASE}/v1/albert/analysis/status/${encodeURIComponent(jobId)}`);
+        if (r.ok) {
+          const j = await r.json();
+          setStatus(j.status || 'queued');
+          if (j.results) setResults(j.results);
+          if (j.status === 'completed' || j.status === 'failed') clearInterval(poll);
+        }
+      } catch { /* noop */ }
+    }, 3000);
+    return () => clearInterval(poll);
+  }, [jobId, status]);
+
+  const icon = status === 'completed' ? <CheckCircle2 className="h-3 w-3 text-emerald-400" /> :
+               status === 'failed' ? <ShieldCheck className="h-3 w-3 text-red-400" /> :
+               <RefreshCw className={`h-3 w-3 text-sky-400 ${status === 'running' ? 'animate-spin' : ''}`} />;
+  const label = status === 'completed' ? 'Analysis complete' :
+                status === 'failed' ? 'Analysis failed' :
+                status === 'running' ? 'Refreshing data...' : 'Analysis queued';
+  return (
+    <div className="mt-1.5 flex items-center gap-1.5 rounded-full bg-slate-800/60 px-2.5 py-1 text-[11px] text-slate-300">
+      {icon} {label} {job?.joined && <span className="text-slate-500">(joined existing)</span>}
     </div>
   );
 }

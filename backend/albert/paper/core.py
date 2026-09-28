@@ -573,16 +573,23 @@ def apply_buy_atomic(col, acct_id, pid, expected_version, idem_key, proposal_id,
                 if (l.get('asset') or '').upper() == asset:
                     l['qty'] = to128(nq); l['costBasis'] = to128(ncb); l['avgEntry'] = to128(navg)
                     l['positionVersion'] = (l.get('positionVersion') or 0) + 1
+                    # Track the original entry quantity separately. Additions increase
+                    # the basis for "% of original" partial targets.
+                    if not l.get('originalQty'):
+                        l['originalQty'] = to128(oq)  # first recorded basis
+                    l['originalQty'] = to128(D(l.get('originalQty') or oq) + qty)
             lot_id = lot.get('lotId')
         else:
             lot_id = 'pp_' + uuid.uuid4().hex[:12]
             lots.append({'lotId': lot_id, 'asset': asset, 'status': 'OPEN',
-                         'qty': to128(qty), 'avgEntry': to128(fill_px), 'costBasis': to128(notional),
+                         'qty': to128(qty), 'originalQty': to128(qty),
+                         'avgEntry': to128(fill_px), 'costBasis': to128(notional),
                          'realizedPnl': to128(Decimal('0')), 'feesPaid': to128(fee),
                          'openedAt': datetime.datetime.utcnow().isoformat(),
                          'entryDecisionSnapshotId': canonical.get('decisionSnapshotId'),
                          'entryDecisionId': canonical.get('decisionId'),
                          'invalidationPrice': to128(round_tick(D(canonical.get('invalidationPrice')), price_q)) if canonical.get('invalidationPrice') else None,
+                         'completedTargets': [],
                          'positionVersion': 1})
         seq = (acct.get('accountSequence') or 0) + 1
         led = _ledger_entry(seq, 'FILL', lot_id, -notional,
@@ -611,9 +618,13 @@ def apply_buy_atomic(col, acct_id, pid, expected_version, idem_key, proposal_id,
 
 def apply_sell_atomic(col, acct_id, pid, sizing, source='approval', idem_key=None,
                       proposal_id=None, canonical=None, base_currency='USDC', asset=None, price_q=PRICE_Q,
-                      strategy_version=None, strategy_hash=None, required_mode=None):
+                      strategy_version=None, strategy_hash=None, required_mode=None,
+                      completed_rule_id=None):
     """Apply a reduce-only SELL as ONE conditional update. `asset` (M5) defaults
-    to the sizing/canonical asset (BTC for M1-M4)."""
+    to the sizing/canonical asset (BTC for M1-M4).
+    When completed_rule_id is provided, it is atomically added to the lot's
+    completedTargets within the same write — preventing re-fire on crash between
+    fill and completion."""
     asset = (asset or sizing.get('asset') or (canonical or {}).get('asset') or 'BTC').upper()
     for _ in range(5):
         acct = col.find_one({'paperAccountId': acct_id, 'ownerId': pid})
@@ -659,13 +670,19 @@ def apply_sell_atomic(col, acct_id, pid, sizing, source='approval', idem_key=Non
                     l['qty'] = to128(remaining)
                     l['costBasis'] = to128(q_cash(ocb - cost_portion))
                     l['positionVersion'] = (l.get('positionVersion') or 0) + 1
+                    # Atomically record the completed target within the same lot write.
+                    if completed_rule_id:
+                        existing = set(l.get('completedTargets') or [])
+                        existing.add(completed_rule_id)
+                        l['completedTargets'] = list(existing)
         seq = (acct.get('accountSequence') or 0) + 1
         led = _ledger_entry(seq, 'FILL', lot.get('lotId'), proceeds,
                             'SELL %s %s @ %s (fee %s, PnL %s) · %s'
                             % (qty_dstr(qty), asset, dstr(fill_px, price_q), dstr(fee), dstr(realized), source),
                             extra={'side': 'SELL', 'asset': asset, 'qty': qty_dstr(qty), 'fillPx': dstr(fill_px, price_q),
                                    'fee': dstr(fee), 'proceeds': dstr(proceeds), 'realized': dstr(realized),
-                                   'costPortion': dstr(cost_portion), 'proposalId': proposal_id})
+                                   'costPortion': dstr(cost_portion), 'proposalId': proposal_id,
+                                   'completedRuleId': completed_rule_id})
         result = {'side': 'SELL', 'asset': asset, 'qty': qty_dstr(qty), 'fillPrice': dstr(fill_px, price_q),
                   'fee': dstr(fee), 'proceeds': dstr(proceeds), 'realized': dstr(realized),
                   'paperOnly': True}

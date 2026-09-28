@@ -34,12 +34,38 @@ function proposalToDraft(proposal) {
     symbol: String(l.symbol || '').toUpperCase(),
     direction: String(l.position || l.direction || 'long').toUpperCase(),
     weightPct: Number(l.weight_pct || l.weight || 0),
-    target: l.target || null,
+    // Preserve targets[] (array) and stop from legs.
+    targets: Array.isArray(l.targets) ? l.targets : (l.target ? [l.target] : []),
     stop: l.stop || null,
     notes: l.notes || '',
   }));
-  // Preserve rules from the proposal, mapping to Studio format.
+
+  // Deterministically translate leg targets/stops into typed executable rules.
   const rules = [];
+  legs.forEach((l) => {
+    const sym = String(l.symbol || '').toUpperCase();
+    // Translate targets[] into PARTIAL_TAKE_PROFIT_PCT or TAKE_PROFIT_PCT rules.
+    (Array.isArray(l.targets) ? l.targets : []).forEach((t, ti) => {
+      if (t && t.price != null) {
+        const pct = t.pct_of_position || t.pctOfPosition || 100;
+        if (pct < 100) {
+          rules.push({ kind: 'PARTIAL_TAKE_PROFIT_PCT', side: 'SELL', symbol: sym,
+            value: String(t.price), operator: 'ABOVE', portionPct: String(pct),
+            portionOf: 'original', _fromTarget: true, _label: t.label || `TP${ti + 1}` });
+        } else {
+          rules.push({ kind: 'TAKE_PROFIT_PCT', side: 'SELL', symbol: sym,
+            value: String(t.price), operator: 'ABOVE', _fromTarget: true, _label: t.label || `TP${ti + 1}` });
+        }
+      }
+    });
+    // Translate stop into STOP_LOSS_PCT rule.
+    if (l.stop && l.stop.price != null) {
+      rules.push({ kind: 'STOP_LOSS_PCT', side: 'SELL', symbol: sym,
+        value: String(l.stop.price), operator: 'BELOW', _fromStop: true });
+    }
+  });
+
+  // Preserve text-based rules from the proposal, mapping to Studio format.
   if (proposal.entryConditions) rules.push({ type: 'ENTRY', description: proposal.entryConditions });
   if (proposal.profitTaking) rules.push({ type: 'PROFIT_TAKING', description: proposal.profitTaking });
   if (proposal.stopLoss) rules.push({ type: 'STOP_LOSS', description: proposal.stopLoss });
@@ -47,13 +73,15 @@ function proposalToDraft(proposal) {
   if (Array.isArray(proposal.rules)) {
     proposal.rules.forEach((r) => {
       if (typeof r === 'string') rules.push({ type: 'OTHER', description: r });
-      else if (r?.description) rules.push(r);
+      else if (r && (r.kind || r.description)) rules.push(r);
     });
   }
-  // Unresolved or unsupported instructions.
+
+  // Unresolved or unsupported instructions — visible start blockers.
   const unresolved = [];
-  if (proposal.unresolvedInstructions) {
-    (Array.isArray(proposal.unresolvedInstructions) ? proposal.unresolvedInstructions : [proposal.unresolvedInstructions])
+  const uSrc = proposal.unresolvedInstructions || proposal.unsupportedInstructions;
+  if (uSrc) {
+    (Array.isArray(uSrc) ? uSrc : [uSrc])
       .forEach((u) => unresolved.push(typeof u === 'string' ? u : u?.description || JSON.stringify(u)));
   }
   return {
@@ -62,9 +90,9 @@ function proposalToDraft(proposal) {
     assets,
     rules: rules.length ? rules : undefined,
     unresolvedInstructions: unresolved.length ? unresolved : undefined,
-    startingCash: proposal.startingCapital ? String(proposal.startingCapital) : undefined,
+    startingCash: proposal.startingCapital ? String(proposal.startingCapital) : (proposal.capital ? String(proposal.capital) : undefined),
     currency: proposal.currency || 'USD',
-    protectedReserve: proposal.protectedReserve || undefined,
+    reservePct: proposal.reservePct != null ? Number(proposal.reservePct) : (proposal.protectedReserve != null ? Number(proposal.protectedReserve) : undefined),
     horizonDays: proposal.horizon_days || proposal.horizonDays || undefined,
     objective: proposal.objective || proposal.thesis || '',
     proposalId: proposal.proposalId || undefined,
@@ -248,7 +276,7 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
         confirm: true, idempotencyKey: saveKey, expectedHash: review.hash,
         proposalId: draft.proposalId || null, proposalRevision: draft.proposalRevision || null });
       const j = await r.json();
-      if (r.ok) onSaved(j.strategyId);
+      if (r.ok) onSaved(j.strategyId, draft.proposalId);
       else setErr(j.detail || 'Save failed.');
     } catch (e) { setErr('Save failed — your proposal and edits are preserved. Try again.'); }
     finally { setBusy(false); setInflight(false); }
@@ -337,7 +365,10 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
                   <input type="number" aria-label={`Rule ${i + 1} portion %`} min="1" max="100" value={rule.portionPct ?? ''} onChange={(e) => setRule(i, { portionPct: e.target.value })} placeholder="sell %" className="w-20 rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-white" />
                   <select aria-label={`Rule ${i + 1} portion of`} value={rule.portionOf || 'original'} onChange={(e) => setRule(i, { portionOf: e.target.value })} className="rounded-md bg-slate-800 p-1 text-white"><option value="original">of original</option><option value="remaining">of remaining</option></select>
                 </>}
-                {rule.kind === 'TIME_EXIT' && <input type="datetime-local" aria-label={`Rule ${i + 1} deadline`} value={(rule.deadline || '').slice(0, 16)} onChange={(e) => setRule(i, { deadline: e.target.value ? new Date(e.target.value).toISOString() : '' })} className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-white" />}
+                {rule.kind === 'TIME_EXIT' && <input type="datetime-local" aria-label={`Rule ${i + 1} deadline`}
+                  value={rule.deadline ? (() => { try { const d = new Date(rule.deadline); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); } catch { return ''; } })() : ''}
+                  onChange={(e) => setRule(i, { deadline: e.target.value ? new Date(e.target.value).toISOString() : '' })}
+                  className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-white" />}
                 <button type="button" onClick={() => updateDraft({ ...draft, rules: draft.rules.filter((_, ix) => ix !== i) })} aria-label={`Remove rule ${i + 1}`} className="rounded p-1 text-rose-300"><X className="h-4 w-4" /></button>
               </div>)}
               <button type="button" onClick={addRule} className="inline-flex items-center gap-1 font-semibold text-sky-300"><Plus className="h-3.5 w-3.5" />Add executable rule</button>
@@ -978,10 +1009,10 @@ export default function StrategyStudio({ chatGoal = '', chatDraftKey = null, cha
           {building ? <Builder key={revision ? `${revision.id}:v${revision.version}` : chatDraftKey || 'new'}
               initialGoal={revision ? revision.goal : chatGoal} initialDraft={revision?.draft || null} revisionId={revision?.id || null}
               onCancel={() => { setBuilding(false); if (revision) setSel(revision.id); setRevision(null); onChatDismiss?.(); }}
-              onSaved={(sid) => {
+              onSaved={(sid, savedProposalId) => {
                 setBuilding(false); setRevision(null); onChatDismiss?.(); load(); setSel(sid);
-                // Notify chat cards that this proposal was saved.
-                try { window.dispatchEvent(new CustomEvent('albert:strategy-saved', { detail: { strategyId: sid } })); } catch (x) { /* noop */ }
+                // Notify chat cards that this proposal was saved, including proposal identity.
+                try { window.dispatchEvent(new CustomEvent('albert:strategy-saved', { detail: { strategyId: sid, proposalId: savedProposalId || null } })); } catch (x) { /* noop */ }
               }} />
             : sel ? <Detail key={sel} sid={sel} onChange={load} onRevise={revise} />
             : <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800"><p className="text-[13px] text-slate-400">Select a strategy, or build a new one with Albert.</p></Card>}
