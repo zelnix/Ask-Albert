@@ -313,7 +313,6 @@ const OneScreenHome = ({ d, dashboardStatus = 'loading', ticker, news, newsStatu
       </div>
       <DashboardAskPanel selected={selected} onNav={onNav} onEvidence={setEvidenceId} stateId={sop?.stateId} />
     </div>
-    <p className="mt-2 text-xs text-slate-400">Paper trading only. Market readings, historical scenarios, research setups and completed fills are different things. All timestamps refer to their own sources.</p>
     {chart && <ExpandedChart type={chart} outlook={outlook} eth={eth} levels={availableLevels} runAsOf={isOld(d?.created_at, 72) ? `${d?.as_of || when(d?.created_at)} (stale; level lines withheld)` : d?.as_of} onClose={() => setChart(null)} onNav={(id) => onNav(id === 'scenarios' ? 'dashboard-btc' : id === 'crossmarket' ? 'dashboard-intelligence' : id)} onEvidence={(sid) => { setChart(null); setEvidenceId(sid); }} />}
     {evidenceId && <EvidenceDrawer snapshotId={evidenceId} onClose={() => setEvidenceId(null)} onAsk={(sid) => { setEvidenceId(null); setSelected({ title: 'Evidence record', snapshotId: sid }); }} />}
   </>;

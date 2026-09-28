@@ -3671,11 +3671,10 @@ export default function DashboardPage() {
         <div className="min-w-0">
           {/* One global header: a shared menu on Home and every detail screen. */}
           <header className="sticky top-0 z-30 flex min-w-0 flex-wrap items-center gap-2 border-b border-slate-800 bg-slate-950/95 px-3 py-2 md:px-4">
-            <GlobalMenu active={active} symbol={symbol} onNav={navigate} unread={notif?.unseen || 0} onReport={() => setShowReport(true)} onRefresh={handleRefresh} />
             <a href="/?section=home" onClick={(e) => { e.preventDefault(); navigate('home'); }} aria-label="Ask Albert Home" className="flex shrink-0 items-center gap-1 rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400">
               <img src="/ask-albert-logo.png" alt="" className="h-9 w-auto max-w-[90px] object-contain" /><span className="hidden text-xs font-bold text-amber-300 sm:inline">Ask Albert</span>
             </a>
-            <div className="hidden shrink-0 sm:block"><PublishStamp publishedAt={d?.created_at} compact /></div>
+            {/* published stamp moved to footer only */}
             {active === 'home' ? <HomeTicker d={data} ticker={ticker} snapshot={oneScreen} dashboardStatus={status} onNav={navigate} /> : <div className="flex min-w-0 flex-1 items-center gap-2">
               <CoinPicker coins={coins} symbol={symbol} onSelect={setSymbol} />
               {symbol !== 'BTC' && <button type="button" onClick={() => setCompareOpen(true)} title="Overlay this coin vs Bitcoin" className="flex items-center gap-1.5 rounded-md border border-slate-700 bg-slate-900 px-2 py-1.5 text-xs font-semibold text-slate-200 hover:border-sky-500/50"><Scale className="h-4 w-4" /><span className="hidden sm:inline">vs Bitcoin</span></button>}
@@ -3735,14 +3734,11 @@ export default function DashboardPage() {
               )}
             </div>
             <AccountMenu user={authUser} onSignOut={handleSignOut} />
+            <GlobalMenu active={active} symbol={symbol} onNav={navigate} unread={notif?.unseen || 0} onReport={() => setShowReport(true)} onRefresh={handleRefresh} />
           </header>
 
           <main className={`mx-auto ${active === 'home' || active.startsWith('dashboard-') ? 'max-w-[1920px] px-3 py-3 md:px-4' : 'max-w-6xl px-4 py-6 md:px-8'}`}><ErrorBoundary label={activeSection?.label || DASHBOARD_AREAS[active.slice('dashboard-'.length)]?.title || active} resetKey={active}>{renderSection()}</ErrorBoundary></main>
           <footer className="space-y-2 px-4 pb-8 text-center md:px-8">
-            <p className="mx-auto max-w-3xl rounded-lg border border-slate-800 bg-slate-900/40 px-4 py-2.5 text-[11px] leading-relaxed text-slate-500">
-              Ask Albert provides Bitcoin market analysis, probability-based forecasts and educational information. It does not provide personalised financial advice or guarantee future outcomes.
-            </p>
-            <p className="text-xs text-slate-600">Ask Albert — Bitcoin Market Analysis · powered by CryptoCentAI · CryptoMarkAI forecast engine · real data via {d?.data_source || 'public market feeds'}</p>
             <div className="flex justify-center"><PublishStamp publishedAt={d?.created_at} /></div>
           </footer>
         </div>
