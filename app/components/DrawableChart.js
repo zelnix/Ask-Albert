@@ -6,8 +6,9 @@ import { Card } from '@/components/ui/card';
 import { API_BASE } from '../lib/api';
 import { SymbolContext } from '../lib/context';
 
-function DrawableChart({ ohlc }) {
-  const symbol = React.useContext(SymbolContext);
+function DrawableChart({ ohlc, symbol: propSymbol }) {
+  const ctxSymbol = React.useContext(SymbolContext);
+  const symbol = propSymbol || ctxSymbol;
   const [tool, setTool] = React.useState('cursor');
   const [pending, setPending] = React.useState(null);
   const [hover, setHover] = React.useState(null);
@@ -19,10 +20,12 @@ function DrawableChart({ ohlc }) {
   const [livePrice, setLivePrice] = React.useState(null);
   const [toasts, setToasts] = React.useState([]);
   const svgRef = React.useRef(null);
-  const LKEY = 'btciq_layouts';
+  // Per-asset drawing storage so drawings stay associated with their asset.
+  const LKEY = `btciq_layouts_${symbol}`;
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
+    setLayouts({ Default: [] }); setActiveLayout('Default');
     try {
       const raw = window.localStorage.getItem(LKEY);
       if (raw) {
@@ -33,14 +36,17 @@ function DrawableChart({ ohlc }) {
           return;
         }
       }
-      const legacy = JSON.parse(window.localStorage.getItem('btciq_drawings'));
-      if (Array.isArray(legacy)) {
-        const seed = { Default: legacy };
-        setLayouts(seed); setActiveLayout('Default');
-        window.localStorage.setItem(LKEY, JSON.stringify({ active: 'Default', layouts: seed }));
+      // Migrate BTC legacy drawings once.
+      if (symbol === 'BTC') {
+        const legacy = JSON.parse(window.localStorage.getItem('btciq_drawings'));
+        if (Array.isArray(legacy)) {
+          const seed = { Default: legacy };
+          setLayouts(seed); setActiveLayout('Default');
+          window.localStorage.setItem(LKEY, JSON.stringify({ active: 'Default', layouts: seed }));
+        }
       }
     } catch (e) { /* noop */ }
-  }, []);
+  }, [LKEY, symbol]);
 
   React.useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') setFs(false); };
@@ -48,16 +54,17 @@ function DrawableChart({ ohlc }) {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // live BTC price for Ruler Alerts
+  // Live price for Ruler Alerts — fetches for the chart's own asset.
   React.useEffect(() => {
     let on = true;
+    const qs = symbol === 'BTC' ? '' : `?symbol=${encodeURIComponent(symbol)}`;
     const fetchP = async () => {
-      try { const r = await fetch(`${API_BASE}/v1/ticker`); const j = await r.json(); if (on && j && typeof j.price === 'number') setLivePrice(j.price); } catch (e) { /* noop */ }
+      try { const r = await fetch(`${API_BASE}/v1/ticker${qs}`); const j = await r.json(); if (on && j && typeof j.price === 'number') setLivePrice(j.price); } catch (e) { /* noop */ }
     };
     fetchP();
     const id = setInterval(fetchP, 20000);
     return () => { on = false; clearInterval(id); };
-  }, []);
+  }, [symbol]);
 
   const draw = layouts[activeLayout] || [];
   const persist = (nextLayouts, nextActive) => {

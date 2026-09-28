@@ -7,7 +7,7 @@ import PaperTradingBot from '../PaperTradingBot';
 import { BTCChart, MarketChart } from './OneScreenCharts';
 
 export const DASHBOARD_AREAS = {
-  brief: { title: "Albert\u2019s Brief", areas: [['Unified Brief', 'briefing'], ['Evidence & Data Audit', 'dataaudit']] },
+  brief: { title: "Albert’s Brief", areas: [['Unified Brief', 'briefing'], ['Evidence & Data Audit', 'dataaudit']] },
   paper: { title: 'Paper Trading', areas: [['Paper Trading', 'paper'], ['Paper Engine', 'paperengine']] },
   portfolio: { title: 'Portfolio & Risk', areas: [['Owner Portfolio', 'paper'], ['Ask Albert Risk', 'risk'], ['Leverage', 'leverage'], ['Event Calendar', 'events'], ['Smart Money', 'smartmoney']] },
   btc: { title: 'BTC Bull & Bear', areas: [['Scenario Outlook', 'scenarios'], ['Scenario Evaluation', 'scenario-evaluation'], ['Forecasts', 'forecasts']] },
@@ -49,8 +49,8 @@ const ExpandableText = ({ text, maxLen = 400 }) => {
 };
 const sourceMetrics = (panel) => Array.isArray(panel?.metrics)
   ? panel.metrics.map((m) => m?.value != null && m?.source && m?.as_of
-    ? `${m.name}: ${m.value}${m.signal ? ` \u00b7 ${m.signal}` : ''} \u00b7 ${m.source} \u00b7 as of ${when(m.as_of)}${m.inactive ? ' (Inactive)' : ''}${m.demo ? ' (Demo)' : ''}`
-    : `${m?.name || 'Metric'}: Coming soon`) : ['Coming soon \u00b7 no sourced observations'];
+    ? `${m.name}: ${m.value}${m.signal ? ` · ${m.signal}` : ''} · ${m.source} · as of ${when(m.as_of)}${m.inactive ? ' (Inactive)' : ''}${m.demo ? ' (Demo)' : ''}`
+    : `${m?.name || 'Metric'}: Coming soon`) : ['Coming soon · no sourced observations'];
 const panelState = (panel) => !panel?.metrics?.some((m) => m?.value != null) ? 'unavailable' : 'ready';
 const MarketSeries = ({ data }) => Array.isArray(data?.series) && data.series.length > 1 && Array.isArray(data?.assets)
   ? <div className="mt-3 h-52 min-w-0" role="img" aria-label={`Observed ${data.window} cross-market normalized series`}>
@@ -140,7 +140,7 @@ export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboar
   const outlook = s.outlook || {};
   const sop = s.sop || {};
   const sourceTime = when(d.created_at || d.generated_at);
-  const paperTime = paper.asOf ? `Owner-scoped paper ledger \u00b7 read ${when(paper.asOf).replace('Published ', '')}` : 'Owner ledger \u00b7 read time unavailable';
+  const paperTime = paper.asOf ? `Owner-scoped paper ledger · read ${when(paper.asOf).replace('Published ', '')}` : 'Owner ledger · read time unavailable';
   // Simplified state helpers; status badges only, never used to suppress values.
   const healthOf = (key) => s.health?.[key] || 'unavailable';
   const extraState = (key, stamp, hours = 36) => {
@@ -163,18 +163,18 @@ export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboar
     area('Unified Brief', 'briefing', { state: healthOf('sop'), source: when(sop?.market?.asOf || sop?.generatedAt || briefData.generated_at), facts: [
       ['Market regime', val(d.regime?.label || d.regime?.regime || sop.market?.regime)],
       ['Published assessment', firstText(claims.find((x) => x.claimId === 'briefing.direction')?.text, sop?.briefing?.headline)],
-      ["Albert\u2019s take", val(briefTake)],
+      ["Albert’s take", val(briefTake)],
       ['Recorded market changes', val(sop?.changesSinceLastVisit?.length)],
     ], items: [
       ...briefObs.slice(0, 4).map((o) => typeof o === 'string' ? o : o?.text || o?.observation || ''),
       ...claims.slice(0, 4).map((x) => `${x.claimId || 'Claim'}: ${x.text || 'Unavailable'}`),
     ].filter(Boolean),
-    note: 'Unified brief combining real-time observations, state-of-play claims and Albert\u2019s take.' });
+    note: 'Unified brief combining real-time observations, state-of-play claims and Albert’s take.' });
     area('Evidence & Data Audit', 'dataaudit', { state: healthOf('sop'), source: `Market run ${sourceTime}`, facts: [
       ['Data-health status', val(d.data_health?.level || sop?.dataQuality?.status)],
       ['Decision evidence', val(sop.market?.decisionSnapshotId || outlook?.decisionSnapshotId)],
       ['Quant score', val(d.quant_score ?? d.quant?.score, '/100')],
-    ], items: (sop?.dataQuality?.issues || d.data_health?.issues || []).slice(0, 3).map((x) => `${x.code || x.source || 'Issue'} \u00b7 ${x.detail || x.message || 'Details unavailable'}`) });
+    ], items: (sop?.dataQuality?.issues || d.data_health?.issues || []).slice(0, 3).map((x) => `${x.code || x.source || 'Issue'} · ${x.detail || x.message || 'Details unavailable'}`) });
   }
   if (kind === 'paper') {
     area('Paper Trading', 'paper', { state: healthOf('paper'), source: paperTime, facts: [
@@ -193,11 +193,11 @@ export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboar
       ['Ledger reconciliation', val(paper.ledgerIntegrity?.status)],
       ['Completed fills', val(paper.recentFills?.length)],
       ['Closed trades', val(totals.closedTrades)],
-    ], items: (paper.recentFills || []).filter((x) => x.eventType === 'FILL').slice(0, 5).map((fill) => `${fill.side === 'BUY' ? 'Bought' : 'Sold'} ${fill.qty || ''} ${fill.asset || ''} @ ${amount(fill.fillPx) || 'price unavailable'} \u00b7 fee ${amount(fill.fee) || 'unavailable'} \u00b7 ${when(fill.effectiveAt || fill.recordedAt)}`) });
+    ], items: (paper.recentFills || []).filter((x) => x.eventType === 'FILL').slice(0, 5).map((fill) => `${fill.side === 'BUY' ? 'Bought' : 'Sold'} ${fill.qty || ''} ${fill.asset || ''} @ ${amount(fill.fillPx) || 'price unavailable'} · fee ${amount(fill.fee) || 'unavailable'} · ${when(fill.effectiveAt || fill.recordedAt)}`) });
     if ((paper.pendingApprovals || []).length > 0) {
       area('Pending Proposals', 'paper', { state: healthOf('paper'), source: paperTime, facts: [
         ['Pending proposals', val(paper.pendingApprovals?.length)],
-      ], items: (paper.pendingApprovals || []).slice(0, 5).map((x) => `${x.side || 'Side'} ${x.asset || 'asset'} \u00b7 ${x.strategyName || x.paperAccountId || 'wallet'} \u00b7 ${when(x.recordedAt || x.createdAt)}`) });
+      ], items: (paper.pendingApprovals || []).slice(0, 5).map((x) => `${x.side || 'Side'} ${x.asset || 'asset'} · ${x.strategyName || x.paperAccountId || 'wallet'} · ${when(x.recordedAt || x.createdAt)}`) });
     }
   }
   if (kind === 'portfolio') {
@@ -214,20 +214,20 @@ export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboar
       ['Cash', paper.cashAvailable ? amount(paper.cashTotal) : null],
       ['Protected / deployable', paper.protectedCashAvailable ? `${amount(paper.protectedCashTotal)} / ${amount(paper.deployableCashTotal)}` : null],
       ['Open risk / cap', paper.openRiskAvailable ? `${val(paper.openRiskPct, '%')} / ${val(paper.openRiskLimitPct, '%')}` : null],
-      ['Largest holding', marked.length ? `${marked[0].asset} \u00b7 ${amount(marked[0].value)}` : null],
+      ['Largest holding', marked.length ? `${marked[0].asset} · ${amount(marked[0].value)}` : null],
     ], children: marked.length ? <div className="mt-3 overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr><th className="py-1">Asset</th><th>Units</th><th>Value</th><th>Allocation</th></tr></thead><tbody>{marked.slice(0, 8).map((p, i) => <tr className="border-t border-border" key={i}><td className="py-1">{p.asset}</td><td>{p.netQuantity}</td><td>{amount(p.value)}</td><td>{Number(totals.value) > 0 ? val((p.value / Number(totals.value) * 100).toFixed(1), '%') : 'unavailable'}</td></tr>)}</tbody></table></div> : null });
     area('Ask Albert Risk', 'risk', { state: risk?.score != null ? 'ready' : 'unavailable', source: `Market run ${sourceTime}`, facts: [
-      ['Risk level / score', risk.score != null ? `${risk.level} \u00b7 ${risk.score}/100` : 'Coming soon'],
+      ['Risk level / score', risk.score != null ? `${risk.level} · ${risk.score}/100` : 'Coming soon'],
       ['24h ATR-derived range', risk.expected_move?.['24H']?.pct != null ? `\u00b1${risk.expected_move['24H'].pct}%` : 'Coming soon'],
       ['Mandate max drawdown', val(sop?.user?.maxDrawdownPct, '%')],
-    ], items: (risk.drivers || []).map((x) => x.value != null ? `${x.name}: ${x.state} \u00b7 ${x.value} \u00b7 ${x.source || 'source unavailable'}` : `${x?.name || 'Risk factor'}: Coming soon`) });
+    ], items: (risk.drivers || []).map((x) => x.value != null ? `${x.name}: ${x.state} · ${x.value} · ${x.source || 'source unavailable'}` : `${x?.name || 'Risk factor'}: Coming soon`) });
     area('Leverage', 'leverage', { state: lev?.open_interest?.value_usd != null || lev?.funding?.rate != null ? 'ready' : extraState('leverage'), source: lev?.as_of ? `Observation ${when(lev.as_of)}` : 'Feed times below', facts: [
-      ['Open interest', lev?.open_interest?.value_usd != null ? `${amount(lev.open_interest.value_usd)} \u00b7 ${lev.open_interest.source}` : 'Coming soon'],
+      ['Open interest', lev?.open_interest?.value_usd != null ? `${amount(lev.open_interest.value_usd)} · ${lev.open_interest.source}` : 'Coming soon'],
       ['OI change', lev?.open_interest?.change_tf_pct != null ? `${lev.open_interest.change_tf_pct}%` : 'Coming soon'],
-      ['Funding', lev?.funding?.rate != null ? `${lev.funding.rate}% \u00b7 ${lev.funding.source}` : 'Coming soon'],
-      ['Long account share', lev?.positioning?.long_pct != null ? `${lev.positioning.long_pct}% \u00b7 ${lev.positioning.source}` : 'Coming soon'],
+      ['Funding', lev?.funding?.rate != null ? `${lev.funding.rate}% · ${lev.funding.source}` : 'Coming soon'],
+      ['Long account share', lev?.positioning?.long_pct != null ? `${lev.positioning.long_pct}% · ${lev.positioning.source}` : 'Coming soon'],
     ] });
-    area('Event Calendar', 'events', { state: healthOf('sop'), source: sourceTime, facts: [['Next high-impact event', val(d.event_calendar?.next_high_impact?.title)], ['Event date', val(d.event_calendar?.next_high_impact?.date)]], items: (d.event_calendar?.events || []).slice(0, 3).map((x) => `${x.title} \u00b7 ${x.date} \u00b7 ${x.importance}`) });
+    area('Event Calendar', 'events', { state: healthOf('sop'), source: sourceTime, facts: [['Next high-impact event', val(d.event_calendar?.next_high_impact?.title)], ['Event date', val(d.event_calendar?.next_high_impact?.date)]], items: (d.event_calendar?.events || []).slice(0, 3).map((x) => `${x.title} · ${x.date} · ${x.importance}`) });
     area('Smart Money', 'smartmoney', { state: panelState(smart), source: smart?.source ? `Feeds: ${smart.source}` : 'Source unavailable', facts: [['Panel status', panelState(smart) === 'ready' ? 'Partial observations' : 'Coming soon']], items: sourceMetrics(smart) });
   }
   if (kind === 'btc') {
@@ -265,7 +265,7 @@ export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboar
       ['7d range', weeklyForecast?.quantiles?.p10 != null ? `${amount(weeklyForecast.quantiles.p10)} \u2013 ${amount(weeklyForecast.quantiles.p90)}` : null],
       ['Expiry', val(shortForecast?.expiry || weeklyForecast?.expiry)],
     ], items: [
-      ...(bitmark.horizons || []).slice(0, 3).map((h) => `CryptoMarkAI ${h.horizon}: ${h.direction || 'direction unavailable'} \u00b7 issued ${when(h.issued_at)}`),
+      ...(bitmark.horizons || []).slice(0, 3).map((h) => `CryptoMarkAI ${h.horizon}: ${h.direction || 'direction unavailable'} · issued ${when(h.issued_at)}`),
       ...(bitmark.drivers || []).slice(0, 2).map((dr) => `Driver: ${dr}`),
       ...(bitmark.risks || []).slice(0, 2).map((r) => `Risk: ${r}`),
     ].filter(Boolean),
@@ -284,7 +284,7 @@ export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboar
       ['Observed BTC close', amount(d.last_close)],
       ['Published regime', val(d.regime?.label || d.regime?.regime)],
       ['BTC dominance', val(d.dominance?.dominance, '%')],
-      ['Quant score / label', mi.quant_score != null ? `${mi.quant_score} \u00b7 ${mi.quant_label || ''}` : val(d.quant_score ?? d.quant?.score, '/100')],
+      ['Quant score / label', mi.quant_score != null ? `${mi.quant_score} · ${mi.quant_label || ''}` : val(d.quant_score ?? d.quant?.score, '/100')],
       ['Phase', val(phase?.label || phase?.phase)],
       ['Breadth', phase?.inputs?.altsWithReturns > 0 ? `${phase.inputs.altsBeatingBtc}/${phase.inputs.altsWithReturns}` : null],
       ['Cycle phase', val(mi.cycle_phase)],
@@ -320,34 +320,34 @@ export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboar
       ['Continuation condition', val(driver.continuationCondition)],
       ['Failure condition', val(driver.failureCondition)],
     ], items: [
-      ...(driver.nextMoverCandidates || []).slice(0, 2).map((x) => `Next: ${x.actor} \u00b7 ${x.probabilityBand || 'unrated'} \u00b7 if ${x.condition || 'not specified'}`),
+      ...(driver.nextMoverCandidates || []).slice(0, 2).map((x) => `Next: ${x.actor} · ${x.probabilityBand || 'unrated'} · if ${x.condition || 'not specified'}`),
       ...(driver.confirmingDrivers || []).slice(0, 2).map((x) => `Confirming ${x.actor}: ${x.detail || x.direction}`),
       ...(driver.resistingDrivers || []).slice(0, 2).map((x) => `Resisting ${x.actor}: ${x.detail || x.direction}`),
     ] });
-    area('Cross-Market', 'crossmarket', { state: extraState('crossmarket'), source: `Cross-market \u00b7 ${when(cross?.as_of)}`, facts: [
+    area('Cross-Market', 'crossmarket', { state: extraState('crossmarket'), source: `Cross-market · ${when(cross?.as_of)}`, facts: [
       ['Tracked assets', val(cross?.assets?.length)],
       ['BTC rank', val(cross?.coin_rank)],
-      ['Best performer', cross?.best?.asset ? `${cross.best.asset} \u00b7 ${val(cross.best.ret_1y, '%')}` : null],
-      ['Worst performer', cross?.worst?.asset ? `${cross.worst.asset} \u00b7 ${val(cross.worst.ret_1y, '%')}` : null],
-    ], items: (cross?.correlations || []).slice(0, 4).map((x) => `${x.asset}: 30d corr ${x.corr_30d ?? 'unavailable'} \u00b7 90d ${x.corr_90d ?? 'unavailable'}`),
+      ['Best performer', cross?.best?.asset ? `${cross.best.asset} · ${val(cross.best.ret_1y, '%')}` : null],
+      ['Worst performer', cross?.worst?.asset ? `${cross.worst.asset} · ${val(cross.worst.ret_1y, '%')}` : null],
+    ], items: (cross?.correlations || []).slice(0, 4).map((x) => `${x.asset}: 30d corr ${x.corr_30d ?? 'unavailable'} · 90d ${x.corr_90d ?? 'unavailable'}`),
     children: cross?.series?.length > 1 ? <MarketSeries data={cross} /> : null });
     area('Happening Again (Analogs)', 'analogs', { state: extraState('analogs'), source: when(analog?.as_of), facts: [
       ['Historical episodes', val(analog?.episodes?.length)],
       ['Closest match', val(analog?.episodes?.[0]?.label)],
       ['Similarity', analog?.episodes?.[0]?.similarity != null ? val((Number(analog.episodes[0].similarity) * 100).toFixed(1), '%') : null],
-    ], items: (analog?.episodes || []).slice(0, 3).map((x) => `${x.label}: ${(Number(x.similarity) * 100).toFixed(1)}% \u00b7 ${x.start}\u2013${x.end} \u00b7 fwd 7d ${x.ret_7d_pct}% / 30d ${x.ret_30d_pct}%`) });
+    ], items: (analog?.episodes || []).slice(0, 3).map((x) => `${x.label}: ${(Number(x.similarity) * 100).toFixed(1)}% · ${x.start}\u2013${x.end} · fwd 7d ${x.ret_7d_pct}% / 30d ${x.ret_30d_pct}%`) });
   }
   if (kind === 'news') {
     const headlines = [...(Array.isArray(news?.cards) ? news.cards : Array.isArray(news) ? news : [])].sort((a, b) => (b.impact || 0) - (a.impact || 0));
     const latest = headlines[0];
     const headlineTime = latest?.published || latest?.published_at;
-    area('News', 'news', { state: latest ? 'ready' : newsStatus || 'unavailable', source: `${latest?.source || 'News feed'} \u00b7 ${when(headlineTime)}`, facts: [
+    area('News', 'news', { state: latest ? 'ready' : newsStatus || 'unavailable', source: `${latest?.source || 'News feed'} · ${when(headlineTime)}`, facts: [
       ['Headlines', val(headlines.length)],
       ['Leading', firstText(latest?.title)],
       ['Why it matters', firstText(latest?.ai?.why_it_matters)],
       ['Summary', firstText(latest?.ai?.summary)],
       ['Verification', val(latest?.verification)],
-    ], items: headlines.slice(0, 4).map((x) => ({ text: `${x.title || 'Untitled'} \u00b7 ${x.source || ''} \u00b7 ${when(x.published)}`, url: x.link || x.url })) });
+    ], items: headlines.slice(0, 4).map((x) => ({ text: `${x.title || 'Untitled'} · ${x.source || ''} · ${when(x.published)}`, url: x.link || x.url })) });
     area('Policy & Liquidity', 'macro', { state: d.policy ? 'ready' : healthOf('sop'), source: sourceTime, facts: [
       ['Policy score', val(d.policy?.score, '/100')],
       ['Liquidity state', val(d.policy?.liquidity_state)],
@@ -356,8 +356,8 @@ export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboar
       ['DXY', val(d.policy?.dxy)],
       ['10Y yield', val(d.policy?.y10, '%')],
       ['VIX', val(d.policy?.vix)],
-    ], items: (d.policy?.calendar || []).slice(0, 3).map((x) => `${x.title || x.event} \u00b7 ${x.date}`) });
-    area('Event Calendar', 'events', { state: healthOf('sop'), source: sourceTime, facts: [['Next event', val(d.event_calendar?.next_high_impact?.title)], ['Date', val(d.event_calendar?.next_high_impact?.date)]], items: (d.event_calendar?.events || []).slice(0, 4).map((x) => `${x.title} \u00b7 ${x.date} \u00b7 ${x.importance}`) });
+    ], items: (d.policy?.calendar || []).slice(0, 3).map((x) => `${x.title || x.event} · ${x.date}`) });
+    area('Event Calendar', 'events', { state: healthOf('sop'), source: sourceTime, facts: [['Next event', val(d.event_calendar?.next_high_impact?.title)], ['Date', val(d.event_calendar?.next_high_impact?.date)]], items: (d.event_calendar?.events || []).slice(0, 4).map((x) => `${x.title} · ${x.date} · ${x.importance}`) });
   }
   if (kind === 'evidence') {
     const evaluation = outlook.validation || s.validation || {};
@@ -372,19 +372,19 @@ export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboar
       ['Overall accuracy', ledger.overall?.accuracy != null ? val(ledger.overall.accuracy, '%') : null],
       ['Graded forecasts', val(ledger.overall?.n)],
       ['Last graded', val(ledger.overall?.lastGradedAt)],
-    ], items: (ledger.horizons || []).slice(0, 4).map((h) => `${h.horizon}: ${h.accuracy}% accuracy \u00b7 ${h.n} graded`).concat(
-      (ledger.recent || []).slice(0, 3).map((r) => `${r.horizon} ${r.direction}: ${r.correct ? 'Correct' : 'Incorrect'} \u00b7 ${when(r.graded_at)}`)
+    ], items: (ledger.horizons || []).slice(0, 4).map((h) => `${h.horizon}: ${h.accuracy}% accuracy · ${h.n} graded`).concat(
+      (ledger.recent || []).slice(0, 3).map((r) => `${r.horizon} ${r.direction}: ${r.correct ? 'Correct' : 'Incorrect'} · ${when(r.graded_at)}`)
     ) });
     area('Paper Engine', 'paperengine', { state: healthOf('paper'), source: paperTime, facts: [
       ['Closed trades', val(totals.closedTrades)],
       ['Win rate', val(totals.winRatePct, '%')],
       ['Realized P&L', amount(totals.realizedPnl)],
       ['Ledger status', val(paper.ledgerIntegrity?.status)],
-    ], items: (paper.recentFills || []).slice(0, 3).map((x) => `${x.side === 'BUY' ? 'Bought' : 'Sold'} ${x.asset} \u00b7 ${when(x.recordedAt || x.effectiveAt)}`) });
+    ], items: (paper.recentFills || []).slice(0, 3).map((x) => `${x.side === 'BUY' ? 'Bought' : 'Sold'} ${x.asset} · ${when(x.recordedAt || x.effectiveAt)}`) });
     area('Alert Engine', 'alert-engine', { state: alerts.length ? 'ready' : extraState('alerts'), source: when(alerts[0]?.ts), facts: [
       ['Alerts returned', val(alerts.length)],
       ['Latest', val(alerts[0]?.title || alerts[0]?.message)],
-    ], items: alerts.slice(0, 4).map((x) => `${x.title || x.message || 'Alert'} \u00b7 ${when(x.ts)} \u00b7 ${x.severity || 'severity unavailable'}`) });
+    ], items: alerts.slice(0, 4).map((x) => `${x.title || x.message || 'Alert'} · ${when(x.ts)} · ${x.severity || 'severity unavailable'}`) });
     area('Scenario Evaluation', 'scenario-evaluation', { state: healthOf('outlook'), source: when(evaluated.lastEvaluatedAt), facts: [
       ['Completed checks', val(evaluated.evaluationPoints)],
       ['Skill', val(evaluated.skillVsNoChange)],
@@ -394,7 +394,7 @@ export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboar
       ['Status', val(d.data_health?.level || d.data_health?.status)],
       ['Latest run', val(d.created_at)],
       ['Issues', val(d.data_health?.issues?.length)],
-    ], items: (d.data_health?.issues || []).slice(0, 3).map((x) => `${x.source || x.type || 'Issue'} \u00b7 ${x.detail || x.message || 'unavailable'}`) });
+    ], items: (d.data_health?.issues || []).slice(0, 3).map((x) => `${x.source || x.type || 'Issue'} · ${x.detail || x.message || 'unavailable'}`) });
     area('App Checkup', 'checkup', { state: checkup ? 'ready' : extraState('checkup'), source: when(checkup?.completed_at), facts: [
       ['Summary', val(checkup?.summary?.title)],
       ['Outcome', val(checkup?.summary?.outcome)],
@@ -420,16 +420,16 @@ export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboar
     const sentiment = extra.sentiment || {};
     const hist = extra.history || {};
     const inst = d.institutional;
-    area('ETF Flows', 'etf', { state: etf.net_1d != null ? 'ready' : healthOf('etf'), source: `${etf.source || 'ETF issuer data'} \u00b7 session ${etf.latest_date || 'unavailable'}`, facts: [
+    area('ETF Flows', 'etf', { state: etf.net_1d != null ? 'ready' : healthOf('etf'), source: `${etf.source || 'ETF issuer data'} · session ${etf.latest_date || 'unavailable'}`, facts: [
       ['Last net flow', val(etf.net_1d, 'm USD')],
       ['7-session net', val(etf.net_7d, 'm USD')],
       ['Top issuer', val(etf.top_issuer || etf.leaderboard?.[0]?.ticker)],
       ['Report date', val(etf.latest_date)],
     ], items: (etf.leaderboard || []).slice(0, 3).map((x) => `${x.ticker}: ${x.window_total}m USD over 30 sessions`) });
-    area('Whale Watch', 'whales', { state: whales.whales?.length ? 'ready' : extraState('whales'), source: `${whales.source || 'Whale feed'} \u00b7 ${when(whales.as_of)}`, facts: [
+    area('Whale Watch', 'whales', { state: whales.whales?.length ? 'ready' : extraState('whales'), source: `${whales.source || 'Whale feed'} · ${when(whales.as_of)}`, facts: [
       ['Tracked wallets', val(whales.whales?.length)],
-    ], items: (whales.whales || []).slice(0, 5).map((x) => `${x.name || 'Wallet'} \u00b7 ${x.balance ?? '?'} BTC \u00b7 7d ${x.change_7d ?? '?'} BTC \u00b7 ${x.signal || 'unknown'}`) });
-    area('Network & Sentiment', 'network', { state: network.hashrate_ehs != null || sentiment.value != null ? 'ready' : 'unavailable', source: `Network ${when(network.as_of)} \u00b7 sentiment ${when(sentiment.ts)}`, facts: [
+    ], items: (whales.whales || []).slice(0, 5).map((x) => `${x.name || 'Wallet'} · ${x.balance ?? '?'} BTC · 7d ${x.change_7d ?? '?'} BTC · ${x.signal || 'unknown'}`) });
+    area('Network & Sentiment', 'network', { state: network.hashrate_ehs != null || sentiment.value != null ? 'ready' : 'unavailable', source: `Network ${when(network.as_of)} · sentiment ${when(sentiment.ts)}`, facts: [
       ['Hashrate', val(network.hashrate_ehs, ' EH/s')],
       ['Mempool congestion', val(network.mempool?.congestion)],
       ['Fear & Greed', val(sentiment.value, '/100')],
@@ -438,7 +438,7 @@ export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboar
     area('Time Machine', 'timemachine', { state: hist.analogs?.length ? 'ready' : extraState('history'), source: when(hist.as_of), facts: [
       ['Historical episodes', val(hist.analogs?.length)],
       ['Closest', val(hist.analogs?.[0]?.label)],
-    ], items: (hist.analogs || []).slice(0, 3).map((x) => `${x.label}: ${(Number(x.similarity) * 100).toFixed(1)}% \u00b7 ${x.start}\u2013${x.end} \u00b7 fwd 7d ${x.ret_7d_pct}% / 30d ${x.ret_30d_pct}%`) });
+    ], items: (hist.analogs || []).slice(0, 3).map((x) => `${x.label}: ${(Number(x.similarity) * 100).toFixed(1)}% · ${x.start}\u2013${x.end} · fwd 7d ${x.ret_7d_pct}% / 30d ${x.ret_30d_pct}%`) });
     area('Institutional Activity', 'institutional', { state: panelState(inst), source: inst?.source ? `Feeds: ${inst.source}` : 'Source unavailable', facts: [
       ['Status', panelState(inst) === 'ready' ? 'Partial observations' : 'Coming soon'],
     ], items: sourceMetrics(inst) });
@@ -450,14 +450,14 @@ export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboar
     area('Opportunity Research', 'opportunities', { state: findings.length ? 'ready' : healthOf('streams'), source: when(s.streams?.researchFindings?.asOf || s.streams?.generatedAt), facts: [
       ['Open findings', val(findings.length)],
       ['Top', val(findings[0]?.title)],
-    ], items: findings.slice(0, 5).map((x) => `${x.asset || x.symbol || 'Market'} \u00b7 ${x.title} \u00b7 ${x.priorityLabel || x.priority} \u00b7 confirm: ${x.confirmIf || 'not specified'} \u00b7 invalidate: ${x.invalidateIf || 'not specified'}`) });
+    ], items: findings.slice(0, 5).map((x) => `${x.asset || x.symbol || 'Market'} · ${x.title} · ${x.priorityLabel || x.priority} · confirm: ${x.confirmIf || 'not specified'} · invalidate: ${x.invalidateIf || 'not specified'}`) });
     area('Strategy Review', 'strategies', { state: healthOf('paper'), source: paperTime, facts: [
       ['Saved strategies', val(paper.strategies?.length)],
       ['Running', val(totals.liveStrategies)],
-    ], items: (paper.strategies || []).slice(0, 3).map((x) => `${x.name || x.strategyId} \u00b7 ${x.paperStatusLabel || x.paperStatus || 'unavailable'} \u00b7 ${x.assets?.join(', ') || 'assets unavailable'}`) });
+    ], items: (paper.strategies || []).slice(0, 3).map((x) => `${x.name || x.strategyId} · ${x.paperStatusLabel || x.paperStatus || 'unavailable'} · ${x.assets?.join(', ') || 'assets unavailable'}`) });
     area('Paper Trade Proposals', 'paper', { state: healthOf('paper'), source: paperTime, facts: [
       ['Pending approvals', val(paper.pendingApprovals?.length)],
-    ], items: (paper.pendingApprovals || []).slice(0, 5).map((x) => `${x.side || 'Side'} ${x.asset || 'asset'} \u00b7 ${x.strategyName || x.paperAccountId || 'wallet'} \u00b7 ${when(x.recordedAt || x.createdAt)}`) });
+    ], items: (paper.pendingApprovals || []).slice(0, 5).map((x) => `${x.side || 'Side'} ${x.asset || 'asset'} · ${x.strategyName || x.paperAccountId || 'wallet'} · ${when(x.recordedAt || x.createdAt)}`) });
   }
 
   const ask = () => {

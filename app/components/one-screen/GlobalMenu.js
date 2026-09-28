@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { Menu, SlidersHorizontal, ChevronDown, Bell, ClipboardList, RefreshCw } from 'lucide-react';
-import { PRIMARY_NAV, TECH_GROUPS, BTC_ONLY_SECTIONS, REMOVED_SECTIONS, sec } from '../../lib/sections';
+import { PRIMARY_NAV, TECH_GROUPS, REMOVED_SECTIONS, sec } from '../../lib/sections';
 import ModalShell from './ModalShell';
 
 const GlobalMenu = ({ active, symbol, onNav, unread = 0, onReport, onRefresh }) => {
@@ -33,7 +33,7 @@ const GlobalMenu = ({ active, symbol, onNav, unread = 0, onReport, onRefresh }) 
         </button>
         {technical && <div className="ml-3 space-y-3 border-l border-slate-700 pl-3">
           {TECH_GROUPS.map((group) => {
-            const items = group.ids.filter((id) => !REMOVED_SECTIONS.includes(id) && (symbol === 'BTC' || !BTC_ONLY_SECTIONS.includes(id)));
+            const items = group.ids.filter((id) => !REMOVED_SECTIONS.includes(id));
             return items.length ? <div key={group.label}>
               <p className="px-3 py-1 text-xs font-bold uppercase tracking-wider text-slate-400">{group.label}</p>
               {items.map((id) => link(sec(id)))}

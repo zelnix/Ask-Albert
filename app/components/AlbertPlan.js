@@ -409,7 +409,7 @@ const OSTATE_COLOR = {
   CANCELLED: 'text-slate-400', REJECTED: 'text-rose-300', EXPIRED: 'text-slate-500',
 };
 const OUTCOME_MSG = {
-  STALE_DECISION: 'Albert\u2019s numbers moved \u2014 this frozen order is now stale. Return to the fresh call and create a new order.',
+  STALE_DECISION: 'Albert’s numbers moved \u2014 this frozen order is now stale. Return to the fresh call and create a new order.',
   EXPIRED: 'This order intent expired (5-minute limit). Return to the fresh call to create a new one.',
   SLIPPAGE_EXCEEDED: 'Execution price breached your slippage limit \u2014 the paper order was rejected, not filled at a worse price.',
   NO_MARKET_PRICE: 'No market price available right now \u2014 rejected.',

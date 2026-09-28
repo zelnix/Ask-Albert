@@ -51,18 +51,18 @@ const TickerContent = ({ d, ticker, snapshot }) => {
   const accuracy = num(ledger.accuracy);
   const graded = num(ledger.n);
   const forecastPerf = accuracy != null && graded != null && graded > 0
-    ? `${accuracy.toFixed(0)}% \u00b7 ${graded} graded` : 'Unavailable';
+    ? `${accuracy.toFixed(0)}% · ${graded} graded` : 'Unavailable';
   return [
-    { title: 'BTC spot', value: ticker?.price ? `${money(ticker.price)} \u00b7 ${change24 != null ? signed(change24) : ''}` : 'Unavailable', to: 'market-intel',
+    { title: 'BTC spot', value: ticker?.price ? `${money(ticker.price)} · ${change24 != null ? signed(change24) : ''}` : 'Unavailable', to: 'market-intel',
       what: ticker?.price ? `BTC/USD spot ${money(ticker.price)}; 24h change ${change24 != null ? signed(change24) : 'unavailable'}.` : 'Quote unavailable.',
       source: ticker?.source || 'ticker', asOf: ticker?.ts },
-    { title: 'BTC dominance', value: num(d?.dominance?.dominance) != null ? `${num(d.dominance.dominance).toFixed(1)}%${num(d.dominance.change_7d) != null ? ` \u00b7 ${signed(d.dominance.change_7d, ' pts')}` : ''}` : 'Unavailable', to: 'crossmarket',
+    { title: 'BTC dominance', value: num(d?.dominance?.dominance) != null ? `${num(d.dominance.dominance).toFixed(1)}%${num(d.dominance.change_7d) != null ? ` · ${signed(d.dominance.change_7d, ' pts')}` : ''}` : 'Unavailable', to: 'crossmarket',
       what: num(d?.dominance?.dominance) != null ? `BTC dominance ${num(d.dominance.dominance).toFixed(2)}%.` : 'Not reported.',
       source: 'CoinGecko', asOf: d?.created_at },
     { title: 'Altcoin breadth', value: breadth?.altsWithReturns > 0 ? `${breadth.altsBeatingBtc}/${breadth.altsWithReturns} beat BTC` : 'Unavailable', to: 'market-intel',
       what: breadth?.altsWithReturns > 0 ? `${breadth.altsBeatingBtc} of ${breadth.altsWithReturns} altcoins beat BTC.` : 'Unavailable.',
       source: 'phase assessment', asOf: phase?.assessedAt },
-    { title: 'ETF net flow', value: net == null ? 'Unavailable' : `${signed(net, 'm')} \u00b7 ${etf?.latest_date ? etf.latest_date.slice(5) : ''}`, to: 'institutional',
+    { title: 'ETF net flow', value: net == null ? 'Unavailable' : `${signed(net, 'm')} · ${etf?.latest_date ? etf.latest_date.slice(5) : ''}`, to: 'institutional',
       what: net == null ? 'Unavailable.' : `Net flow ${signed(net, 'm USD')} for ${etf?.latest_date || ''}.`,
       source: etf?.source || 'ETF report', asOf: etf?.latest_date },
     { title: 'Market stance', value: sop?.market?.regime ? titleCase(sop.market.regime) : 'Unavailable', to: 'briefing',
@@ -79,7 +79,7 @@ const TickerContent = ({ d, ticker, snapshot }) => {
 
 const Explanation = ({ item, onNav, onEvidence }) => <div className="space-y-3 text-sm leading-relaxed text-slate-300">
   <p>{item.what || 'Not available.'}</p>
-  <p className="border-t border-slate-700 pt-3 text-xs text-slate-400">Source: {item.source || 'unavailable'} \u00b7 As of {when(item.asOf)}</p>
+  <p className="border-t border-slate-700 pt-3 text-xs text-slate-400">Source: {item.source || 'unavailable'} · As of {when(item.asOf)}</p>
   {item.snapshotId && <button type="button" onClick={() => onEvidence(item.snapshotId)} className="flex items-center gap-1.5 text-sm font-semibold text-sky-300 underline"><ShieldCheck className="h-4 w-4" />Open evidence</button>}
   {item.to && <NavigateLink id={item.to.startsWith('dashboard-') ? item.to : `dashboard-${item.to}`} onNav={onNav} className="text-sm">Open detailed screen<ArrowUpRight className="h-3.5 w-3.5" /></NavigateLink>}
 </div>;
@@ -153,10 +153,10 @@ const OneScreenHome = ({ d, dashboardStatus = 'loading', ticker, news, newsStatu
   const story = paperNews[0];
   const band = outlook?.band;
   const val = outlook?.validation || band?.validation;
-  const valText = val?.predictiveValidation && val?.evaluation?.evaluationPoints > 0 ? `Validated \u00b7 ${val.evaluation.evaluationPoints} checks` : !val ? 'Unavailable' : 'Not validated';
+  const valText = val?.predictiveValidation && val?.evaluation?.evaluationPoints > 0 ? `Validated · ${val.evaluation.evaluationPoints} checks` : !val ? 'Unavailable' : 'Not validated';
   const marketRows = matchedMarketSeries(outlook, eth);
   const lastSharedMarket = marketRows.filter((p) => p.BTC != null && p.ETH != null).at(-1);
-  const returns = lastSharedMarket ? `BTC ${signed(lastSharedMarket.BTC - 100)} \u00b7 ETH ${signed(lastSharedMarket.ETH - 100)}` : 'Unavailable';
+  const returns = lastSharedMarket ? `BTC ${signed(lastSharedMarket.BTC - 100)} · ETH ${signed(lastSharedMarket.ETH - 100)}` : 'Unavailable';
   const phase = streams?.phaseAssessment || sop?.marketStreams?.phaseAssessment;
   const nextEvent = d?.event_calendar?.next_high_impact;
   const availableLevels = Array.isArray(d?.chart?.sr_levels) ? d.chart.sr_levels : [];
@@ -166,7 +166,7 @@ const OneScreenHome = ({ d, dashboardStatus = 'loading', ticker, news, newsStatu
   const whale = (whales?.whales || []).find((w) => w.change_7d != null) || whales?.whales?.[0];
   const briefChanges = (sop?.changesSinceLastVisit || []).slice(0, 1);
   const claimTime = sop?.market?.asOf || sop?.generatedAt;
-  const last = (source, asOf) => `${source} \u00b7 ${when(asOf)}`;
+  const last = (source, asOf) => `${source} · ${when(asOf)}`;
   const ask = (id) => setSelected({ title: id, to: `dashboard-${id}` });
   const open = (id) => { if (typeof window !== 'undefined') window.__dashboardReturnCard = id; onNav(`dashboard-${id}`); };
   const focusableChart = (type, title, preview) => <button type="button" onClick={() => setChart(type)} className="group relative mt-1 block w-full rounded-md border border-slate-700/70 bg-slate-950/60 p-1.5 text-left hover:border-sky-500/50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400">
@@ -180,31 +180,31 @@ const OneScreenHome = ({ d, dashboardStatus = 'loading', ticker, news, newsStatu
     <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,1fr)_280px] lg:items-start xl:grid-cols-[minmax(0,1fr)_320px] xl:items-stretch 2xl:grid-cols-[minmax(0,1fr)_350px]">
       <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 xl:grid-rows-3">
         {/* 1. Albert's Brief */}
-        <DashboardCard cardId="brief" title="Albert\u2019s Brief" icon={Sparkles} status={health?.sop} summary={directionClaim?.text || 'Unavailable'} freshness={last('Regime', claimTime)} onAsk={() => ask('brief')} onOpen={() => open('brief')}>
+        <DashboardCard cardId="brief" title="Albert’s Brief" icon={Sparkles} status={health?.sop} summary={directionClaim?.text || 'Unavailable'} freshness={last('Regime', claimTime)} onAsk={() => ask('brief')} onOpen={() => open('brief')}>
           <p className="line-clamp-1"><b>Drivers:</b> {leadershipClaim?.text || 'Unavailable'}</p>
           <p className="mt-1 line-clamp-1"><b>Since last visit:</b> {briefChanges[0]?.detail || 'No change'}</p>
           <p className="mt-1 line-clamp-1"><b>Position:</b> {portfolioClaim?.text || (totals ? `${money(totals.value, 2)}` : 'Unavailable')}</p>
         </DashboardCard>
         {/* 2. Paper Trading */}
-        <DashboardCard cardId="paper" title="Paper Trading" icon={Wallet} status={health?.paper} summary={totals?.value != null ? `${money(totals.value, 2)} \u00b7 ${pnlLabel}${pnlVal != null ? ` ${money(Math.abs(pnlVal), 2)} (${signed(totals.pnlPct)})` : ''}` : 'Unavailable'} freshness={last('Ledger', paper?.asOf)} onAsk={() => ask('paper')} onOpen={() => open('paper')}>
-          <p className="line-clamp-1"><b>Start:</b> {money(totals?.startingCash, 2)} \u00b7 <b>Cash:</b> {paper?.cashAvailable ? money(paper.cashTotal, 2) : 'unavailable'} \u00b7 <b>Holdings:</b> {positions.length ? money(positions.reduce((s, p) => s + (num(p.currentPrice) || 0) * (num(p.netQuantity) || 0), 0), 2) : 'none'}</p>
+        <DashboardCard cardId="paper" title="Paper Trading" icon={Wallet} status={health?.paper} summary={totals?.value != null ? `${money(totals.value, 2)} · ${pnlLabel}${pnlVal != null ? ` ${money(Math.abs(pnlVal), 2)} (${signed(totals.pnlPct)})` : ''}` : 'Unavailable'} freshness={last('Ledger', paper?.asOf)} onAsk={() => ask('paper')} onOpen={() => open('paper')}>
+          <p className="line-clamp-1"><b>Start:</b> {money(totals?.startingCash, 2)} · <b>Cash:</b> {paper?.cashAvailable ? money(paper.cashTotal, 2) : 'unavailable'} · <b>Holdings:</b> {positions.length ? money(positions.reduce((s, p) => s + (num(p.currentPrice) || 0) * (num(p.netQuantity) || 0), 0), 2) : 'none'}</p>
           {entries.length ? entries.map((e, i) => <p key={e.ledgerEventId || i} className="mt-0.5 truncate">{e.side === 'BUY' ? 'Bought' : 'Sold'} {e.qty} {e.asset} @ {money(e.fillPx, 2)}</p>) : <p className="mt-1 text-slate-400">No completed trades</p>}
           {(paper?.pendingApprovals?.length || 0) > 0 && <p className="mt-1 text-amber-200">{paper.pendingApprovals.length} pending proposal(s)</p>}
         </DashboardCard>
         {/* 3. Portfolio & Risk */}
-        <DashboardCard cardId="portfolio" title="Portfolio & Risk" icon={ShieldAlert} status={health?.paper} summary={`${positions.length} holdings \u00b7 ${leadingPosition ? `largest ${leadingPosition.asset} ${money(leadingPosition.value, 0)}` : ''}`} freshness={last('Ledger', paper?.asOf)} onAsk={() => ask('portfolio')} onOpen={() => open('portfolio')}>
-          <p className="line-clamp-2"><b>Allocation:</b> {positions.length ? positions.slice(0, 2).map((p) => `${p.asset} ${num(p.currentPrice) != null && num(p.netQuantity) != null && num(totals?.value) > 0 ? pct(num(p.currentPrice) * num(p.netQuantity) / num(totals.value) * 100) : ''}`).join(' \u00b7 ') : 'none'}</p>
+        <DashboardCard cardId="portfolio" title="Portfolio & Risk" icon={ShieldAlert} status={health?.paper} summary={`${positions.length} holdings · ${leadingPosition ? `largest ${leadingPosition.asset} ${money(leadingPosition.value, 0)}` : ''}`} freshness={last('Ledger', paper?.asOf)} onAsk={() => ask('portfolio')} onOpen={() => open('portfolio')}>
+          <p className="line-clamp-2"><b>Allocation:</b> {positions.length ? positions.slice(0, 2).map((p) => `${p.asset} ${num(p.currentPrice) != null && num(p.netQuantity) != null && num(totals?.value) > 0 ? pct(num(p.currentPrice) * num(p.netQuantity) / num(totals.value) * 100) : ''}`).join(' · ') : 'none'}</p>
           <p className="mt-1 line-clamp-1"><b>Risk / cap:</b> {paper?.openRiskAvailable ? `${pct(paper.openRiskPct)} / ${pct(paper.openRiskLimitPct)}` : 'unavailable'}</p>
         </DashboardCard>
         {/* 4. BTC Bull & Bear */}
-        <DashboardCard cardId="btc" title="BTC Bull & Bear" icon={GitBranch} status={health?.outlook} summary={band?.lowerPct != null ? `7d: ${signed(band.lowerPct)} to ${signed(band.upperPct)} \u00b7 ${valText}` : band?.reasonText || 'Unavailable'} freshness={last('Candle', outlook?.baseline?.observedAt)} onAsk={() => ask('btc')} onOpen={() => open('btc')} detail="Scenarios">
+        <DashboardCard cardId="btc" title="BTC Bull & Bear" icon={GitBranch} status={health?.outlook} summary={band?.lowerPct != null ? `7d: ${signed(band.lowerPct)} to ${signed(band.upperPct)} · ${valText}` : band?.reasonText || 'Unavailable'} freshness={last('Candle', outlook?.baseline?.observedAt)} onAsk={() => ask('btc')} onOpen={() => open('btc')} detail="Scenarios">
           {focusableChart('btc', 'BTC chart', <BTCChart outlook={outlook} levels={availableLevels} />)}
-          <p className="mt-1 truncate text-[11px] text-slate-400">{anchor != null ? money(anchor) : ''} \u00b7 S {support ? money(support.price) : '?'} / R {ceiling ? money(ceiling.price) : '?'}</p>
+          <p className="mt-1 truncate text-[11px] text-slate-400">{anchor != null ? money(anchor) : ''} · S {support ? money(support.price) : '?'} / R {ceiling ? money(ceiling.price) : '?'}</p>
         </DashboardCard>
         {/* 5. Market Intelligence */}
-        <DashboardCard cardId="intelligence" title="Market Intelligence" icon={BarChart3} status={health?.driver} summary={lead ? `${titleCase(lead.actor || lead.label)} \u00b7 ${driver?.marketPosture || ''}` : 'Unavailable'} freshness={last('Driver', driver?.asOf)} onAsk={() => ask('intelligence')} onOpen={() => open('intelligence')}>
+        <DashboardCard cardId="intelligence" title="Market Intelligence" icon={BarChart3} status={health?.driver} summary={lead ? `${titleCase(lead.actor || lead.label)} · ${driver?.marketPosture || ''}` : 'Unavailable'} freshness={last('Driver', driver?.asOf)} onAsk={() => ask('intelligence')} onOpen={() => open('intelligence')}>
           {focusableChart('market', 'BTC/ETH', <MarketChart btc={outlook} eth={eth} />)}
-          <p className="truncate text-[11px] text-slate-300">{returns} \u00b7 breadth {phase?.inputs?.altsWithReturns > 0 ? `${phase.inputs.altsBeatingBtc}/${phase.inputs.altsWithReturns}` : '?'}</p>
+          <p className="truncate text-[11px] text-slate-300">{returns} · breadth {phase?.inputs?.altsWithReturns > 0 ? `${phase.inputs.altsBeatingBtc}/${phase.inputs.altsWithReturns}` : '?'}</p>
           {next && <p className="truncate text-[11px] text-slate-400">Next: {titleCase(next.actor)} ({next.probabilityBand || '?'})</p>}
         </DashboardCard>
         {/* 6. News, Macro & Policy */}
@@ -214,18 +214,18 @@ const OneScreenHome = ({ d, dashboardStatus = 'loading', ticker, news, newsStatu
           {nextEvent?.title && <p className="mt-1 truncate text-slate-400">Next: {nextEvent.title}</p>}
         </DashboardCard>
         {/* 7. Evidence & Engines */}
-        <DashboardCard cardId="evidence" title="Evidence & Engines" icon={Database} status={health?.sop} summary={`Forecast: ${valText} \u00b7 Data: ${titleCase(sop?.dataQuality?.status || 'unavailable')}`} freshness={last('Eval', val?.evaluation?.lastEvaluatedAt || sop?.generatedAt)} onAsk={() => ask('evidence')} onOpen={() => open('evidence')}>
+        <DashboardCard cardId="evidence" title="Evidence & Engines" icon={Database} status={health?.sop} summary={`Forecast: ${valText} · Data: ${titleCase(sop?.dataQuality?.status || 'unavailable')}`} freshness={last('Eval', val?.evaluation?.lastEvaluatedAt || sop?.generatedAt)} onAsk={() => ask('evidence')} onOpen={() => open('evidence')}>
           <p className="line-clamp-1">Ledger: {d?.prediction_ledger?.overall?.accuracy != null ? `${num(d.prediction_ledger.overall.accuracy).toFixed(0)}% accuracy, ${d.prediction_ledger.overall.n} graded` : 'unavailable'}</p>
           <p className="mt-1 line-clamp-1">Paper: {totals ? `${totals.closedTrades ?? 0} trades, win ${totals.winRatePct != null ? pct(totals.winRatePct) : '?'}` : 'unavailable'}</p>
         </DashboardCard>
         {/* 8. On-Chain & Flows */}
-        <DashboardCard cardId="flows" title="On-Chain & Flows" icon={Waves} status={health?.etf} summary={whale ? `${whale.name || 'Whale'}: ${whale.change_7d != null ? `${signed(whale.change_7d, ' BTC')} \u00b7 ${whale.signal || ''}` : ''}` : 'Unavailable'} freshness={last(whales?.source || 'Whale', whales?.as_of)} onAsk={() => ask('flows')} onOpen={() => open('flows')}>
-          <p className="line-clamp-1">ETF: {etf?.net_1d != null ? `${signed(etf.net_1d, 'm USD')} \u00b7 ${etf.latest_date || ''}` : 'unavailable'}</p>
-          <p className="mt-1 line-clamp-1">Network: {network?.hashrate_ehs != null ? `${network.hashrate_ehs} EH/s` : '?'} \u00b7 sentiment: {sentiment?.value != null ? `${sentiment.value}/100` : '?'}</p>
+        <DashboardCard cardId="flows" title="On-Chain & Flows" icon={Waves} status={health?.etf} summary={whale ? `${whale.name || 'Whale'}: ${whale.change_7d != null ? `${signed(whale.change_7d, ' BTC')} · ${whale.signal || ''}` : ''}` : 'Unavailable'} freshness={last(whales?.source || 'Whale', whales?.as_of)} onAsk={() => ask('flows')} onOpen={() => open('flows')}>
+          <p className="line-clamp-1">ETF: {etf?.net_1d != null ? `${signed(etf.net_1d, 'm USD')} · ${etf.latest_date || ''}` : 'unavailable'}</p>
+          <p className="mt-1 line-clamp-1">Network: {network?.hashrate_ehs != null ? `${network.hashrate_ehs} EH/s` : '?'} · sentiment: {sentiment?.value != null ? `${sentiment.value}/100` : '?'}</p>
         </DashboardCard>
         {/* 9. Opportunity Radar */}
         <DashboardCard cardId="radar" title="Opportunity Radar" icon={Radar} status={health?.streams} summary={findings[0]?.title || 'No setups'} freshness={last('Research', research?.asOf || streams?.generatedAt)} onAsk={() => ask('radar')} onOpen={() => open('radar')}>
-          {findings.length ? findings.map((f, i) => <p key={f.findingId || i} className="mt-0.5 line-clamp-1">{f.asset || 'Market'} \u00b7 {titleCase(f.priority)} \u00b7 {f.title}</p>) : <p className="text-slate-400">No open setups</p>}
+          {findings.length ? findings.map((f, i) => <p key={f.findingId || i} className="mt-0.5 line-clamp-1">{f.asset || 'Market'} · {titleCase(f.priority)} · {f.title}</p>) : <p className="text-slate-400">No open setups</p>}
           {findings[0] && <p className="mt-1 line-clamp-1 text-slate-300">Confirm: {findings[0].confirmIf || '?'}</p>}
         </DashboardCard>
       </div>

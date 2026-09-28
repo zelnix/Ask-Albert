@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   ResponsiveContainer, ComposedChart, Line, LineChart, Area, Bar, BarChart,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, Cell,
@@ -59,7 +59,7 @@ import StrategyStudio from './components/StrategyStudio';
 import PaperEngineTechnical from './components/PaperEngineTechnical';
 
 import DailyReportModal from './components/DailyReport';
-import { SECTIONS, LEGACY_SECTIONS, sec, BTC_ONLY_SECTIONS, REMOVED_SECTIONS, PRIMARY_NAV, TECH_GROUPS, PRIMARY_IDS } from './lib/sections';
+import { SECTIONS, LEGACY_SECTIONS, sec, REMOVED_SECTIONS, PRIMARY_NAV, TECH_GROUPS, PRIMARY_IDS } from './lib/sections';
 import { speakAlbert, stopAlbert, prefetchAlbert, getVoicePref, setVoicePref, previewVoice } from './lib/albertVoice';
 import { CoinIcon, Shimmer, ChartTooltip, QuantGauge, InfoBlock, InfoTip, TapInfo, AiReview, SectionHead, Spark, LevGauge, ComingSoonSection } from './components/shared';
 import AlertEngineSection from './components/AlertEngine';
@@ -1926,7 +1926,7 @@ function ExecutiveSummary({ d, ticker, news, onNav, homeParams, setHomeParams })
       <Card className="border-0 bg-gradient-to-br from-amber-500/[0.06] via-violet-500/[0.06] to-slate-900 p-6 ring-1 ring-violet-500/25">
         <div className="flex flex-wrap items-center gap-2">
           <img src="/albert.png" alt="Albert" className="h-11 w-11 rounded-full object-cover ring-2 ring-amber-400/50" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
-          <h3 className="text-lg font-bold text-white">{briefSym === 'BTC' ? 'Albert\u2019s Morning Brief' : `Albert\u2019s ${briefName} Brief`}</h3>
+          <h3 className="text-lg font-bold text-white">{briefSym === 'BTC' ? 'Albert’s Morning Brief' : `Albert’s ${briefName} Brief`}</h3>
           {re.regime_label && <span className="rounded-full border border-violet-500/30 bg-violet-500/10 px-2 py-0.5 text-[11px] font-bold text-violet-200">{re.regime_label}</span>}
           {dec.ensemble_health != null && (() => {
             const h0 = dec.ensemble_health;
@@ -3162,8 +3162,28 @@ function AccountMenu({ user, onSignOut }) {
 }
 
 
+// Screens whose asset is always Bitcoin (no picker).
+const FIXED_BTC_SCREENS = new Set([
+  'home', 'scenarios', 'scenario-evaluation', 'smartmoney', 'whales', 'etf',
+  'leverage', 'timemachine', 'drivers', 'network',
+]);
+// Screens with no single-coin dimension (market, portfolio, system, chat).
+const NO_COIN_SCREENS = new Set([
+  'briefing', 'macro', 'events', 'paper', 'paperengine', 'strategies',
+  'ask', 'opportunities', 'alert-engine', 'alerts', 'dataaudit', 'admin',
+  'checkup', 'settings',
+]);
+// Screens that fetch their own data and don't need the global dashboard payload.
+const SELF_FETCHING_SCREENS = new Set([
+  'crossmarket', 'analogs', 'whales', 'etf', 'leverage', 'smartmoney',
+  'timemachine', 'network', 'drivers', 'checkup', 'alert-engine',
+  'ask', 'alerts', 'dataaudit', 'admin', 'settings', 'paperengine',
+  'scenarios', 'scenario-evaluation', 'opportunities',
+]);
+
 export default function DashboardPage() {
-  const [symbol, setSymbol] = useState('BTC');
+  // Per-screen asset selection: each screen remembers its own coin independently.
+  const [screenSymbols, setScreenSymbols] = useState({});
   const [coins, setCoins] = useState([{ symbol: 'BTC', name: 'Bitcoin' }]);
   const [data, setData] = useState(__dashCache);
   const [status, setStatus] = useState(__dashCache ? 'ready' : 'loading');
@@ -3189,6 +3209,21 @@ export default function DashboardPage() {
   const [compareOpen, setCompareOpen] = useState(false);
   const [albertBioOpen, setAlbertBioOpen] = useState(false);
   const [switching, setSwitching] = useState(false);
+
+  // Derive the effective symbol from the active screen's own selection.
+  const symbol = useMemo(() => {
+    if (FIXED_BTC_SCREENS.has(active)) return 'BTC';
+    if (active.startsWith('dashboard-')) return 'BTC';
+    if (NO_COIN_SCREENS.has(active)) return 'BTC';
+    return screenSymbols[active] || 'BTC';
+  }, [active, screenSymbols]);
+  // Track whether a symbol change came from an explicit picker action (vs navigation).
+  const pickerTriggered = React.useRef(false);
+  // Change the current screen's selected asset.
+  const setScreenSymbol = useCallback((sym) => {
+    pickerTriggered.current = true;
+    setScreenSymbols((prev) => ({ ...prev, [active]: sym }));
+  }, [active]);
   // Auth gate: undefined = checking, null = signed out, {user} = signed in.
   const [authUser, setAuthUser] = useState(undefined);
   const [authError, setAuthError] = useState(false);
@@ -3212,14 +3247,11 @@ export default function DashboardPage() {
     active.startsWith('dashboard-') ? active.slice('dashboard-'.length) : active === 'scenario-evaluation' ? 'btc' : active === 'opportunities' ? 'radar' : 'home',
     authUser?.id || null
   );
-  const navigate = useCallback((id) => {
-    if (id === 'home') setSymbol('BTC');
+  const navigate = useCallback((id, sym) => {
+    if (sym) setScreenSymbols((prev) => ({ ...prev, [id]: sym }));
     setActive(id);
     if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'instant' });
   }, []);
-  // Home is intentionally the BTC-specific dashboard; retain altcoin deep links
-  // everywhere else, including browser Back/Forward.
-  useEffect(() => { if (active === 'home' && symbol !== 'BTC') setSymbol('BTC'); }, [active, symbol]);
   // Trader Home: no blocking post-sign-in modals. Users land directly on the
   // briefing; the Welcome/Weekly recaps are available inline (WeeklyBriefCard).
   const handleSignOut = React.useCallback(async () => {
@@ -3239,22 +3271,17 @@ export default function DashboardPage() {
     document.addEventListener('click', onDocClick, true);
     return () => document.removeEventListener('click', onDocClick, true);
   }, []);
-  const firstSym = React.useRef(true);
   const failCount = React.useRef(0);
 
-  // Restore last-picked coin + load the supported coin list after authentication.
+  // Load the supported coin list after authentication.
   useEffect(() => {
     if (!authUser) return;
-    try {
-      const s = (localStorage.getItem('btciq_symbol') || '').toUpperCase();
-      // A shared ?symbol= link takes precedence over this browser's last pick.
-      if (s && !new URLSearchParams(window.location.search).has('symbol')) setSymbol(s);
-    } catch (e) { /* noop */ }
     fetch(`${API_BASE}/v1/compare/coins`).then((r) => r.json()).then((j) => { if (j.coins) setCoins([{ symbol: 'BTC', name: 'Bitcoin' }, ...j.coins.filter((c) => c.symbol !== 'BTC')]); }).catch(() => {});
   }, [authUser]);
 
   // --- Deep-linking: shareable URL state (section / symbol / horizon / focus) ---
   // Read the URL once on mount so a shared link opens the exact same view.
+  // ?symbol=ETH&section=crossmarket opens Cross-Market with ETH as its local asset.
   useEffect(() => {
     try {
       const q = new URLSearchParams(window.location.search);
@@ -3265,7 +3292,7 @@ export default function DashboardPage() {
       const mdh = q.get('mdh');
       if (s || sec || hz || fc || mdh) {
         skipUrlPush.current = true;
-        if (s) setSymbol(s);
+        if (s && sec) setScreenSymbols((prev) => ({ ...prev, [sec]: s }));
         if (sec) setActive(sec);
         setHomeParams((p) => ({ ...p, horizon: hz || p.horizon, focus: fc || null, mdHorizon: mdh || p.mdHorizon }));
       }
@@ -3297,8 +3324,10 @@ export default function DashboardPage() {
       try {
         const q = new URLSearchParams(window.location.search);
         skipUrlPush.current = true;
-        setSymbol((q.get('symbol') || 'BTC').toUpperCase());
-        setActive(q.get('section') || 'home');
+        const sec = q.get('section') || 'home';
+        const s = (q.get('symbol') || '').toUpperCase();
+        if (s) setScreenSymbols((prev) => ({ ...prev, [sec]: s }));
+        setActive(sec);
         setHomeParams({ horizon: q.get('horizon') || '7D', focus: q.get('focus') || null, mdHorizon: q.get('mdh') || 'SWING' });
       } catch (e) { /* noop */ }
     };
@@ -3307,23 +3336,21 @@ export default function DashboardPage() {
   }, []);
 
 
-  // Persist choice + reset the view whenever the coin changes so we never show a stale asset.
+  // Reset dashboard data when the derived symbol changes (e.g. local picker or navigation).
   useEffect(() => {
-    if (!authUser) return; // Don't overwrite the saved coin while checking the session.
-    if (firstSym.current) { firstSym.current = false; return; }
-    try { localStorage.setItem('btciq_symbol', symbol); } catch (e) { /* noop */ }
+    if (!authUser) return;
     const btc = symbol === 'BTC';
     setData(btc ? (__dashCache || null) : null);
     setStatus(btc && __dashCache ? 'ready' : 'loading');
-    // Show the "Albert is compiling…" overlay while the new coin's analytics load.
-    setSwitching(!(btc && __dashCache));
+    // Show the "compiling…" overlay only for explicit picker changes, not navigation.
+    if (pickerTriggered.current) {
+      setSwitching(!(btc && __dashCache));
+      pickerTriggered.current = false;
+    }
     setError(null);
     setNews(btc ? (__newsCache || null) : null);
     setNewsStatus(btc && __newsCache ? 'ready' : 'loading');
     setTicker(btc ? (__tickerCache || null) : null);
-    // if the current section is hidden for altcoins, jump back to Overview
-    setActive((a) => (!btc && BTC_ONLY_SECTIONS.includes(a) ? 'overview' : a));
-    if (btc) setCompareOpen(false);
   }, [symbol, authUser]);
 
   // Chat can initiate only Studio's draft -> review -> save flow. Never create a
@@ -3366,8 +3393,7 @@ export default function DashboardPage() {
     if ((data && status === 'ready') || status === 'error') setSwitching(false);
   }, [data, status]);
 
-  // Keep the Alerts feed scoped to the coin the user is viewing (they can still switch to All/other coins in the Alerts screen).
-  useEffect(() => { setAlertFilter(symbol); }, [symbol]);
+  // Alerts operate independently of the research coin — they keep their own filter.
 
   // Reflect the selected coin's price in the browser tab title only.
   // (The favicon stays the Ask Albert app icon — we no longer swap it per coin.)
@@ -3601,9 +3627,10 @@ export default function DashboardPage() {
   // Strategy Studio owns its data. A slow market dashboard must not hide paper
   // strategy review/validation behind an unrelated analytics skeleton.
   const dashboardFirst = active === 'home' || active === 'scenario-evaluation' || active === 'opportunities' || active.startsWith('dashboard-');
-  // The published market run is only one source. Keep the Home/header and its
-  // independently loaded owner/market results visible while it is unavailable.
-  if (!dashboardFirst && active !== 'strategies' && active !== 'paper' && !data && (status === 'loading' || status === 'computing')) {
+  // The published market run is only one source. Screens that fetch their own data
+  // (Cross-Market, Analogs, Whale Watch, etc.) render immediately even without `d`.
+  const needsDashboard = !dashboardFirst && active !== 'strategies' && active !== 'paper' && !SELF_FETCHING_SCREENS.has(active);
+  if (needsDashboard && !data && (status === 'loading' || status === 'computing')) {
     return (
       <>
         <DashboardSkeleton ticker={ticker} />
@@ -3611,7 +3638,7 @@ export default function DashboardPage() {
       </>
     );
   }
-  if (!dashboardFirst && active !== 'strategies' && active !== 'paper' && !data && status === 'error') {
+  if (needsDashboard && !data && status === 'error') {
     return (
       <main className="flex min-h-screen flex-col items-center justify-center gap-4 bg-slate-950 px-6">
         <div className="rounded-full bg-red-500/10 p-4"><Activity className="h-8 w-8 text-red-400" /></div>
@@ -3624,7 +3651,21 @@ export default function DashboardPage() {
 
   const d = data || {};
   const activeSection = sec(active);
-  const visibleSections = SECTIONS.filter((s) => !REMOVED_SECTIONS.includes(s.id) && (symbol === 'BTC' || !BTC_ONLY_SECTIONS.includes(s.id)));
+  const visibleSections = SECTIONS.filter((s) => !REMOVED_SECTIONS.includes(s.id));
+
+  // Local coin picker bar for screens that support asset selection.
+  const researchBar = (
+    <div className="mb-4 flex flex-wrap items-center gap-3">
+      <CoinPicker coins={coins} symbol={symbol} onSelect={setScreenSymbol} />
+      {symbol !== 'BTC' && (
+        <>
+          <button type="button" onClick={() => setCompareOpen(true)} title="Overlay this coin vs Bitcoin" className="flex items-center gap-1.5 rounded-md border border-slate-700 bg-slate-900 px-2 py-1.5 text-xs font-semibold text-slate-200 hover:border-sky-500/50"><Scale className="h-4 w-4" /><span className="hidden sm:inline">vs Bitcoin</span></button>
+          <button type="button" onClick={() => setScreenSymbol('BTC')} className="text-xs text-slate-500 hover:text-slate-300">← Back to Bitcoin</button>
+        </>
+      )}
+    </div>
+  );
+
   const renderSection = () => {
     if (active === 'home') return <OneScreenHome d={data} dashboardStatus={status} ticker={ticker} news={news} newsStatus={newsStatus} snapshot={oneScreen} onNav={navigate} />;
     if (active.startsWith('dashboard-') && DASHBOARD_AREAS[active.slice('dashboard-'.length)]) return <ConsolidatedDetail
@@ -3634,28 +3675,30 @@ export default function DashboardPage() {
     if (active === 'scenario-evaluation') return <ScenarioEvaluation snapshot={oneScreen} levels={Array.isArray(d?.chart?.sr_levels) ? d.chart.sr_levels : []} onNav={navigate} />;
     if (active === 'opportunities') return <OpportunityResearch snapshot={oneScreen} onNav={navigate} />;
     if (active === 'briefing') return <ExecutiveSummary d={d} ticker={ticker} news={news} onNav={setActive} homeParams={homeParams} setHomeParams={setHomeParams} />;
-    if (active === 'overview') return <OverviewSection d={d} ticker={ticker} />;
-    if (active === 'forecasts') return <ForecastsHubSection d={d} />;
-    if (active === 'market-intel') return <MarketIntelligenceSection d={d} />;
+    // Screens with a local coin picker:
+    if (active === 'overview') return <>{researchBar}<OverviewSection d={d} ticker={ticker} /></>;
+    if (active === 'forecasts') return <>{researchBar}<ForecastsHubSection d={d} /></>;
+    if (active === 'market-intel') return <>{researchBar}<MarketIntelligenceSection d={d} /></>;
+    if (active === 'crossmarket') return <>{researchBar}<CrossMarketSection /></>;
+    if (active === 'analogs') return <>{researchBar}<AnalogsSection /></>;
+    if (active === 'institutional') return <>{researchBar}<div className="space-y-5"><DemoMetricsCard title="Institutional & Derivatives" icon={Landmark} panel={d.institutional} sectionId="institutional" />{symbol === 'BTC' && <EtfFlowsCard />}</div></>;
+    if (active === 'news') return <>{researchBar}<NewsSection news={news} status={newsStatus} onRefresh={handleNewsRefresh} refreshing={newsRefreshing} ohlc={data?.chart?.ohlc} /></>;
+    if (active === 'risk') return <>{researchBar}<RiskSection d={d} /></>;
+    if (active === 'performance') return <>{researchBar}<PerformanceHubSection d={d} /></>;
+    // Fixed-scope screens (no picker):
     if (active === 'drivers') return <MarketDrivers horizon={homeParams.mdHorizon} onHorizon={(h) => setHomeParams((p) => ({ ...p, mdHorizon: h }))} />;
     if (active === 'checkup') return <DiagnosticsCheckup />;
     if (active === 'paper') return <PaperTradingBot onNav={setActive} />;
     if (active === 'paperengine') return <PaperEngineTechnical onNav={setActive} />;
-    if (active === 'crossmarket') return <CrossMarketSection />;
-    if (active === 'analogs') return <AnalogsSection />;
     if (active === 'smartmoney') return <DemoMetricsCard title="Smart Money" icon={Waves} panel={d.smart_money} sectionId="smartmoney" />;
     if (active === 'whales') return <WhaleWatch />;
     if (active === 'network') return <NetworkSentimentSection />;
     if (active === 'dataaudit') return <DataAuditSection />;
     if (active === 'admin') return <AdminSection user={authUser} onSignOut={handleSignOut} />;
     if (active === 'leverage') return <LeverageSection />;
-    if (active === 'institutional') return (<div className="space-y-5"><DemoMetricsCard title="Institutional & Derivatives" icon={Landmark} panel={d.institutional} sectionId="institutional" />{(d.symbol || 'BTC') === 'BTC' && <EtfFlowsCard />}</div>);
     if (active === 'etf') return <EtfFlowsCard />;
     if (active === 'macro') return <PolicySection d={d} />;
-    if (active === 'news') return <NewsSection news={news} status={newsStatus} onRefresh={handleNewsRefresh} refreshing={newsRefreshing} ohlc={data?.chart?.ohlc} />;
-    if (active === 'risk') return <RiskSection d={d} />;
     if (active === 'events') return <EventsSection d={d} />;
-    if (active === 'performance') return <PerformanceHubSection d={d} />;
     if (active === 'timemachine') return <TimeMachineSection />;
     if (active === 'ask') return <AskAlbert onNav={setActive} />;
     if (active === 'strategies') return <StrategyStudio chatGoal={chatStrategy?.goal || ''} chatDraftKey={chatStrategy?.key} chatProposal={chatStrategy?.proposal || null} onChatDismiss={() => setChatStrategy(null)} />;
@@ -3678,18 +3721,16 @@ export default function DashboardPage() {
       <div className="relative">
         {/* Every screen shares the same global hamburger menu and header. */}
         <div className="min-w-0">
-          {/* One global header: a shared menu on Home and every detail screen. */}
+          {/* One global header: no global coin picker — each screen owns its asset selection. */}
           <header className="sticky top-0 z-30 flex min-w-0 flex-wrap items-center gap-2 border-b border-slate-800 bg-slate-950/95 px-3 py-2 md:px-4">
             <a href="/?section=home" onClick={(e) => { e.preventDefault(); navigate('home'); }} aria-label="Ask Albert Home" className="flex shrink-0 items-center gap-1 rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400">
               <img src="/ask-albert-logo.png" alt="Ask Albert" className="h-14 w-auto max-w-[135px] object-contain" />
             </a>
-            {/* published stamp moved to footer only */}
             {active === 'home' ? <HomeTicker d={data} ticker={ticker} snapshot={oneScreen} dashboardStatus={status} onNav={navigate} /> : <div className="flex min-w-0 flex-1 items-center gap-2">
-              <CoinPicker coins={coins} symbol={symbol} onSelect={setSymbol} />
-              {symbol !== 'BTC' && <button type="button" onClick={() => setCompareOpen(true)} title="Overlay this coin vs Bitcoin" className="flex items-center gap-1.5 rounded-md border border-slate-700 bg-slate-900 px-2 py-1.5 text-xs font-semibold text-slate-200 hover:border-sky-500/50"><Scale className="h-4 w-4" /><span className="hidden sm:inline">vs Bitcoin</span></button>}
-              <span className="hidden truncate text-sm font-semibold text-white lg:inline">{ticker?.price ? `${fmtUsd(ticker.price)} · ${ticker.change24h ?? '—'}%` : 'Quote unavailable'}</span>
+              {ticker?.price && <CoinIcon symbol={symbol} size={24} />}
+              <span className="hidden truncate text-sm font-semibold text-white lg:inline">{ticker?.price ? `${(coins.find((c) => c.symbol === symbol) || {}).name || symbol} ${fmtUsd(ticker.price)} · ${ticker.change24h ?? '—'}%` : ''}</span>
             </div>}
-            <NotificationBell alertsData={notif} onAck={ackNotif} onViewAll={() => navigate('alerts')} onNavSection={(s) => navigate(s || 'strategies')} onOpenBrief={(sym) => { const s = (sym || 'BTC').toUpperCase(); if (s !== symbol) setSymbol(s); navigate('briefing'); }} />
+            <NotificationBell alertsData={notif} onAck={ackNotif} onViewAll={() => navigate('alerts')} onNavSection={(s) => navigate(s || 'strategies')} onOpenBrief={(sym) => { navigate('briefing'); }} />
             {active !== 'home' && <Button onClick={() => setShowReport(true)} size="sm" variant="outline" title="Shareable daily report" className="hidden gap-1.5 border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800 sm:inline-flex"><ClipboardList className="h-4 w-4" /><span className="hidden lg:inline">Report</span></Button>}
             <div className="relative">
               {active !== 'home' && <Button onClick={handleRefresh} disabled={refreshing} size="sm" className="hidden gap-1.5 bg-sky-600 text-white hover:bg-sky-500 sm:inline-flex"><RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} /><span className="hidden lg:inline">{refreshing ? 'Retraining' : 'Retrain'}</span></Button>}
