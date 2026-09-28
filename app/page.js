@@ -849,14 +849,21 @@ function UATManagement() {
 
   if (!status) return null;
   if (status.forbidden || !status.configured) return null; // Not the owner or not configured.
+  const needsRealSession = status.configured && !status.hasRealSession;
 
   return (
     <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
       <h3 className="mb-1 flex items-center gap-2 font-semibold text-white"><ShieldCheck className="h-4 w-4 text-sky-400" />UAT Access</h3>
       <p className="mb-3 text-xs text-slate-500">
-        Generate a temporary sign-in link for the dedicated UAT tester account ({status.uatAccountEmail}).
+        Generate a temporary sign-in link for the dedicated UAT tester account ({status.uatAccountEmail || 'not configured'}).
         Links are single-use and expire after 15 minutes.
       </p>
+
+      {needsRealSession && (
+        <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-[12px] text-amber-200">
+          <strong>Sign in with Google first.</strong> UAT link generation requires an authenticated owner session — the preview auto-login is not sufficient.
+        </div>
+      )}
 
       <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-slate-400">
         <span>Account: <strong className="text-slate-200">{status.uatAccountEmail}</strong></span>
@@ -885,10 +892,10 @@ function UATManagement() {
       {error && <p className="mb-2 text-[12px] font-medium text-red-400">{error}</p>}
 
       <div className="flex flex-wrap items-center gap-2">
-        <Button onClick={createLink} disabled={creating} className="bg-sky-500 hover:bg-sky-400">
+        <Button onClick={createLink} disabled={creating || needsRealSession} className="bg-sky-500 hover:bg-sky-400">
           {creating ? 'Creating...' : 'Create UAT sign-in link'}
         </Button>
-        <Button onClick={revokeAccess} disabled={revoking} variant="outline" className="border-red-500/40 text-red-300 hover:bg-red-500/10">
+        <Button onClick={revokeAccess} disabled={revoking || needsRealSession} variant="outline" className="border-red-500/40 text-red-300 hover:bg-red-500/10">
           {revoking ? 'Revoking...' : 'Revoke UAT access'}
         </Button>
       </div>

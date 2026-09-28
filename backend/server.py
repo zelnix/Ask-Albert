@@ -4083,8 +4083,24 @@ def uat_revoke(request: Request):
 
 @app.get('/api/auth/uat/status')
 def uat_status(request: Request):
-    """Owner-only: get the UAT account status."""
-    _uat_require_real_owner(request)
+    """Owner-only: get the UAT account status.
+    Allows both real sessions and preview bypass for read-only visibility.
+    The response includes 'hasRealSession' so the frontend knows whether
+    create/revoke (which require a real session) will work."""
+    # Try real session first, then fall back to get_current_user (which includes preview bypass).
+    has_real_session = False
+    try:
+        _uat_require_real_owner(request)
+        has_real_session = True
+    except HTTPException:
+        # Fall back: allow preview bypass for read-only status.
+        try:
+            user = get_current_user(request)
+            email = (user.get('email') or '').strip().lower()
+            if not UAT_OWNER_EMAIL or email != UAT_OWNER_EMAIL:
+                raise HTTPException(status_code=403, detail='Not the UAT owner.')
+        except Exception:
+            raise HTTPException(status_code=403, detail='UAT management requires the owner account.')
     if not UAT_ACCOUNT_EMAIL:
         return {'configured': False}
     uat_user = users_col.find_one({'email': UAT_ACCOUNT_EMAIL},
@@ -4099,6 +4115,7 @@ def uat_status(request: Request):
         sort=[('createdAt', -1)])
     return {
         'configured': True,
+        'hasRealSession': has_real_session,
         'uatAccountEmail': UAT_ACCOUNT_EMAIL,
         'uatAccountId': (uat_user or {}).get('_id'),
         'uatAccountExists': bool(uat_user),
