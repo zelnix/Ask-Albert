@@ -789,6 +789,115 @@ function NotificationSettings() {
 /* WallAlertToaster removed */
 
 
+function UATManagement() {
+  const [status, setStatus] = React.useState(null);
+  const [link, setLink] = React.useState(null);
+  const [linkExpiry, setLinkExpiry] = React.useState(null);
+  const [creating, setCreating] = React.useState(false);
+  const [revoking, setRevoking] = React.useState(false);
+  const [copied, setCopied] = React.useState(false);
+  const [error, setError] = React.useState('');
+  const [revokeResult, setRevokeResult] = React.useState(null);
+
+  // Load UAT status on mount.
+  React.useEffect(() => {
+    fetch(`${API_BASE}/auth/uat/status`, { credentials: 'include' })
+      .then(async (r) => { if (r.ok) setStatus(await r.json()); else setStatus({ configured: false, forbidden: r.status === 403 }); })
+      .catch(() => setStatus({ configured: false }));
+  }, []);
+
+  const createLink = async () => {
+    setCreating(true); setError(''); setLink(null); setRevokeResult(null);
+    try {
+      const r = await fetch(`${API_BASE}/auth/uat/create-link`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      if (r.ok) {
+        const j = await r.json();
+        setLink(j.link);
+        setLinkExpiry(j.expiresAt);
+        // Refresh status.
+        const s = await fetch(`${API_BASE}/auth/uat/status`, { credentials: 'include' });
+        if (s.ok) setStatus(await s.json());
+      } else {
+        const j = await r.json().catch(() => ({}));
+        setError(j.detail || 'Could not create link.');
+      }
+    } catch { setError('Network error.'); }
+    setCreating(false);
+  };
+
+  const revokeAccess = async () => {
+    setRevoking(true); setError(''); setLink(null); setRevokeResult(null);
+    try {
+      const r = await fetch(`${API_BASE}/auth/uat/revoke`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      if (r.ok) {
+        const j = await r.json();
+        setRevokeResult(j);
+        const s = await fetch(`${API_BASE}/auth/uat/status`, { credentials: 'include' });
+        if (s.ok) setStatus(await s.json());
+      } else {
+        const j = await r.json().catch(() => ({}));
+        setError(j.detail || 'Could not revoke.');
+      }
+    } catch { setError('Network error.'); }
+    setRevoking(false);
+  };
+
+  const copyLink = () => {
+    if (!link) return;
+    try { navigator.clipboard.writeText(link); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch { /* noop */ }
+  };
+
+  if (!status) return null;
+  if (status.forbidden || !status.configured) return null; // Not the owner or not configured.
+
+  return (
+    <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
+      <h3 className="mb-1 flex items-center gap-2 font-semibold text-white"><ShieldCheck className="h-4 w-4 text-sky-400" />UAT Access</h3>
+      <p className="mb-3 text-xs text-slate-500">
+        Generate a temporary sign-in link for the dedicated UAT tester account ({status.uatAccountEmail}).
+        Links are single-use and expire after 15 minutes.
+      </p>
+
+      <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-slate-400">
+        <span>Account: <strong className="text-slate-200">{status.uatAccountEmail}</strong></span>
+        <span>·</span>
+        <span>Active sessions: <strong className="text-slate-200">{status.activeSessions || 0}</strong></span>
+        {status.pendingLink && <><span>·</span><span className="text-amber-300">Pending link expires {new Date(status.pendingLinkExpiresAt).toLocaleTimeString()}</span></>}
+      </div>
+
+      {link && (
+        <div className="mb-3 rounded-lg border border-sky-500/30 bg-sky-500/10 p-3">
+          <p className="mb-1 text-[11px] font-bold text-sky-300">UAT sign-in link (shown once)</p>
+          <div className="flex items-center gap-2">
+            <code className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap rounded bg-slate-950 px-2 py-1 text-[11px] text-slate-200">{link}</code>
+            <Button size="sm" onClick={copyLink} className="shrink-0 bg-sky-500 hover:bg-sky-400">{copied ? 'Copied ✓' : 'Copy'}</Button>
+          </div>
+          {linkExpiry && <p className="mt-1 text-[10px] text-slate-500">Expires: {new Date(linkExpiry).toLocaleString()}</p>}
+        </div>
+      )}
+
+      {revokeResult && (
+        <div className="mb-3 rounded-lg border border-red-500/30 bg-red-500/10 p-2 text-[12px] text-red-200">
+          Revoked {revokeResult.tokensRevoked} pending link(s) and {revokeResult.sessionsRevoked} active session(s).
+        </div>
+      )}
+
+      {error && <p className="mb-2 text-[12px] font-medium text-red-400">{error}</p>}
+
+      <div className="flex flex-wrap items-center gap-2">
+        <Button onClick={createLink} disabled={creating} className="bg-sky-500 hover:bg-sky-400">
+          {creating ? 'Creating...' : 'Create UAT sign-in link'}
+        </Button>
+        <Button onClick={revokeAccess} disabled={revoking} variant="outline" className="border-red-500/40 text-red-300 hover:bg-red-500/10">
+          {revoking ? 'Revoking...' : 'Revoke UAT access'}
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
+
+
 function MiniSpark({ points, height = 20, width = 72 }) {
   const vals = (points || []).map((p) => (p && typeof p.dominance === 'number' ? p.dominance : null)).filter((v) => v != null);
   if (vals.length < 2) {
@@ -2837,6 +2946,7 @@ function SettingsSection({ onManualRun }) {
         <BriefWatchlistPanel />
       </Card>
       <NotificationSettings />
+      <UATManagement />
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
         <h3 className="mb-2 font-semibold text-white">About & compliance</h3>
         <p className="text-xs leading-relaxed text-slate-400">Ask Albert — Bitcoin Market Analysis, powered by CryptoCentAI, our Bitcoin-Centred Intelligence Engine. CryptoMarkAI measures the market and produces probability-based forecasts. Albert is Ask Albert’s HuCentAI Quant Analyst.</p>

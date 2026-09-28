@@ -3740,6 +3740,14 @@ AUTH_SESSION_DAYS = 7
 AUTH_EMAIL_ALLOWLIST = {e.strip().lower() for e in os.environ.get('AUTH_EMAIL_ALLOWLIST', '').split(',') if e.strip()}
 PREVIEW_BYPASS_EMAIL = (os.environ.get('PREVIEW_BYPASS_EMAIL') or '').strip().lower() or None
 
+# ── UAT (User Acceptance Testing) passwordless access ──
+# UAT_OWNER_EMAIL: only this account can create/revoke UAT links (falls back to PREVIEW_BYPASS_EMAIL).
+# UAT_ACCOUNT_EMAIL: the dedicated testing account that the UAT link signs into.
+UAT_OWNER_EMAIL = (os.environ.get('UAT_OWNER_EMAIL') or PREVIEW_BYPASS_EMAIL or '').strip().lower() or None
+UAT_ACCOUNT_EMAIL = (os.environ.get('UAT_ACCOUNT_EMAIL') or '').strip().lower() or None
+UAT_TOKEN_EXPIRY_MINUTES = 15
+UAT_REDEEM_RATE_LIMIT = {}  # IP -> (count, window_start)
+
 
 def get_current_user(request: Request,
                      albert_session: str = Cookie(default=None, alias=AUTH_COOKIE),
@@ -3889,6 +3897,200 @@ def auth_logout(albert_session: str = Cookie(default=None, alias=AUTH_COOKIE)):
     resp = JSONResponse({'ok': True})
     resp.delete_cookie(AUTH_COOKIE, path='/')
     return resp
+
+
+
+# =====================================================================
+# UAT PASSWORDLESS ACCESS
+# Owner generates a temporary signed link; the tester redeems it to get
+# a normal session for the dedicated UAT account. No password or Google
+# sign-in required.
+# =====================================================================
+
+
+def _uat_require_owner(user: dict):
+    """Verify the current user is the configured UAT owner. Raises 403 otherwise."""
+    email = (user.get('email') or '').strip().lower()
+    if not UAT_OWNER_EMAIL or email != UAT_OWNER_EMAIL:
+        raise HTTPException(status_code=403, detail='UAT management requires the owner account.')
+
+
+def _uat_ensure_account():
+    """Ensure the UAT account exists and return its user doc."""
+    if not UAT_ACCOUNT_EMAIL:
+        raise HTTPException(status_code=503, detail='UAT_ACCOUNT_EMAIL is not configured on the server.')
+    user = users_col.find_one({'email': UAT_ACCOUNT_EMAIL},
+                              {'_id': 1, 'email': 1, 'name': 1, 'picture': 1})
+    if not user:
+        uid = str(uuid.uuid4())
+        now = datetime.datetime.utcnow()
+        users_col.insert_one({'_id': uid, 'email': UAT_ACCOUNT_EMAIL,
+                              'name': 'UAT Tester',
+                              'picture': '', 'created_at': now, 'updated_at': now,
+                              'is_uat': True})
+        user = users_col.find_one({'_id': uid},
+                                  {'_id': 1, 'email': 1, 'name': 1, 'picture': 1})
+    # Ensure UAT email is in the allowlist for session validation
+    if AUTH_EMAIL_ALLOWLIST and UAT_ACCOUNT_EMAIL not in AUTH_EMAIL_ALLOWLIST:
+        AUTH_EMAIL_ALLOWLIST.add(UAT_ACCOUNT_EMAIL)
+    return user
+
+
+@app.post('/api/auth/uat/create-link')
+def uat_create_link(request: Request, user: dict = Depends(get_current_user)):
+    """Owner-only: generate a temporary UAT sign-in link."""
+    _uat_require_owner(user)
+    uat_user = _uat_ensure_account()
+    # Invalidate any previously unused UAT tokens.
+    misc_col.update_many(
+        {'purpose': 'uat_signin', 'redeemed': False, 'revoked': False},
+        {'$set': {'revoked': True, 'revokedAt': datetime.datetime.utcnow().isoformat(),
+                  'revokedBy': user['_id']}})
+    # Generate a cryptographically random token (32 bytes = 256 bits).
+    import secrets, hashlib
+    raw_token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    now = datetime.datetime.utcnow()
+    expires = now + datetime.timedelta(minutes=UAT_TOKEN_EXPIRY_MINUTES)
+    doc = {
+        '_id': f'uat_token:{token_hash[:16]}',
+        'tokenHash': token_hash,
+        'uatUserId': uat_user['_id'],
+        'purpose': 'uat_signin',
+        'createdAt': now.isoformat(),
+        'expiresAt': expires.isoformat(),
+        'redeemed': False,
+        'redeemedAt': None,
+        'revoked': False,
+        'revokedAt': None,
+        'createdBy': user['_id'],
+    }
+    misc_col.update_one({'_id': doc['_id']}, {'$set': doc}, upsert=True)
+    # Build the link using the configured HTTPS origin.
+    base_url = os.environ.get('NEXT_PUBLIC_BASE_URL', 'http://localhost:3000')
+    link = f'{base_url}/uat?t={raw_token}'
+    return {
+        'link': link,
+        'expiresAt': expires.isoformat() + 'Z',
+        'expiresInMinutes': UAT_TOKEN_EXPIRY_MINUTES,
+        'uatAccountId': uat_user['_id'],
+        'uatAccountEmail': UAT_ACCOUNT_EMAIL,
+    }
+
+
+@app.post('/api/auth/uat/revoke')
+def uat_revoke(user: dict = Depends(get_current_user)):
+    """Owner-only: revoke all unused UAT tokens AND active UAT sessions."""
+    _uat_require_owner(user)
+    uat_user = _uat_ensure_account()
+    now = datetime.datetime.utcnow()
+    # 1. Revoke all unused tokens.
+    r1 = misc_col.update_many(
+        {'purpose': 'uat_signin', 'redeemed': False, 'revoked': False},
+        {'$set': {'revoked': True, 'revokedAt': now.isoformat(), 'revokedBy': user['_id']}})
+    # 2. Delete all active UAT sessions.
+    r2 = auth_sessions_col.delete_many({'user_id': uat_user['_id']})
+    return {
+        'ok': True,
+        'tokensRevoked': r1.modified_count,
+        'sessionsRevoked': r2.deleted_count,
+        'uatAccountId': uat_user['_id'],
+    }
+
+
+@app.get('/api/auth/uat/status')
+def uat_status(user: dict = Depends(get_current_user)):
+    """Owner-only: get the UAT account status."""
+    _uat_require_owner(user)
+    if not UAT_ACCOUNT_EMAIL:
+        return {'configured': False}
+    uat_user = users_col.find_one({'email': UAT_ACCOUNT_EMAIL},
+                                  {'_id': 1, 'email': 1, 'name': 1})
+    active_sessions = auth_sessions_col.count_documents(
+        {'user_id': (uat_user or {}).get('_id'),
+         'expires_at': {'$gt': datetime.datetime.utcnow()}}) if uat_user else 0
+    pending_token = misc_col.find_one(
+        {'purpose': 'uat_signin', 'redeemed': False, 'revoked': False},
+        sort=[('createdAt', -1)])
+    return {
+        'configured': True,
+        'uatAccountEmail': UAT_ACCOUNT_EMAIL,
+        'uatAccountId': (uat_user or {}).get('_id'),
+        'uatAccountExists': bool(uat_user),
+        'activeSessions': active_sessions,
+        'pendingLink': bool(pending_token and
+                           datetime.datetime.fromisoformat(pending_token['expiresAt']) > datetime.datetime.utcnow()),
+        'pendingLinkExpiresAt': pending_token['expiresAt'] + 'Z' if pending_token else None,
+    }
+
+
+@app.post('/api/auth/uat/redeem')
+def uat_redeem(request: Request, payload: dict = Body(...)):
+    """Public (rate-limited): redeem a UAT token for a session cookie.
+    The token is consumed atomically — simultaneous requests cannot both succeed."""
+    import hashlib
+    raw_token = (payload.get('token') or '').strip()
+    if not raw_token or len(raw_token) < 20:
+        raise HTTPException(status_code=400, detail='Invalid token.')
+    # Rate limit: max 5 redemption attempts per IP per minute.
+    client_ip = (request.client.host if request.client else '0.0.0.0')
+    now_ts = time.time()
+    rl = UAT_REDEEM_RATE_LIMIT.get(client_ip, (0, now_ts))
+    if now_ts - rl[1] > 60:
+        rl = (0, now_ts)
+    if rl[0] >= 5:
+        raise HTTPException(status_code=429, detail='Too many attempts. Wait a minute.')
+    UAT_REDEEM_RATE_LIMIT[client_ip] = (rl[0] + 1, rl[1])
+    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    now = datetime.datetime.utcnow()
+    # Atomic: find the matching unused, unrevoked, unexpired token and mark it redeemed.
+    doc = misc_col.find_one_and_update(
+        {'tokenHash': token_hash, 'purpose': 'uat_signin',
+         'redeemed': False, 'revoked': False},
+        {'$set': {'redeemed': True, 'redeemedAt': now.isoformat()}},
+        return_document=True)
+    if not doc:
+        # Could be expired, used, revoked, or invalid.
+        maybe = misc_col.find_one({'tokenHash': token_hash, 'purpose': 'uat_signin'})
+        if maybe:
+            if maybe.get('redeemed'):
+                raise HTTPException(status_code=410, detail='This link has already been used.')
+            if maybe.get('revoked'):
+                raise HTTPException(status_code=410, detail='This link has been revoked.')
+        raise HTTPException(status_code=401, detail='Invalid or expired link.')
+    # Check expiry (the atomic update above doesn't enforce time, so check after).
+    try:
+        expires = datetime.datetime.fromisoformat(doc['expiresAt'])
+    except Exception:
+        expires = now  # malformed expiry → treat as expired
+    if now > expires:
+        # Roll back the redemption.
+        misc_col.update_one({'_id': doc['_id']}, {'$set': {'redeemed': False}})
+        raise HTTPException(status_code=410, detail='This link has expired.')
+    # Create a normal session for the UAT account.
+    uat_user = users_col.find_one({'_id': doc['uatUserId']},
+                                  {'_id': 1, 'email': 1, 'name': 1, 'picture': 1})
+    if not uat_user:
+        raise HTTPException(status_code=500, detail='UAT account not found.')
+    session_token = uuid.uuid4().hex + uuid.uuid4().hex
+    session_expires = now + datetime.timedelta(days=AUTH_SESSION_DAYS)
+    auth_sessions_col.insert_one({
+        '_id': str(uuid.uuid4()),
+        'token': session_token,
+        'user_id': uat_user['_id'],
+        'created_at': now,
+        'expires_at': session_expires,
+        'source': 'uat_link',
+    })
+    resp = JSONResponse({
+        'ok': True,
+        'user': {'id': uat_user['_id'], 'email': uat_user.get('email'),
+                 'name': uat_user.get('name'), 'picture': uat_user.get('picture')},
+    })
+    resp.set_cookie(AUTH_COOKIE, session_token, max_age=AUTH_SESSION_DAYS * 86400,
+                    httponly=True, secure=True, samesite='lax', path='/')
+    return resp
+
 
 
 
