@@ -2036,9 +2036,9 @@ def build_smart_money_from_glassnode(series):
     if not metrics:
         return None
     net = tally['b'] - tally['r']
-    headline = ('On-chain smart money accumulating' if net >= 2
-                else 'On-chain smart money distributing' if net <= -2
-                else 'On-chain smart money mixed / neutral')
+    headline = ('On-chain indicators mostly bullish' if net >= 2
+                else 'On-chain indicators mostly bearish' if net <= -2
+                else 'On-chain indicators mixed / neutral')
     return {'demo': False, 'source': 'Glassnode (on-chain · BTC)', 'headline': headline,
             'metrics': metrics, 'as_of': datetime.datetime.utcnow().isoformat()}
 
@@ -2086,7 +2086,7 @@ def _refresh_glassnode_bg():
 
 def get_smart_money_panel():
     """Return the cached real Glassnode Smart Money panel, kicking off a background
-    refresh when stale. Returns None if no key or no data yet (caller falls back to DEMO)."""
+    refresh when stale. Returns None if no key or no data yet."""
     if not GLASSNODE_API_KEY:
         return None
     cache = glassnode_col.find_one({'_id': 'smart_money_btc'}) or {}
