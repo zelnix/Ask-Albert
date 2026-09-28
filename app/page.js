@@ -13,7 +13,7 @@ import {
   Sparkles, Info, Lock, Compass, CandlestickChart, Layers, Landmark, Globe, Newspaper,
   Brain, Send, ShieldAlert, Scale, CalendarClock, ClipboardList, ShieldCheck,
   Volume2, VolumeX, Maximize2, Minimize2, SlidersHorizontal, Magnet, Plus, Clock,
-  ChevronDown, Coins, Fish, Zap, Loader2, LogOut, MessageSquarePlus, Copy, Search,
+  ChevronDown, Coins, Fish, Zap, Loader2, LogOut, MessageSquarePlus, Copy, Search, Eye, EyeOff,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -2923,6 +2923,7 @@ function SettingsSection({ onManualRun }) {
   const symbol = React.useContext(SymbolContext);
   const [pass, setPass] = React.useState('');
   const [saved, setSaved] = React.useState(false);
+  const [showPass, setShowPass] = React.useState(false);
   React.useEffect(() => {
     if (typeof window !== 'undefined') setPass(window.localStorage.getItem('btciq_admin_passcode') || '');
   }, []);
@@ -2934,8 +2935,13 @@ function SettingsSection({ onManualRun }) {
         <h3 className="mb-1 flex items-center gap-2 font-semibold text-white"><Lock className="h-4 w-4 text-amber-400" />Admin passcode</h3>
         <p className="mb-3 text-xs text-slate-500">Required to trigger a manual CryptoMarkAI forecast run. Stored only in this browser. Manual runs are rate-limited and audit-logged.</p>
         <div className="flex flex-wrap items-center gap-2">
-          <input type="password" value={pass} onChange={(e) => setPass(e.target.value)} placeholder="Enter admin passcode"
-            className="w-64 rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 focus:border-sky-500/50 focus:outline-none" />
+          <div className="relative">
+            <input type={showPass ? 'text' : 'password'} value={pass} onChange={(e) => setPass(e.target.value)} placeholder="Enter admin passcode"
+              className="w-64 rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 pr-9 text-sm text-slate-100 focus:border-sky-500/50 focus:outline-none" />
+            <button type="button" onClick={() => setShowPass(!showPass)} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300" aria-label={showPass ? 'Hide passcode' : 'Show passcode'}>
+              {showPass ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            </button>
+          </div>
           <Button onClick={save} className="bg-sky-500 hover:bg-sky-400">Save</Button>
           {saved && <span className="text-xs font-semibold text-emerald-400">Saved ✓</span>}
         </div>
@@ -3319,6 +3325,7 @@ export default function DashboardPage() {
   const [passError, setPassError] = useState('');
   const [passRemember, setPassRemember] = useState(true);
   const [passAutoClear, setPassAutoClear] = useState(false);
+  const [showPassPopup, setShowPassPopup] = useState(false);
   const [ticker, setTicker] = useState(__tickerCache);
   const [active, setActive] = useState('home');
   const [homeParams, setHomeParams] = useState({ horizon: '7D', focus: null, mdHorizon: 'SWING' });
@@ -3874,15 +3881,20 @@ export default function DashboardPage() {
                       <Lock className="h-4 w-4 text-amber-400" />Admin passcode
                     </div>
                     <p className="mb-2 text-[11px] leading-relaxed text-slate-400">A full retrain is an admin action. Enter the passcode to run it now.</p>
-                    <input
-                      type="password"
-                      autoFocus
-                      value={passInput}
-                      onChange={(e) => { setPassInput(e.target.value); setPassError(''); }}
-                      onKeyDown={(e) => { if (e.key === 'Enter') submitPasscode(); if (e.key === 'Escape') setPassPrompt(false); }}
-                      placeholder="Enter admin passcode"
-                      className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500"
-                    />
+                    <div className="relative">
+                      <input
+                        type={showPassPopup ? 'text' : 'password'}
+                        autoFocus
+                        value={passInput}
+                        onChange={(e) => { setPassInput(e.target.value); setPassError(''); }}
+                        onKeyDown={(e) => { if (e.key === 'Enter') submitPasscode(); if (e.key === 'Escape') setPassPrompt(false); }}
+                        placeholder="Enter admin passcode"
+                        className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 pr-9 text-sm text-slate-100 outline-none focus:border-sky-500"
+                      />
+                      <button type="button" onClick={() => setShowPassPopup(!showPassPopup)} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300" aria-label={showPassPopup ? 'Hide passcode' : 'Show passcode'}>
+                        {showPassPopup ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
                     {passError && <p className="mt-1.5 text-[11px] font-medium text-red-400">{passError}</p>}
                     <label className="mt-2.5 flex cursor-pointer items-center gap-2 text-[11px] text-slate-400 select-none">
                       <input

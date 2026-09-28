@@ -24,16 +24,16 @@ export default function UATEntryPage() {
   const [error, setError] = useState('');
   const [user, setUser] = useState(null);
 
-  // Read the token from the URL ONCE, then remove it from the address bar.
+  // Read the token from the URL fragment (#t=) ONCE, then clear it.
+  // The fragment never reaches the server in the request URL.
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const params = new URLSearchParams(window.location.search);
-    const t = params.get('t');
-    if (t) {
-      setToken(t);
-      // Remove the token from the URL immediately — replace, don't push.
-      const clean = window.location.pathname;
-      window.history.replaceState({}, '', clean);
+    const hash = window.location.hash || '';
+    const match = hash.match(/[#&]t=([^&]+)/);
+    if (match) {
+      setToken(decodeURIComponent(match[1]));
+      // Remove the fragment immediately — replace, don't push.
+      window.history.replaceState({}, '', window.location.pathname);
     }
   }, []);
 
