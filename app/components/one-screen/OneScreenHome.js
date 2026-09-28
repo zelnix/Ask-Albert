@@ -259,8 +259,7 @@ const OneScreenHome = ({ d, dashboardStatus = 'loading', ticker, news, newsStatu
     <div className="mb-2 flex flex-wrap items-center gap-2">
       <h1 className="text-base font-bold text-white">Your market at a glance</h1>
       <span className="text-xs text-slate-400">Nine evidence-led views · paper only</span>
-      <span className="ml-auto hidden text-xs text-slate-400 sm:inline">Snapshot {sop?.stateId || 'loading'}</span>
-      <button type="button" onClick={snapshot.refresh} aria-label="Refresh dashboard reads" className="rounded-md border border-slate-700 p-1.5 text-slate-300 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"><RefreshCw className="h-4 w-4" /></button>
+      <button type="button" onClick={snapshot.refresh} aria-label="Refresh dashboard reads" className="ml-auto rounded-md border border-slate-700 p-1.5 text-slate-300 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"><RefreshCw className="h-4 w-4" /></button>
     </div>
     <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,1fr)_280px] lg:items-start xl:grid-cols-[minmax(0,1fr)_320px] xl:items-stretch 2xl:grid-cols-[minmax(0,1fr)_350px]">
       <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 xl:grid-rows-3">
