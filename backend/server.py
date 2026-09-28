@@ -11749,7 +11749,7 @@ def _studio_validate(draft, pid, account=None):
     errors = _asset_caps.validate_assets(draft, c['assets'], m)
     if c['requestedPlan']:
         errors.extend(_asset_caps.explicit_request_errors(
-            _asset_caps.goal_constraints(c['requestedPlan']), c['assets']))
+            c['requestedPlan'], c))
     for field, supported in STUDIO_RULES.items():
         if c[field] != supported:
             errors.append(f'{field}: Needs changes. Only {supported} is executable; prose is not an active rule.')
