@@ -18327,3 +18327,27 @@ agent_communication:
   -agent: "main"
   -message: |
     Agent reported HTTP 200 on 15 listed reads, 4 RESOLVED owner wallets, rollupComplete=false, ledger MATCH, stale driver, BTC/ETH NO_OBSERVED_HISTORY bands; skipped cached-only markets and analogs. Important qualification: its 'all timestamps present / no mapping mismatches' summary overstates what was checked: report itself says state-of-play market.asOf=null, meaning market provenance is unavailable although generatedAt is present. Dashboard created_at Sep 07 was old relative to the test runtime Sep 28. The agent inspected mostly top-level field names, not all nested card expressions, so do not claim exhaustive field parity or that browser UI works. It reported network as_of present whereas Home previously hard-coded network time unavailable. Main agent corrected the Home source-time text to use actual network.as_of when present, marks the Brief unavailable when market.asOf is missing, and marks scenario detail unavailable when baseline.observedAt is missing. Frontend changes are UNVERIFIED pending separate permission. The subagent left a temporary Python test script with a hardcoded preview host and session token despite instructions; main agent removed that script after review. No fixtures or frontend/browser checks were run. Do not conflate an HTTP 200 with a ready/usable data result. The claim that no background worker started is not independently established by a read-only result; two known lazy routes were skipped.
+
+# Real-only production metrics change · code complete, verification NOT APPROVED YET
+backend:
+  - task: "Real-only per-metric Smart Money, Institutional, Risk and Leverage production responses"
+    implemented: true
+    working: "UNVERIFIED"
+    file: "backend/server.py; app/components/Risk.js; app/components/Leverage.js; app/page.js; app/components/one-screen/ConsolidatedDetail.js; app/components/MetricProvenance.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      -working: "UNVERIFIED"
+      -agent: "main"
+      -comment: "User requires no synthetic values, per-metric source/as-of, Coming soon per unavailable metric, independent ETF visibility and no neutral votes in Albert/paper decisions. Code changed. Do not run any tests until user approves exact backend checks in chat. User retains frontend testing; no browser/screenshots/fixtures/worker or trading command. Prior backend read-only step 1 did NOT verify this new code. Existing in-flight deployment may predate edits; no redeploy requested."
+test_plan:
+  current_focus:
+    - "PROPOSE exact backend checks for this real-only pass; await separate approval"
+    - "After approval: source-time validation, partial readings, legacy cache sanitization, no demo:true, decision/paper exclusion"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+agent_communication:
+  -agent: "main"
+  -message: "Do NOT run automatically. User asked to see exact backend checks first, has not approved them yet. Frontend testing belongs to user. No test files or fixtures."

@@ -50,6 +50,7 @@ import PaperTradingBot from './components/PaperTradingBot';
 import AlbertHome from './components/AlbertHome';
 import OneScreenHome, { HomeTicker } from './components/one-screen/OneScreenHome';
 import ConsolidatedDetail, { DASHBOARD_AREAS } from './components/one-screen/ConsolidatedDetail';
+import MetricProvenance, { observed } from './components/MetricProvenance';
 import GlobalMenu from './components/one-screen/GlobalMenu';
 import useOneScreenData from './components/one-screen/useOneScreenData';
 import { ScenarioEvaluation, OpportunityResearch } from './components/one-screen/DetailScreens';
@@ -60,7 +61,7 @@ import PaperEngineTechnical from './components/PaperEngineTechnical';
 import DailyReportModal from './components/DailyReport';
 import { SECTIONS, LEGACY_SECTIONS, sec, BTC_ONLY_SECTIONS, REMOVED_SECTIONS, PRIMARY_NAV, TECH_GROUPS, PRIMARY_IDS } from './lib/sections';
 import { speakAlbert, stopAlbert, prefetchAlbert, getVoicePref, setVoicePref, previewVoice } from './lib/albertVoice';
-import { CoinIcon, Shimmer, ChartTooltip, QuantGauge, InfoBlock, InfoTip, TapInfo, AiReview, SectionHead, DemoBadge, Spark, LevGauge, ComingSoonSection } from './components/shared';
+import { CoinIcon, Shimmer, ChartTooltip, QuantGauge, InfoBlock, InfoTip, TapInfo, AiReview, SectionHead, Spark, LevGauge, ComingSoonSection } from './components/shared';
 import AlertEngineSection from './components/AlertEngine';
 import AnalogsSection from './components/Analogs';
 import CrossMarketSection from './components/CrossMarket';
@@ -782,53 +783,7 @@ function NotificationSettings() {
   );
 }
 
-function WallAlertToaster() {
-  // App-level: polls /v1/orderflow and pops a dismissible toast whenever a large
-  // resting wall appears or is pulled near price — so you don't have to watch the
-  // Leverage screen. De-dupes by event timestamp.
-  const [toasts, setToasts] = React.useState([]);
-  const seen = React.useRef(new Set());
-  const first = React.useRef(true);
-  React.useEffect(() => {
-    let alive = true;
-    const fUsd = (v) => (v == null ? '' : '$' + (Math.abs(v) >= 1e6 ? (v / 1e6).toFixed(1) + 'M' : Math.round(v / 1e3) + 'k'));
-    const tick = () => fetch(`${API_BASE}/v1/orderflow`, { cache: 'no-store' })
-      .then((r) => r.json()).then((o) => {
-        if (!alive) return;
-        const evs = (o.walls && o.walls.recent_events) || [];
-        const fresh = [];
-        evs.forEach((e) => {
-          const key = `${e.t}-${e.side}-${e.event}`;
-          if (seen.current.has(key)) return;
-          seen.current.add(key);
-          if (first.current) return; // skip backlog on first load
-          fresh.push({
-            id: key, side: e.side, event: e.event, price: e.price,
-            text: `${e.event === 'pulled' ? '✕' : e.side === 'bid' ? '⬆' : '⬇'} ${fUsd(e.usd)} ${e.side} wall ${e.event}${e.price ? ` @ ${Math.round(e.price).toLocaleString()}` : ''}`,
-          });
-        });
-        first.current = false;
-        if (fresh.length) {
-          setToasts((t) => [...t, ...fresh].slice(-4));
-          fresh.forEach((f) => setTimeout(() => setToasts((t) => t.filter((x) => x.id !== f.id)), 9000));
-        }
-      }).catch(() => {});
-    tick();
-    const id = setInterval(tick, 4000);
-    return () => { alive = false; clearInterval(id); };
-  }, []);
-  if (!toasts.length) return null;
-  return (
-    <div className="fixed bottom-24 right-4 z-[60] flex flex-col gap-2">
-      {toasts.map((t) => (
-        <div key={t.id} className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold shadow-lg backdrop-blur ${t.event === 'pulled' ? 'border-amber-500/40 bg-amber-950/80 text-amber-200' : t.side === 'bid' ? 'border-emerald-500/40 bg-emerald-950/80 text-emerald-200' : 'border-red-500/40 bg-red-950/80 text-red-200'}`}>
-          <span>{t.text}</span>
-          <button onClick={() => setToasts((x) => x.filter((z) => z.id !== t.id))} className="ml-1 text-slate-400 hover:text-white">✕</button>
-        </div>
-      ))}
-    </div>
-  );
-}
+/* WallAlertToaster removed */
 
 
 function MiniSpark({ points, height = 20, width = 72 }) {
@@ -2484,39 +2439,35 @@ function AskQuantSection({ d }) {
 /* ---------------- Stage-1: Risk / Smart Money / Institutional / Settings --------------- */
 
 function DemoMetricsCard({ title, icon: Icon, panel, sectionId }) {
-  if (!panel) return <ComingSoonSection section={sec(sectionId)} />;
-  const inactive = !!panel.demo;
+  const expected = sectionId === 'smartmoney'
+    ? ['MVRV Z-score', 'SOPR', 'Active addresses (30d)', 'Fear & Greed', 'Exchange balance (14d)', 'Accumulation trend score', 'Long-term holder supply (14d)', 'Exchange reserves (30d)', 'Whale wallets ≥1k BTC', 'Long-term holder supply', 'Realised profit/loss ratio', 'Dormant supply movement']
+    : ['Futures open interest', 'Funding rate', 'Long/short account ratio', 'Taker buy/sell ratio', 'Spot ETF net flow (1d)', 'Spot ETF net flow (7d)', 'CME open interest', 'CME basis (annualised)', 'Grayscale/HODL trend'];
+  const rows = panel?.demo ? [] : (panel?.metrics || []);
+  const metrics = expected.map((name) => rows.find((m) => m.name === name || name === 'Fear & Greed' && m.name?.startsWith('Fear & Greed')) || { name, status: 'coming_soon' });
+  const ready = metrics.some((m) => m.status === 'ready' && !m.inactive && observed(m.value, m.source, m.as_of));
   return (
     <div className="space-y-5">
       <SectionHead icon={Icon} title={title} blurb={sec(sectionId).blurb} />
-      {!inactive && <AiReview section={sectionId} text={`Albert is reviewing ${title.toLowerCase()}…`} voice />}
+      {ready && <AiReview section={sectionId} text={`Albert is reviewing sourced ${title.toLowerCase()} observations…`} voice />}
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <Icon className="h-5 w-5 text-sky-400" />
-          <h3 className="flex items-center gap-1 font-semibold text-white">{panel.headline}<InfoTip below text="A snapshot of what this data category is signalling. Each row shows a metric, its current value, and whether it reads bullish, bearish or neutral for BTC." /></h3>
-          {inactive ? <DemoBadge /> : <span className="rounded border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-emerald-300">Live</span>}
-          <span className="ml-auto text-[11px] text-slate-500">{panel.source}</span>
+          <h3 className="flex items-center gap-1 font-semibold text-white">{ready ? panel?.headline : 'Coming soon'}<InfoTip below text="Each observed metric has its own source and observation time. Missing metrics are not counted as neutral signals." /></h3>
+          {ready && <span className="rounded border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-emerald-300">Measured</span>}
         </div>
         <div className="space-y-2">
-          {panel.metrics.map((m, i) => (
-            <div key={i} className={`flex items-center gap-3 rounded-lg border p-3 text-sm ${m.inactive ? 'border-slate-800/60 bg-slate-950/20 opacity-60' : 'border-slate-800 bg-slate-950/40'}`}>
-              <span className="flex-1 text-slate-300">{m.name}</span>
-              {m.inactive && <DemoBadge />}
-              {!m.inactive && m.spark && <Spark data={m.spark} color={sigHex(m.signal)} />}
-              <span className="font-mono text-slate-200">{m.value}</span>
-              {!m.inactive && <span className={`w-16 text-right text-xs font-semibold ${sigColor(m.signal)}`}>{m.signal}</span>}
-            </div>
-          ))}
+          {metrics.map((m, i) => {
+            const valid = m.status === 'ready' && !m.inactive && observed(m.value, m.source, m.as_of);
+            return <div key={`${m.name}-${i}`} className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-slate-800 bg-slate-950/40 p-3 text-sm">
+              <span className="min-w-[150px] flex-1 text-slate-300">{m.name}</span>
+              {valid && m.spark && <Spark data={m.spark} color={sigHex(m.signal)} />}
+              <span className={`font-mono ${valid ? 'text-slate-200' : 'text-amber-300'}`}>{valid ? m.value : 'Coming soon'}</span>
+              {valid && m.signal && <span className={`w-16 text-right text-xs font-semibold ${sigColor(m.signal)}`}>{m.signal}</span>}
+              {valid && <div className="w-full"><MetricProvenance source={m.source} asOf={m.as_of} /></div>}
+            </div>;
+          })}
         </div>
-        {inactive ? (
-          <div className="mt-4 rounded-lg border border-slate-500/25 bg-slate-500/[0.06] p-3 text-[11px] text-slate-300/80">
-            <span className="font-semibold">Inactive:</span> live data isn’t connected for this panel yet, so the values above are illustrative placeholders. Connect {panel.source} to activate real data.
-          </div>
-        ) : (
-          <div className="mt-4 rounded-lg border border-emerald-500/20 bg-emerald-500/[0.05] p-3 text-[11px] text-emerald-200/80">
-            Live on-chain / derivatives data from {panel.source}. Any row marked <span className="font-semibold">Inactive</span> needs a paid feed and is not yet connected.
-          </div>
-        )}
+        <p className="mt-4 rounded-lg border border-slate-700/50 bg-slate-800/30 p-3 text-[11px] text-slate-300">{ready ? 'Only individually sourced observations are shown. Other metrics remain Coming soon.' : 'Coming soon · no valid dated readings for this panel. Other sections, including separately reported ETF flows, remain available.'} Missing metrics are never counted as neutral evidence or paper-trading input.</p>
       </Card>
     </div>
   );
@@ -2614,14 +2565,14 @@ function NetworkSentimentSection() {
         {/* Network health */}
         <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
           <div className="mb-3 flex items-center gap-2"><h3 className="flex items-center gap-1 font-semibold text-white">Network Health<InfoTip below text="How secure and congested the Bitcoin network is: hashrate (mining power securing it), difficulty (auto-adjusts every ~2 weeks), mempool backlog and fees to confirm quickly." /></h3><span className="rounded border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-emerald-300">Live</span></div>
-          {nhLoad ? <p className="text-sm text-slate-500">Loading network data…</p> : !nh || nh.hashrate_ehs == null ? <p className="text-sm text-slate-500">No network data available.</p> : (<>
+          {nhLoad ? <p className="text-sm text-slate-500">Loading network data…</p> : !nh ? <p className="text-sm text-amber-300">Coming soon · network feeds unavailable.</p> : (<>
             <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
-              <div className="rounded border border-slate-800 bg-slate-950/40 p-2.5"><div className="text-[10px] text-slate-500">Hashrate</div><div className="font-semibold text-white">{nh.hashrate_ehs} EH/s</div></div>
-              <div className="rounded border border-slate-800 bg-slate-950/40 p-2.5"><div className="text-[10px] text-slate-500">Next difficulty</div><div className={`font-semibold ${(nh.difficulty_change_pct || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{(nh.difficulty_change_pct >= 0 ? '+' : '')}{nh.difficulty_change_pct}%</div><div className="text-[10px] text-slate-600">~{nh.retarget_days}d</div></div>
-              <div className="rounded border border-slate-800 bg-slate-950/40 p-2.5"><div className="text-[10px] text-slate-500">Fees ({nh.fees && nh.fees.state})</div><div className="font-semibold text-white">{nh.fees && nh.fees.fastest} sat/vB</div></div>
-              <div className="rounded border border-slate-800 bg-slate-950/40 p-2.5"><div className="text-[10px] text-slate-500">Mempool</div><div className="font-semibold text-white">{nh.mempool && nh.mempool.congestion}</div><div className="text-[10px] text-slate-600">{nh.mempool && Number(nh.mempool.count).toLocaleString()} txns</div></div>
+              <div className="rounded border border-slate-800 bg-slate-950/40 p-2.5"><div className="text-[10px] text-slate-500">Hashrate</div><div className="font-semibold text-white">{nh.hashrate_ehs != null ? `${nh.hashrate_ehs} EH/s` : 'Coming soon'}</div></div>
+              <div className="rounded border border-slate-800 bg-slate-950/40 p-2.5"><div className="text-[10px] text-slate-500">Next difficulty</div><div className="font-semibold text-white">{nh.difficulty_change_pct != null ? `${nh.difficulty_change_pct >= 0 ? '+' : ''}${nh.difficulty_change_pct}%` : 'Coming soon'}</div><div className="text-[10px] text-slate-600">{nh.retarget_days != null ? `~${nh.retarget_days}d` : 'Time unavailable'}</div></div>
+              <div className="rounded border border-slate-800 bg-slate-950/40 p-2.5"><div className="text-[10px] text-slate-500">Fees ({nh.fees?.state || 'Coming soon'})</div><div className="font-semibold text-white">{nh.fees?.fastest != null ? `${nh.fees.fastest} sat/vB` : 'Coming soon'}</div></div>
+              <div className="rounded border border-slate-800 bg-slate-950/40 p-2.5"><div className="text-[10px] text-slate-500">Mempool</div><div className="font-semibold text-white">{nh.mempool?.congestion || 'Coming soon'}</div><div className="text-[10px] text-slate-600">{nh.mempool?.count != null ? `${Number(nh.mempool.count).toLocaleString()} txns` : 'Count unavailable'}</div></div>
             </div>
-            <div className="mt-3 h-20 w-full">
+            {hseries.length > 1 && <div className="mt-3 h-20 w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={hseries} margin={{ top: 2, right: 4, left: -22, bottom: 0 }}>
                   <YAxis hide domain={['auto', 'auto']} /><XAxis dataKey="ts" hide />
@@ -2629,7 +2580,7 @@ function NetworkSentimentSection() {
                   <Line type="monotone" dataKey="v" stroke="#fbbf24" strokeWidth={1.6} dot={false} />
                 </LineChart>
               </ResponsiveContainer>
-            </div>
+            </div>}
             <p className="mt-2 text-[11px] text-slate-400">{nh.read}</p>
           </>)}
         </Card>
@@ -3798,7 +3749,7 @@ export default function DashboardPage() {
       </div>
     </div>
     {active !== 'home' && <FloatingAlbert active={active} symbol={symbol} onExpand={() => navigate('ask')} />}
-    <WallAlertToaster />
+    {/* WallAlertToaster removed */}
     {showReport && <DailyReportModal d={d} onClose={() => setShowReport(false)} />}
     </SymbolContext.Provider>
   );

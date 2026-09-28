@@ -1646,34 +1646,30 @@ def compute_decision_engine(quant, all_outlook, policy, news_sig, chart, cycle, 
     static allocation so the function keeps working standalone.
     """
     tech = int(quant['quant_score'])
-    pol = int(policy['score']) if policy else 50
-    news_score = int(round(50 + (news_sig['signal'] * 30))) if news_sig else 50
-    news_score = max(0, min(100, news_score))
-    chart_bias = chart['structure_bias'] if chart else 'Neutral'
-    chart_score = 70 if chart_bias == 'Bullish' else (30 if chart_bias == 'Bearish' else 50)
+    pol = int(policy['score']) if policy and policy.get('score') is not None else None
+    news_score = int(round(50 + (news_sig['signal'] * 30))) if news_sig and news_sig.get('signal') is not None else None
+    news_score = max(0, min(100, news_score)) if news_score is not None else None
+    chart_bias = (chart or {}).get('structure_bias')
+    chart_score = (70 if chart_bias == 'Bullish' else 30 if chart_bias == 'Bearish' else 50) if chart_bias else None
 
-    # Dynamic, regime-conditioned weights (fall back to the legacy static split).
     w = weights or {'technicals': 0.45, 'macro_policy': 0.20, 'chart_structure': 0.20, 'news_flow': 0.15}
-    wt = float(w.get('technicals', 0.45))
-    wm = float(w.get('macro_policy', 0.20))
-    wc = float(w.get('chart_structure', 0.20))
-    wn = float(w.get('news_flow', 0.15))
-    _tot = (wt + wm + wc + wn) or 1.0
-    wt, wm, wc, wn = wt / _tot, wm / _tot, wc / _tot, wn / _tot
-
-    overall = int(round(tech * wt + pol * wm + news_score * wn + chart_score * wc))
+    available = [('Technicals', tech, float(w.get('technicals', 0.45))),
+                 ('Macro / Policy', pol, float(w.get('macro_policy', 0.20))),
+                 ('Chart Structure', chart_score, float(w.get('chart_structure', 0.20))),
+                 ('News Flow', news_score, float(w.get('news_flow', 0.15)))]
+    total_weight = sum(weight for _, value, weight in available if value is not None) or 1.0
+    overall = int(round(sum(value * weight for _, value, weight in available if value is not None) / total_weight))
     overall = max(0, min(100, overall))
     label = _quant_score_label(overall)
-
-    comps = [
-        {'name': 'Technicals', 'score': tech, 'weight': int(round(wt * 100))},
-        {'name': 'Macro / Policy', 'score': pol, 'weight': int(round(wm * 100))},
-        {'name': 'Chart Structure', 'score': chart_score, 'weight': int(round(wc * 100))},
-        {'name': 'News Flow', 'score': news_score, 'weight': int(round(wn * 100))},
-    ]
-    bull = sum(1 for c in comps if c['score'] >= 55)
-    bear = sum(1 for c in comps if c['score'] <= 45)
-    if bull >= 3:
+    comps = [{'name': name, 'score': value,
+              'weight': int(round(weight / total_weight * 100)) if value is not None else 0,
+              'status': 'ready' if value is not None else 'coming_soon'} for name, value, weight in available]
+    bull = sum(1 for c in comps if c['score'] is not None and c['score'] >= 55)
+    bear = sum(1 for c in comps if c['score'] is not None and c['score'] <= 45)
+    measured_components = sum(c['score'] is not None for c in comps)
+    if measured_components < 2:
+        alignment = 'Insufficient independent evidence'
+    elif bull >= 3:
         alignment = 'Strong Agreement · Bullish'
     elif bear >= 3:
         alignment = 'Strong Agreement · Bearish'
@@ -1683,7 +1679,8 @@ def compute_decision_engine(quant, all_outlook, policy, news_sig, chart, cycle, 
         alignment = 'Mixed / Neutral'
 
     # --- Risk level (distinct from directional score) ---
-    vol_pct = float(quant['regime'].get('vol_percentile', 50) or 50)
+    raw_vol = (quant.get('regime') or {}).get('vol_percentile')
+    vol_pct = float(raw_vol) if raw_vol is not None else None
     event_risk = 0
     now = datetime.datetime.utcnow().date()
     if policy:
@@ -1699,9 +1696,12 @@ def compute_decision_engine(quant, all_outlook, policy, news_sig, chart, cycle, 
     news_risk = 0
     if news_sig and news_sig['bias'] == 'Bearish' and news_sig['n_high_impact'] >= 1:
         news_risk = 12
-    risk_score = int(round(min(100, vol_pct * 0.6 + event_risk + news_risk)))
-    risk_level = ('Extreme' if risk_score >= 80 else 'High' if risk_score >= 60
-                  else 'Elevated' if risk_score >= 45 else 'Moderate' if risk_score >= 30 else 'Low')
+    risk_score = (int(round(min(100, vol_pct * 0.6 + event_risk + news_risk)))
+                  if vol_pct is not None and policy is not None and policy.get('score') is not None
+                  and news_sig is not None and news_sig.get('signal') is not None else None)
+    risk_level = (('Extreme' if risk_score >= 80 else 'High' if risk_score >= 60
+                   else 'Elevated' if risk_score >= 45 else 'Moderate' if risk_score >= 30 else 'Low')
+                  if risk_score is not None else None)
 
     # --- Outlook table across every horizon (24H → 1Y) ---
     outlook = []
@@ -1737,22 +1737,25 @@ def compute_decision_engine(quant, all_outlook, policy, news_sig, chart, cycle, 
     summary = (
         f"Bitcoin's unified market state is {label} with an overall conviction score of {overall}/100. "
         f"The market is in a '{regime}' regime. {quant['regime']['description']} "
-        f"Technicals ({tech}/100), macro & policy ({pol}/100), chart structure ({chart_bias.lower()}) and news flow "
-        f"({news_score}/100) are showing {alignment.lower()}. {news_txt}{dom_txt}{cyc_txt}"
+        f"Technicals ({tech}/100), macro & policy ({f'{pol}/100' if pol is not None else 'Coming soon'}), "
+        f"chart structure ({chart_bias.lower() if chart_bias else 'Coming soon'}) and news flow "
+        f"({f'{news_score}/100' if news_score is not None else 'Coming soon'}) are showing {alignment.lower()}. {news_txt}{dom_txt}{cyc_txt}"
         f"Near term, the engine leans {lean_txt(o24)} over 24h and {lean_txt(o7)} over 7 days; "
         f"the longer-term view leans {lean_txt(o1m)} over the next month and {lean_txt(o1y)} over the next year. "
-        f"Overall risk is currently {risk_level}. Treat every figure as probabilities, not certainties — not financial advice."
+        f"Overall risk is currently {risk_level or 'Coming soon (volatility unavailable)'}. Treat every figure as probabilities, not certainties — not financial advice."
     )
 
     return {
+        'realOnlyVersion': 1, 'status': 'ready' if measured_components >= 2 else 'partial',
         'overall_score': overall, 'label': label, 'regime': regime,
         'regime_description': quant['regime']['description'],
         'alignment': alignment, 'components': comps,
         'weights_mode': 'dynamic' if weights else 'static',
         'regime_engine': regime_info,
         'risk_level': risk_level, 'risk_score': risk_score,
-        'risk_drivers': {'volatility_percentile': round(vol_pct), 'event_risk': event_risk,
-                         'news_risk': news_risk},
+        'risk_drivers': {'volatility_percentile': round(vol_pct) if vol_pct is not None else None,
+                         'event_risk': event_risk if policy is not None else None,
+                         'news_risk': news_risk if news_sig is not None else None},
         'outlook': outlook, 'summary': summary,
         'news_signal': (news_sig['signal'] if news_sig else None),
         'news_bias': (news_sig['bias'] if news_sig else None),
@@ -1773,20 +1776,19 @@ def compute_scenarios(chart, decision, last_close, feats, regime_analysis):
         return None
     try:
         price = float(last_close)
-        try:
-            atr = float(feats['ATR_Pct'])
-        except Exception:  # noqa
-            atr = 0.03
-        if not atr or atr != atr:  # guard NaN/0
-            atr = 0.03
+        raw_atr = (feats or {}).get('ATR_Pct')
+        pred = (chart or {}).get('predictive') or {}
+        if (raw_atr is None or not (0 < float(raw_atr) < 1)
+                or pred.get('breakout_up') is None or pred.get('breakdown') is None):
+            return None  # WAIT: no observed ATR or historical breakout sample
+        atr = float(raw_atr)
         sr = chart.get('sr_levels', []) or []
         res = sorted([l for l in sr if l.get('type') == 'resistance' and l['price'] > price],
                      key=lambda z: z['price'])
         sup = sorted([l for l in sr if l.get('type') == 'support' and l['price'] < price],
                      key=lambda z: -z['price'])
-        pred = chart.get('predictive', {}) or {}
-        bo_up = float(pred.get('breakout_up', 50) or 50)
-        bo_dn = float(pred.get('breakdown', 50) or 50)
+        bo_up = float(pred['breakout_up'])
+        bo_dn = float(pred['breakdown'])
         regime = (regime_analysis or {}).get('current_regime')
         regime_label = (regime_analysis or {}).get('regime_label', regime or 'current')
         # Regime tilts the base rates: momentum favours continuation, distribution/squeeze fade it.
@@ -1864,17 +1866,20 @@ def _risk_state(score):
             else 'Elevated' if score >= 45 else 'Normal' if score >= 25 else 'Low')
 
 
-def compute_risk_engine(quant, chart, decision, data_health, event_calendar, last_close, feats):
-    """Dedicated risk view — direction-agnostic. Real where we have data; illustrative
-    DEMO values (clearly flagged) for feeds that need paid keys (IV, leverage, order book)."""
+def compute_risk_engine(quant, chart, decision, data_health, event_calendar, last_close, feats, observed_at=None):
+    """Direction-independent risk from observed inputs only; missing feeds stay unavailable."""
     import math as _m
-    atr_now = float(feats.get('ATR_Pct', 0.03) or 0.03)          # daily realised range fraction
-    vol_pct = float(quant['regime'].get('vol_percentile', 50) or 50)
-    level = (decision or {}).get('risk_level', _risk_state(round(vol_pct)))
-    score = int((decision or {}).get('risk_score', round(vol_pct)))
+    raw_atr = (feats or {}).get('ATR_Pct')
+    atr_now = float(raw_atr) if raw_atr is not None and float(raw_atr) > 0 else None
+    raw_vol = (quant.get('regime') or {}).get('vol_percentile')
+    vol_pct = float(raw_vol) if raw_vol is not None else None
+    raw_score = (decision or {}).get('risk_score')
+    score = int(raw_score) if raw_score is not None and vol_pct is not None else None
+    level = (decision or {}).get('risk_level') if score is not None else None
 
-    # Expected move (real, from ATR scaled by sqrt(time))
     def _band(days):
+        if atr_now is None or last_close is None or last_close <= 0:
+            return None
         mv = atr_now * _m.sqrt(days)
         return {'pct': round(mv * 100, 1),
                 'low': round(last_close * (1 - mv), 0), 'high': round(last_close * (1 + mv), 0)}
@@ -1891,91 +1896,58 @@ def compute_risk_engine(quant, chart, decision, data_health, event_calendar, las
     upside_zone = ({'price': res[0]['price'], 'distance_pct': round((res[0]['price'] - last_close) / last_close * 100, 1),
                     'label': 'Primary resistance'} if res else None)
 
-    # Macro-event risk (real, from event calendar)
+    # An absent calendar is unknown, not evidence of low event risk.
     nhi = (event_calendar or {}).get('next_high_impact')
-    macro_event_risk = 'Low'
-    macro_note = 'No high-impact events in the near window.'
+    macro_event_risk = 'Low' if event_calendar is not None else None
+    macro_note = 'No high-impact events in the near window.' if event_calendar is not None else 'Coming soon — calendar unavailable.'
     if nhi and nhi.get('days_until') is not None:
         du = nhi['days_until']
         macro_event_risk = 'High' if du <= 2 else 'Elevated' if du <= 7 else 'Normal'
         macro_note = f"{nhi.get('title')} in {du}d ({nhi.get('importance')} importance)."
 
-    # Data uncertainty (real, from data health)
-    dh_level = (data_health or {}).get('level', 'High')
-    dh_score = (data_health or {}).get('score', 95)
-    data_uncertainty = 'Low' if dh_score >= 90 else 'Normal' if dh_score >= 75 else 'Elevated' if dh_score >= 55 else 'High'
+    dh_level = (data_health or {}).get('level')
+    dh_score = (data_health or {}).get('score')
+    data_uncertainty = (None if dh_score is None else
+                        'Low' if dh_score >= 90 else 'Normal' if dh_score >= 75 else
+                        'Elevated' if dh_score >= 55 else 'High')
 
-    # Realised vol (real percentile) -> annualised estimate
-    realised_vol_annual = round(atr_now * _m.sqrt(365) * 100, 0)
-
-    # ----- DEMO metrics (need paid feeds; clearly flagged) -----
-    seed = int(last_close) % 100
-    demo = {
-        'implied_vol': {'value': round(realised_vol_annual + 8 + seed % 12, 0), 'unit': '% annualised',
-                        'state': 'Elevated', 'demo': True, 'source': 'Deribit/CME (needs key)'},
-        'leverage_risk': {'state': ['Normal', 'Elevated', 'High'][seed % 3], 'funding_bps': round((seed % 20) - 5, 1),
-                          'demo': True, 'source': 'CoinGlass (needs key)'},
-        'liquidation_risk': {'state': ['Normal', 'Elevated', 'High'][(seed + 1) % 3],
-                             'nearest_cluster_pct': round(2 + seed % 4, 1), 'demo': True, 'source': 'CoinGlass (needs key)'},
-        'orderbook_liquidity': {'state': ['Deep', 'Normal', 'Thin'][seed % 3], 'depth_2pct_musd': round(120 + seed, 0),
-                                'demo': True, 'source': 'Exchange L2 (needs key)'},
-    }
-
+    realised_vol_annual = round(atr_now * _m.sqrt(365) * 100, 0) if atr_now is not None else None
+    observed_at = observed_at or (chart or {}).get('as_of') or (chart or {}).get('asOf')
     drivers = [
-        {'name': 'Realised volatility', 'state': _risk_state(round(vol_pct)), 'value': f'{round(vol_pct)}th pct', 'demo': False},
-        {'name': 'Macro-event risk', 'state': macro_event_risk, 'value': macro_note, 'demo': False},
-        {'name': 'Data uncertainty', 'state': data_uncertainty, 'value': f'{dh_level} ({dh_score}/100)', 'demo': False},
-        {'name': 'Implied volatility', 'state': demo['implied_vol']['state'], 'value': f"{demo['implied_vol']['value']}%", 'demo': True},
-        {'name': 'Leverage / funding', 'state': demo['leverage_risk']['state'], 'value': f"{demo['leverage_risk']['funding_bps']} bps", 'demo': True},
-        {'name': 'Liquidation risk', 'state': demo['liquidation_risk']['state'], 'value': f"cluster ~{demo['liquidation_risk']['nearest_cluster_pct']}% away", 'demo': True},
-        {'name': 'Order-book liquidity', 'state': demo['orderbook_liquidity']['state'], 'value': f"${demo['orderbook_liquidity']['depth_2pct_musd']}M @2%", 'demo': True},
+        {'name': 'Realised volatility', 'state': _risk_state(round(vol_pct)) if vol_pct is not None else 'Coming soon',
+         'value': f'{round(vol_pct)}th pct' if vol_pct is not None else None, 'source': 'Observed BTC volatility', 'as_of': observed_at},
+        {'name': 'Macro-event risk', 'state': macro_event_risk or 'Coming soon',
+         'value': macro_note if macro_event_risk else None, 'source': 'Scheduled event calendar' if macro_event_risk else None,
+         'as_of': (event_calendar or {}).get('generated') if macro_event_risk else None},
+        {'name': 'Data uncertainty', 'state': data_uncertainty or 'Coming soon',
+         'value': f'{dh_level} ({dh_score}/100)' if dh_score is not None else None,
+         'source': 'Market feed data audit' if dh_score is not None else None,
+         'as_of': (data_health or {}).get('as_of') or datetime.datetime.utcnow().isoformat() if dh_score is not None else None},
     ]
+    for name in ('Implied volatility', 'Leverage / funding', 'Liquidation risk', 'Order-book liquidity'):
+        drivers.append({'name': name, 'state': 'Coming soon', 'value': None, 'source': None, 'as_of': None})
 
     return {
+        'realOnlyVersion': 1,
+        'status': 'ready' if score is not None or any(r.get('value') is not None for r in drivers) else 'coming_soon',
         'level': level, 'score': score, 'state_scale': ['Low', 'Normal', 'Elevated', 'High', 'Extreme'],
         'expected_move': expected_move,
         'realised_vol_annual': realised_vol_annual,
-        'vol_percentile': round(vol_pct),
+        'vol_percentile': round(vol_pct) if vol_pct is not None else None,
         'downside_zone': downside_zone, 'upside_zone': upside_zone,
         'macro_event_risk': macro_event_risk, 'macro_note': macro_note,
         'data_uncertainty': data_uncertainty,
-        'drivers': drivers, 'demo': demo,
-        'note': 'Risk is measured separately from direction — a constructive outlook can still carry high risk.',
-    }
-
-
-# ---------------------------- Smart Money & Institutional (DEMO) ----------------------------
-def compute_smart_money_demo(last_close, regime):
-    """DEMO on-chain / smart-money view. Illustrative only — real values need a Glassnode key."""
-    seed = int(last_close) % 100
-    trend = 'accumulation' if seed % 2 == 0 else 'distribution'
-    return {
-        'demo': True, 'source': 'Glassnode / on-chain (needs key)',
-        'headline': f'Whales in mild {trend}',
-        'metrics': [
-            {'name': 'Exchange reserves (30d)', 'value': f'{"-" if trend=="accumulation" else "+"}{round(1.2 + seed%3,1)}%', 'signal': 'Bullish' if trend == 'accumulation' else 'Bearish'},
-            {'name': 'Whale wallets ≥1k BTC', 'value': f'{"+" if trend=="accumulation" else "-"}{round(0.3 + seed%2*0.4,1)}%', 'signal': 'Bullish' if trend == 'accumulation' else 'Bearish'},
-            {'name': 'Long-term holder supply', 'value': f'+{round(0.5 + seed%3*0.3,1)}%', 'signal': 'Bullish'},
-            {'name': 'Realised profit/loss ratio', 'value': f'{round(0.8 + (seed%40)/100,2)}', 'signal': 'Neutral'},
-            {'name': 'Dormant supply movement', 'value': 'Quiet', 'signal': 'Neutral'},
-        ],
-    }
-
-
-def compute_institutional_demo(last_close):
-    """DEMO institutional / ETF flow view. Illustrative only — needs a paid ETF/CME feed."""
-    seed = int(last_close) % 100
-    net = round((seed % 60) - 20, 0)
-    return {
-        'demo': True, 'source': 'ETF issuers / CME (needs key)',
-        'headline': f'Spot ETF net flow ~${net}M (illustrative)',
-        'metrics': [
-            {'name': 'Spot ETF net flow (1d)', 'value': f'${net}M', 'signal': 'Bullish' if net > 0 else 'Bearish'},
-            {'name': 'Spot ETF net flow (7d)', 'value': f'${round(net*5,0)}M', 'signal': 'Bullish' if net > 0 else 'Bearish'},
-            {'name': 'CME open interest', 'value': f'{round(28 + seed%8,1)}k BTC', 'signal': 'Neutral'},
-            {'name': 'CME basis (annualised)', 'value': f'{round(6 + seed%6,1)}%', 'signal': 'Bullish'},
-            {'name': 'Grayscale/HODL trend', 'value': 'Stabilising', 'signal': 'Neutral'},
-        ],
+        'drivers': drivers,
+        'as_of': observed_at,
+        'provenance': {
+            'level': {'source': 'Observed BTC volatility + available event/news inputs', 'as_of': observed_at} if score is not None else None,
+            'expected_move': {'source': 'Observed OHLC · ATR-derived range', 'as_of': observed_at} if atr_now is not None else None,
+            'realised_vol_annual': {'source': 'Observed OHLC · ATR-derived volatility', 'as_of': observed_at} if atr_now is not None else None,
+            'zones': {'source': 'Observed OHLC · chart support/resistance', 'as_of': observed_at} if sr else None,
+            'macro_event_risk': {'source': 'Scheduled event calendar', 'as_of': (event_calendar or {}).get('generated')} if macro_event_risk else None,
+            'data_uncertainty': {'source': 'Market feed data audit', 'as_of': (data_health or {}).get('as_of') or datetime.datetime.utcnow().isoformat()} if dh_score is not None else None,
+        },
+        'note': 'Risk uses observed inputs only; missing factors are excluded, never counted as neutral.',
     }
 
 
@@ -2194,7 +2166,7 @@ def _spark(vals, n=24, nd=4):
 
 
 def _bdata_series(metric, key, days=30):
-    """Ascending-by-date value list from bitcoin-data.com (BGeometrics) for a date window."""
+    """Dated BGeometrics observations, not values detached from their source dates."""
     end = datetime.date.today()
     start = end - datetime.timedelta(days=days)
     js = _engine_get(f'https://bitcoin-data.com/v1/{metric}',
@@ -2203,13 +2175,44 @@ def _bdata_series(metric, key, days=30):
         out = []
         for x in js:
             v = x.get(key)
-            if v is not None:
+            stamp = x.get('date') or x.get('timestamp') or x.get('t')
+            if v is not None and stamp:
                 try:
-                    out.append(float(v))
-                except Exception:  # noqa
+                    out.append({'value': float(v), 'as_of': _observation_time(stamp)})
+                except (TypeError, ValueError, OverflowError):
                     pass
-        return out or None
+        return [row for row in out if row['as_of']] or None
     return None
+
+
+def _observation_time(value):
+    """UTC observation time; a date-only provider session remains date-only."""
+    if value is None or value == '':
+        return None
+    try:
+        raw = float(value)
+        return datetime.datetime.fromtimestamp(raw / 1000 if raw > 1e11 else raw, datetime.timezone.utc).isoformat()
+    except (ValueError, TypeError, OverflowError, OSError):
+        pass
+    if isinstance(value, str):
+        try:
+            return datetime.datetime.fromisoformat(value.replace('Z', '+00:00')).isoformat() if 'T' in value else datetime.date.fromisoformat(value[:10]).isoformat()
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
+def _metric_recent(as_of, max_hours=96):
+    if not as_of:
+        return False
+    try:
+        stamp = datetime.datetime.fromisoformat(str(as_of).replace('Z', '+00:00'))
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=datetime.timezone.utc)
+        age = (datetime.datetime.now(datetime.timezone.utc) - stamp).total_seconds()
+        return -300 <= age <= max_hours * 3600
+    except (ValueError, TypeError):
+        return False
 
 
 def _fng_series(days=30):
@@ -2223,37 +2226,22 @@ def _fng_series(days=30):
 
 
 def build_smart_money_engine(gn_series=None):
-    metrics, tally = [], {'b': 0, 'r': 0}
+    metrics = []
 
-    def add(name, value, s, inactive=False, spark=None):
-        if not inactive:
-            if s == 'Bullish':
-                tally['b'] += 1
-            elif s == 'Bearish':
-                tally['r'] += 1
-        m = {'name': name, 'value': value, 'signal': s}
-        if inactive:
+    def add(name, value, s, inactive=False, spark=None, source=None, as_of=None):
+        valid = not inactive and value is not None and source and _metric_recent(as_of)
+        m = {'name': name, 'value': value if valid else None,
+             'signal': s if valid else None, 'source': source if valid else None,
+             'as_of': as_of if valid else None, 'status': 'ready' if valid else 'coming_soon'}
+        if not valid:
             m['inactive'] = True
-        if spark:
+        if spark and valid:
             m['spark'] = spark
         metrics.append(m)
 
-    mzs = _bdata_series('mvrv-zscore', 'mvrvZscore', 30)
-    z = mzs[-1] if mzs else None
-    if z is None:
-        mz = _bdata_last('mvrv-zscore')
-        z = float(mz['mvrvZscore']) if (mz and mz.get('mvrvZscore') is not None) else None
-    if z is not None:
-        s = 'Bullish' if z < 1 else 'Bearish' if z > 5 else 'Neutral'
-        add('MVRV Z-score', f'{z:.2f}', s, spark=_spark(mzs))
-    sps = _bdata_series('sopr', 'sopr', 30)
-    v = sps[-1] if sps else None
-    if v is None:
-        sp = _bdata_last('sopr')
-        v = float(sp['sopr']) if (sp and sp.get('sopr') is not None) else None
-    if v is not None:
-        s = 'Bullish' if v < 0.98 else 'Bearish' if v > 1.03 else 'Neutral'
-        add('SOPR', f'{v:.3f}', s, spark=_spark(sps))
+    # Publication rights for BGeometrics' free tier are not established for a
+    # public production dashboard. MVRV and SOPR remain Coming soon; do not
+    # fetch them or count them as neutral evidence.
     aa = _bc_chart('n-unique-addresses', '30days')
     if aa and len(aa) >= 2:
         try:
@@ -2262,7 +2250,8 @@ def build_smart_money_engine(gn_series=None):
             if chg is not None:
                 s = 'Bullish' if chg > 3 else 'Bearish' if chg < -8 else 'Neutral'
                 add('Active addresses (30d)', f'{"+" if chg >= 0 else ""}{chg}%', s,
-                    spark=_spark([float(p['y']) for p in aa], nd=0))
+                    spark=_spark([float(p['y']) for p in aa], nd=0),
+                    source='Blockchain.com · unique addresses', as_of=_observation_time(aa[-1].get('x')))
         except Exception:  # noqa
             pass
     fgs = _fng_series(30)
@@ -2273,7 +2262,8 @@ def build_smart_money_engine(gn_series=None):
             cls = fg[0].get('value_classification', '')
             # Contrarian read: extreme fear = accumulation opportunity, extreme greed = caution.
             s = 'Bullish' if val <= 25 else 'Bearish' if val >= 75 else 'Neutral'
-            add(f'Fear & Greed ({cls})', str(val), s, spark=_spark(fgs, nd=0))
+            add(f'Fear & Greed ({cls})', str(val), s, spark=_spark(fgs, nd=0),
+                source='Alternative.me · Fear & Greed', as_of=_observation_time(fg[0].get('timestamp')))
         except Exception:  # noqa
             pass
     if gn_series:
@@ -2281,48 +2271,46 @@ def build_smart_money_engine(gn_series=None):
         if exch_chg is not None:
             s = 'Bullish' if exch_chg < -0.3 else 'Bearish' if exch_chg > 0.3 else 'Neutral'
             add('Exchange balance (14d)', f'{"+" if exch_chg >= 0 else ""}{exch_chg}%', s,
-                spark=_spark([_gn_point_val(p) for p in (gn_series.get('exch_balance') or [])], nd=0))
+                spark=_spark([_gn_point_val(p) for p in (gn_series.get('exch_balance') or [])], nd=0),
+                source='Glassnode · exchange balance', as_of=_observation_time((gn_series.get('exch_balance') or [{}])[-1].get('t')))
         accum = _gn_val(gn_series.get('accum'))
         if accum is not None:
             try:
                 accum = float(accum)
                 s = 'Bullish' if accum >= 0.6 else 'Bearish' if accum <= 0.4 else 'Neutral'
                 add('Accumulation trend score', f'{accum:.2f}', s,
-                    spark=_spark([_gn_point_val(p) for p in (gn_series.get('accum') or [])]))
+                    spark=_spark([_gn_point_val(p) for p in (gn_series.get('accum') or [])]),
+                    source='Glassnode · accumulation trend', as_of=_observation_time((gn_series.get('accum') or [{}])[-1].get('t')))
             except Exception:  # noqa
                 pass
         lth_chg = _gn_change_pct(gn_series.get('lth'))
         if lth_chg is not None:
             s = 'Bullish' if lth_chg > 0.1 else 'Bearish' if lth_chg < -0.1 else 'Neutral'
             add('Long-term holder supply (14d)', f'{"+" if lth_chg >= 0 else ""}{lth_chg}%', s,
-                spark=_spark([_gn_point_val(p) for p in (gn_series.get('lth') or [])], nd=0))
+                spark=_spark([_gn_point_val(p) for p in (gn_series.get('lth') or [])], nd=0),
+                source='Glassnode · LTH supply', as_of=_observation_time((gn_series.get('lth') or [{}])[-1].get('t')))
 
-    if not metrics:
+    if not any(m.get('status') == 'ready' for m in metrics):
         return None
-    net = tally['b'] - tally['r']
-    headline = ('On-chain smart money accumulating' if net >= 2
-                else 'On-chain smart money distributing' if net <= -2
-                else 'On-chain smart money mixed / neutral')
-    src = 'BGeometrics · blockchain.com · alt.me' + (' · Glassnode' if gn_series else '')
-    return {'demo': False, 'source': src, 'headline': headline, 'metrics': metrics,
-            'as_of': datetime.datetime.utcnow().isoformat()}
+    src = ', '.join(dict.fromkeys(m['source'] for m in metrics if m.get('status') == 'ready'))
+    return {'demo': False, 'status': 'ready', 'source': src,
+            'headline': 'Measured on-chain and sentiment observations', 'metrics': metrics,
+            'as_of': max(m['as_of'] for m in metrics if m.get('status') == 'ready')}
 
 
 def build_derivatives_engine(symbol='BTC'):
     sym = (symbol or 'BTC').upper()
     inst = f'{sym}-USDT-SWAP'
-    metrics, tally = [], {'b': 0, 'r': 0}
+    metrics = []
 
-    def add(name, value, s, inactive=False, count=True, spark=None):
-        if not inactive and count:
-            if s == 'Bullish':
-                tally['b'] += 1
-            elif s == 'Bearish':
-                tally['r'] += 1
-        m = {'name': name, 'value': value, 'signal': s}
-        if inactive:
+    def add(name, value, s, inactive=False, count=True, spark=None, source=None, as_of=None, max_hours=3):
+        valid = not inactive and value is not None and source and _metric_recent(as_of, max_hours=max_hours)
+        m = {'name': name, 'value': value if valid else None,
+             'signal': s if valid else None, 'source': source if valid else None,
+             'as_of': as_of if valid else None, 'status': 'ready' if valid else 'coming_soon'}
+        if not valid:
             m['inactive'] = True
-        if spark:
+        if spark and valid:
             m['spark'] = spark
         metrics.append(m)
 
@@ -2344,7 +2332,8 @@ def build_derivatives_engine(symbol='BTC'):
             val = f'${oi_usd / 1e9:.2f}B'
             if oi_chg is not None:
                 val += f' ({"+" if oi_chg >= 0 else ""}{oi_chg}% 7d)'
-            add('Futures open interest', val, 'Neutral', count=False, spark=oi_spark)
+            add('Futures open interest', val, 'Neutral', count=False, spark=oi_spark,
+                source=f'OKX · {inst} open interest', as_of=_observation_time(oi[0].get('ts')))
         except Exception:  # noqa
             pass
     fr = _okx('/api/v5/public/funding-rate', {'instId': inst})
@@ -2360,7 +2349,8 @@ def build_derivatives_engine(symbol='BTC'):
             rate = float(fr[0]['fundingRate']) * 100  # % per funding interval
             s = ('Bearish' if rate > 0.03 else 'Bullish' if rate > 0.002
                  else 'Bearish' if rate < 0 else 'Neutral')
-            add('Funding rate', f'{rate:+.4f}%', s, spark=fr_spark)
+            add('Funding rate', f'{rate:+.4f}%', s, spark=fr_spark,
+                source=f'OKX · {inst} funding', as_of=_observation_time(fr[0].get('fundingTime') or fr[0].get('ts')), max_hours=12)
         except Exception:  # noqa
             pass
     ls = _okx('/api/v5/rubik/stat/contracts/long-short-account-ratio', {'ccy': sym, 'period': '1D'})
@@ -2369,7 +2359,8 @@ def build_derivatives_engine(symbol='BTC'):
             ratio = float(ls[0][1])
             s = 'Bearish' if ratio > 2 else 'Bullish' if ratio < 1 else 'Neutral'
             add('Long/short account ratio', f'{ratio:.2f}', s,
-                spark=_spark([float(r[1]) for r in reversed(ls)]))
+                spark=_spark([float(r[1]) for r in reversed(ls)]),
+                source=f'OKX · {sym} account ratio', as_of=_observation_time(ls[0][0]), max_hours=36)
         except Exception:  # noqa
             pass
     tv = _okx('/api/v5/rubik/stat/taker-volume', {'ccy': sym, 'instType': 'SPOT', 'period': '1D'})
@@ -2381,7 +2372,8 @@ def build_derivatives_engine(symbol='BTC'):
             if r:
                 s = 'Bullish' if r > 1.05 else 'Bearish' if r < 0.95 else 'Neutral'
                 tv_spark = _spark([(float(x[2]) / float(x[1])) for x in reversed(tv) if float(x[1])])
-                add('Taker buy/sell ratio', f'{r:.2f}', s, spark=tv_spark)
+                add('Taker buy/sell ratio', f'{r:.2f}', s, spark=tv_spark,
+                    source=f'OKX · {sym} spot taker volume', as_of=_observation_time(tv[0][0]), max_hours=36)
         except Exception:  # noqa
             pass
     # Spot ETF net flow: REAL for BTC (bitbo/Farside mirror). ETH has no free table.
@@ -2392,41 +2384,160 @@ def build_derivatives_engine(symbol='BTC'):
         except Exception:  # noqa
             es = None
         if es and es.get('net_1d') is not None:
-            etf_active = True
             n1 = es['net_1d']
             sig1 = 'Bullish' if n1 > 20 else 'Bearish' if n1 < -20 else 'Neutral'
-            add(f'Spot ETF net flow (1d)', f'${n1:+,.0f}M', sig1, spark=es.get('spark'))
+            add('Spot ETF net flow (1d)', f'${n1:+,.0f}M', sig1, spark=es.get('spark'),
+                source=es.get('source') or 'Reported spot BTC ETF flows', as_of=_observation_time(es.get('latest_date')), max_hours=96)
+            etf_active = metrics[-1]['status'] == 'ready'
             n7 = es.get('net_7d')
             if n7 is not None:
                 sig7 = 'Bullish' if n7 > 50 else 'Bearish' if n7 < -50 else 'Neutral'
-                add(f'Spot ETF net flow (7d)', f'${n7:+,.0f}M', sig7)
+                add('Spot ETF net flow (7d)', f'${n7:+,.0f}M', sig7,
+                    source=es.get('source') or 'Reported spot BTC ETF flows', as_of=_observation_time(es.get('latest_date')), max_hours=96)
         else:
-            add('Spot ETF net flow', 'No ETF data available', 'Neutral', inactive=True)
+            add('Spot ETF net flow (1d)', None, None, inactive=True)
+            add('Spot ETF net flow (7d)', None, None, inactive=True)
     elif sym == 'ETH':
-        add('Spot ETF net flow', 'No ETF data available', 'Neutral', inactive=True)
+        add('Spot ETF net flow (1d)', None, None, inactive=True)
+        add('Spot ETF net flow (7d)', None, None, inactive=True)
 
-    if not [m for m in metrics if not m.get('inactive')]:
+    if not [m for m in metrics if m.get('status') == 'ready']:
         return None
-    net = tally['b'] - tally['r']
-    headline = ('Derivatives leaning bullish' if net >= 2
-                else 'Derivatives leaning bearish' if net <= -2
-                else 'Derivatives mixed / neutral')
     src = f'OKX ({sym} derivatives)'
-    if sym == 'BTC':
-        src += ' · ETF flows (Farside/bitbo)' if etf_active else ' · no ETF data'
-    elif sym == 'ETH':
-        src += ' · no ETF data'
-    return {'demo': False, 'source': src, 'headline': headline, 'metrics': metrics,
-            'as_of': datetime.datetime.utcnow().isoformat()}
+    if sym == 'BTC' and etf_active:
+        src += ' · reported ETF flows'
+    return {'demo': False, 'status': 'ready', 'source': src,
+            'headline': 'Measured exchange derivatives and reported ETF flows', 'metrics': metrics,
+            'as_of': max(m['as_of'] for m in metrics if m.get('status') == 'ready')}
+
+# Only provider-dated observations can be exposed as production metrics. This also
+# sanitises old cache entries written before source-level provenance was required.
+_SMART_METRICS = ('MVRV Z-score', 'SOPR', 'Active addresses (30d)', 'Fear & Greed',
+                  'Exchange balance (14d)', 'Accumulation trend score', 'Long-term holder supply (14d)',
+                  'Exchange reserves (30d)', 'Whale wallets ≥1k BTC', 'Long-term holder supply',
+                  'Realised profit/loss ratio', 'Dormant supply movement')
+_INSTITUTIONAL_METRICS = ('Futures open interest', 'Funding rate', 'Long/short account ratio',
+                          'Taker buy/sell ratio', 'Spot ETF net flow (1d)', 'Spot ETF net flow (7d)',
+                          'CME open interest', 'CME basis (annualised)', 'Grayscale/HODL trend')
+
+
+def _panel_real_only(panel, kind):
+    names = _SMART_METRICS if kind == 'smart_money' else _INSTITUTIONAL_METRICS
+    raw = (panel or {}).get('metrics') or [] if isinstance(panel, dict) and not panel.get('demo') else []
+    by_name = {}
+    for metric in raw:
+        if isinstance(metric, dict) and metric.get('name'):
+            name = str(metric['name'])
+            by_name['Fear & Greed' if name.startswith('Fear & Greed') else name] = metric
+    rows = []
+    for name in names:
+        metric = by_name.get(name) or {}
+        hours = 96 if name.startswith(('MVRV', 'SOPR', 'Exchange balance', 'Accumulation', 'Long-term holder', 'Spot ETF')) else 48 if name.startswith(('Active addresses', 'Fear & Greed')) else 36 if name.startswith(('Long/short', 'Taker')) else 12 if name == 'Funding rate' else 3
+        valid = (not metric.get('demo') and not metric.get('inactive') and metric.get('value') not in (None, '', 'No data available')
+                 and bool(metric.get('source')) and not any(provider in str(metric.get('source', '')).lower() for provider in ('glassnode', 'bgeometrics', 'bitcoin-data.com'))
+                 and _metric_recent(metric.get('as_of'), hours))
+        rows.append({**metric, 'name': name, 'value': metric.get('value') if valid else None,
+                     'signal': metric.get('signal') if valid else None,
+                     'source': metric.get('source') if valid else None,
+                     'as_of': metric.get('as_of') if valid else None,
+                     'status': 'ready' if valid else 'coming_soon', 'inactive': not valid} if valid else
+                    {'name': name, 'value': None, 'signal': None, 'source': None,
+                     'as_of': None, 'status': 'coming_soon', 'inactive': True})
+    observed = [m for m in rows if m['status'] == 'ready']
+    return {'status': 'ready' if observed else 'coming_soon', 'demo': False,
+            'headline': ('Measured on-chain and sentiment observations' if kind == 'smart_money' else
+                         'Measured exchange derivatives and reported ETF flows') if observed else 'Coming soon',
+            'metrics': rows, 'source': ', '.join(dict.fromkeys(m['source'] for m in observed)) or None,
+            'as_of': max((m['as_of'] for m in observed), default=None)}
+
+
+def _risk_real_only(risk):
+    """Legacy market runs can contain price-seeded demo values; never expose them."""
+    if not isinstance(risk, dict):
+        return {'status': 'coming_soon', 'score': None, 'level': None,
+                'expected_move': {'24H': None, '7D': None, '30D': None},
+                'drivers': [{'name': name, 'state': 'Coming soon', 'value': None, 'source': None, 'as_of': None}
+                            for name in ('Realised volatility', 'Macro-event risk', 'Data uncertainty',
+                                         'Implied volatility', 'Leverage / funding', 'Liquidation risk', 'Order-book liquidity')]}
+    out = dict(risk)
+    out.pop('demo', None)
+    drivers = []
+    for row in risk.get('drivers') or []:
+        if not isinstance(row, dict):
+            continue
+        if row.get('demo') or row.get('state') == 'Coming soon':
+            drivers.append({'name': row.get('name'), 'state': 'Coming soon', 'value': None,
+                            'source': None, 'as_of': None})
+        else:
+            drivers.append({k: v for k, v in row.items() if k != 'demo'})
+    out['drivers'] = drivers
+    provenance = out.get('provenance') or {}
+    if risk.get('realOnlyVersion'):
+        stale_keys = {key for key, max_hours in (('level', 72), ('expected_move', 72),
+                      ('realised_vol_annual', 72), ('zones', 72), ('macro_event_risk', 72),
+                      ('data_uncertainty', 72))
+                      if not _metric_recent((provenance.get(key) or {}).get('as_of'), max_hours)}
+        if 'level' in stale_keys:
+            out['score'] = out['level'] = None
+        if 'expected_move' in stale_keys:
+            out['expected_move'] = {'24H': None, '7D': None, '30D': None}
+        if 'realised_vol_annual' in stale_keys:
+            out['realised_vol_annual'] = out['vol_percentile'] = None
+        if 'zones' in stale_keys:
+            out['downside_zone'] = out['upside_zone'] = None
+        for key in ('macro_event_risk', 'data_uncertainty'):
+            if key in stale_keys:
+                out[key] = None
+        out['drivers'] = [row if row.get('value') is not None and row.get('source') and _metric_recent(row.get('as_of'), 72)
+                          else {'name': row.get('name'), 'state': 'Coming soon', 'value': None, 'source': None, 'as_of': None}
+                          for row in drivers]
+    if not risk.get('realOnlyVersion'):
+        # Previous snapshots may have used synthetic ATR, volatility and event defaults.
+        for key in ('score', 'level', 'vol_percentile', 'realised_vol_annual', 'macro_event_risk', 'data_uncertainty'):
+            out[key] = None
+        out['expected_move'] = {'24H': None, '7D': None, '30D': None}
+        out['provenance'] = {}
+        out['drivers'] = [{'name': row['name'], 'state': 'Coming soon', 'value': None,
+                           'source': None, 'as_of': None} for row in drivers]
+    out['status'] = 'ready' if out.get('score') is not None or any(r.get('value') is not None for r in out['drivers']) else 'coming_soon'
+    return out
+
+
+def _dashboard_real_only(data):
+    """Filter legacy stored runs as well as newly computed market responses."""
+    out = dict(data or {})
+    out['smart_money'] = _panel_real_only(out.get('smart_money'), 'smart_money')
+    out['institutional'] = _panel_real_only(out.get('institutional'), 'institutional')
+    out['risk'] = _risk_real_only(out.get('risk'))
+    lev = out.get('leverage_snapshot')
+    if isinstance(lev, dict):
+        kept = {'realOnlyVersion': 1, 'status': 'coming_soon', 'funding_rate': None,
+                'funding_bias': None, 'funding_dir': None, 'funding_source': None,
+                'funding_as_of': None, 'oi_change_tf_pct': None, 'oi_state': None,
+                'oi_source': None, 'oi_as_of': None, 'squeeze': None}
+        if lev.get('realOnlyVersion') == 1:
+            for fields, stamp_key, hours in ((('funding_rate', 'funding_bias', 'funding_dir', 'funding_source', 'funding_as_of'), 'funding_as_of', 12),
+                                              (('oi_change_tf_pct', 'oi_state', 'oi_source', 'oi_as_of'), 'oi_as_of', 3)):
+                if lev.get(fields[-2]) and _metric_recent(lev.get(stamp_key), hours):
+                    for key in fields:
+                        kept[key] = lev.get(key)
+            if kept['funding_rate'] is not None or kept['oi_change_tf_pct'] is not None:
+                kept['status'] = 'ready'
+        out['leverage_snapshot'] = kept
+    decision = out.get('decision')
+    source_time = out.get('as_of') or out.get('created_at')
+    if isinstance(decision, dict) and (not decision.get('realOnlyVersion') or not _metric_recent(source_time, 72)):
+        # Old composite decisions counted absent inputs as 50/100 neutral.
+        out['decision'] = {'status': 'coming_soon', 'overall_score': None,
+                           'label': 'Coming soon', 'alignment': 'Unverified legacy inputs',
+                           'components': [], 'summary': 'Coming soon — waiting for a real-only market run.',
+                           'risk_score': None, 'risk_level': None}
+    return out
 
 
 # =====================================================================
-# LEVERAGE ENGINE — long/short positioning, OI, funding, (est.) leverage,
-# liquidations, squeeze risk & heatmap. Core metrics are REAL (OKX public
-# API). Liquidations, liquidation heatmap and the estimated-leverage
-# percentile have no free/server-reachable source, so they are DERIVED
-# from the real metrics and CLEARLY FLAGGED demo=True (structured so a
-# live provider — e.g. CoinGlass — can drop in later).
+# LEVERAGE ENGINE — public OKX observations only. Missing leverage,
+# liquidation and heatmap metrics remain Coming soon with no synthetic score.
 # =====================================================================
 # lev_col now imported from config
 LEV_TTL_SEC = 5 * 60
@@ -2462,10 +2573,13 @@ def compute_leverage(timeframe='4H', symbol='BTC'):
     now_iso = datetime.datetime.utcnow().isoformat()
 
     # ---- price ----
-    price, price_chg24 = None, None
+    price, price_chg24, price_as_of, price_source = None, None, None, None
     try:
         tk = ticker(sym)
-        price = tk.get('price'); price_chg24 = tk.get('change24h')
+        price = tk.get('price')
+        price_chg24 = tk.get('change24h') if tk.get('change24h') is not None else tk.get('changePct24h')
+        price_as_of = _observation_time(tk.get('observedAt') or tk.get('ts'))
+        price_source = tk.get('source') if price is not None and price_as_of else None
     except Exception:  # noqa
         pass
 
@@ -2493,12 +2607,14 @@ def compute_leverage(timeframe='4H', symbol='BTC'):
             latest = float(oih[0][1])
             idx = min(steps, len(oih) - 1)
             prev = float(oih[idx][1])
-            oi_change_tf = round((latest - prev) / prev * 100, 1) if prev else None
-            if oi_usd is None:
-                oi_usd = latest
+            oi_change_tf = round((latest - prev) / prev * 100, 1) if idx > 0 and prev else None
         except Exception:  # noqa
             pass
-    oi_state = ('Rising' if (oi_change_tf or 0) > 1.5 else 'Falling' if (oi_change_tf or 0) < -1.5 else 'Stable')
+    oi_state = ('Rising' if oi_change_tf > 1.5 else 'Falling' if oi_change_tf < -1.5 else 'Stable') if oi_change_tf is not None else None
+    oi_as_of = _observation_time(oi[0].get('ts')) if oi else _observation_time(oih[0][0]) if oih else None
+    if not _metric_recent(oi_as_of, 3):
+        oi_usd = oi_change_tf = oi_state = None
+        oi_series = []
 
     # ---- funding (REAL) ----
     funding, funding_series = None, []
@@ -2520,13 +2636,15 @@ def compute_leverage(timeframe='4H', symbol='BTC'):
                 funding = vals[-1]
         except Exception:  # noqa
             pass
-    funding = funding if funding is not None else 0.0
-    fr_avg = fr_avg if fr_avg is not None else funding
-    funding_dir = 'Positive' if funding > 0 else 'Negative' if funding < 0 else 'Flat'
-    funding_trend = ('Rising' if funding > fr_avg + 0.002 else 'Falling' if funding < fr_avg - 0.002 else 'Stable')
-    funding_bias = ('Long Bias' if funding > 0.01 else 'Short Bias' if funding < -0.005 else 'Neutral')
-    # exchange-level: OKX real; others need paid feed (flagged)
-    funding_exchanges = [{'name': 'OKX', 'rate': round(funding, 5), 'demo': False}]
+    funding_as_of = (_observation_time(fr[0].get('ts')) or now_iso) if fr else _observation_time(frh[0].get('fundingTime')) if frh else None
+    funding_source = 'OKX public funding (provider observation time)' if fr and fr[0].get('ts') else 'OKX public funding (read time; provider timestamp not supplied)' if fr else 'OKX historical funding'
+    if not _metric_recent(funding_as_of, 12):
+        funding = fr_avg = None
+        funding_series = []
+    funding_dir = ('Positive' if funding > 0 else 'Negative' if funding < 0 else 'Flat') if funding is not None else None
+    funding_trend = ('Rising' if funding > fr_avg + 0.002 else 'Falling' if funding < fr_avg - 0.002 else 'Stable') if funding is not None and fr_avg is not None else None
+    funding_bias = ('Long Bias' if funding > 0.01 else 'Short Bias' if funding < -0.005 else 'Neutral') if funding is not None else None
+    funding_exchanges = [{'name': 'OKX', 'rate': round(funding, 5), 'source': funding_source, 'as_of': funding_as_of}] if funding is not None else []
 
     # ---- long/short positioning (REAL account ratio) ----
     lsr, lsr_prev, ls_series = None, None, []
@@ -2535,142 +2653,133 @@ def compute_leverage(timeframe='4H', symbol='BTC'):
         try:
             lsr = float(ls[0][1])
             idx = min(steps, len(ls) - 1)
-            lsr_prev = float(ls[idx][1])
+            lsr_prev = float(ls[idx][1]) if idx > 0 else None
             for r in reversed(ls[-60:]):
                 ls_series.append({'t': int(r[0]), 'ratio': round(float(r[1]), 3)})
         except Exception:  # noqa
             pass
-    lsr = lsr if lsr else 1.0
-    lsr_prev = lsr_prev if lsr_prev else lsr
-    long_pct = round(lsr / (1 + lsr) * 100, 1)
-    short_pct = round(100 - long_pct, 1)
-    lsr_change = round(lsr - lsr_prev, 3)
-    pos_trend = ('More long-heavy' if lsr_change > 0.02 else 'More short-heavy' if lsr_change < -0.02 else 'Little changed')
-    # Size-weighted position ratio, liquidations, liquidation heatmap and an estimated-leverage
-    # percentile all require a paid derivatives-data feed (e.g. CoinGlass). Per product decision we
-    # do NOT fabricate these — they are surfaced as INACTIVE until a live source is connected.
-    move = price_chg24 or 0
-
-    # ---- squeeze risk (DERIVED from REAL signals: positioning, funding, OI trend, momentum) ----
-    long_sq = int(max(0, min(100, 20 + (long_pct - 50) * 1.6 + max(0, funding) * 300
-                             + max(0, oi_change_tf or 0) * 1.2 + max(0, -move) * 2)))
-    short_sq = int(max(0, min(100, 20 + (short_pct - 50) * 1.6 + max(0, -funding) * 350
-                              + max(0, oi_change_tf or 0) * 1.2 + max(0, move) * 2)))
-    sq_label = lambda s: _lev_band(s, [30, 55, 75], ['Low', 'Moderate', 'Elevated', 'High'])
-    long_sq_lbl, short_sq_lbl = sq_label(long_sq), sq_label(short_sq)
-
-    # ---- summary: pressure / bias / squeeze (all from REAL signals) ----
-    pressure_score = int(max(0, min(100, abs(funding) * 350 + abs(long_pct - 50) * 2.2
-                                    + max(0, oi_change_tf or 0) * 2.0 + abs(lsr_change) * 60)))
-    pressure = _lev_band(pressure_score, [25, 45, 65, 82], ['LOW', 'MODERATE', 'ELEVATED', 'HIGH', 'EXTREME'])
-    if long_pct >= 55 or funding > 0.015:
-        bias = 'Long Dominant'
-    elif short_pct >= 55 or funding < -0.01:
-        bias = 'Short Dominant'
-    else:
-        bias = 'Balanced'
-    if long_sq >= short_sq + 12:
-        squeeze = 'Long Squeeze Risk'
-    elif short_sq >= long_sq + 12:
-        squeeze = 'Short Squeeze Risk'
-    else:
-        squeeze = 'Neutral'
-
-    # ---- interpretations (rule-based, measured language) ----
-    def _oi_price_read():
-        pr_up = (move or 0) >= 0
-        if oi_state == 'Rising' and pr_up:
-            return "Price and open interest are rising together, suggesting fresh leveraged longs are driving the move."
-        if oi_state == 'Rising' and not pr_up:
-            return "Open interest is rising while price softens, which may indicate new shorts building or longs adding into weakness."
-        if oi_state == 'Falling' and pr_up:
-            return "Price is rising as open interest falls, which can reflect short covering rather than fresh leveraged buying."
-        if oi_state == 'Falling' and not pr_up:
-            return "Both price and open interest are falling, consistent with leveraged positions being unwound (de-risking)."
-        return "Open interest is broadly stable, suggesting leveraged participation is holding steady."
-
-    summary_interp = (
-        f"Leverage pressure reads {pressure}. Positioning is {long_pct:.0f}% long / {short_pct:.0f}% short "
-        f"({bias.lower()}), funding is {funding:+.4f}% ({funding_bias.lower()}) and open interest is {oi_state.lower()} "
-        f"({(oi_change_tf or 0):+.1f}% over {tf}). "
-        + ("A larger concentration of leveraged longs could increase downside liquidation risk if support gives way."
-           if squeeze == 'Long Squeeze Risk' else
-           "Crowded shorts holding into a firm market could be forced to cover on a move higher, raising short-squeeze risk."
-           if squeeze == 'Short Squeeze Risk' else
-           "Long and short squeeze risks look broadly balanced right now."))
-
-    funding_interp = ("Positive funding means longs are paying shorts, indicating stronger demand for leveraged long exposure."
-                      if funding > 0 else
-                      "Negative funding means shorts are paying longs, indicating heavier leveraged short positioning."
-                      if funding < 0 else "Funding is flat — neither side is paying a meaningful premium.")
-
-    # ---- CryptoMarkAI observations + assessment (from REAL data only) ----
+    pos_as_of = _observation_time(ls[0][0]) if ls else None
+    if not _metric_recent(pos_as_of, 36) or lsr is None or lsr <= 0:
+        lsr = lsr_prev = None
+        ls_series = []
+    long_pct = round(lsr / (1 + lsr) * 100, 1) if lsr is not None else None
+    short_pct = round(100 - long_pct, 1) if long_pct is not None else None
+    lsr_change = round(lsr - lsr_prev, 3) if lsr is not None and lsr_prev is not None else None
+    pos_trend = ('More long-heavy' if lsr_change > 0.02 else 'More short-heavy' if lsr_change < -0.02 else 'Little changed') if lsr_change is not None else None
+    # Price/positioning/funding/OI are independent observations. A missing
+    # series is never a zero, balanced account split, or neutral squeeze vote.
+    move = price_chg24 if price_chg24 is not None and price_as_of else None
+    oi_price_read = ('Price and open interest rose together.' if move >= 0 and oi_state == 'Rising'
+                     else 'Price fell while open interest rose.' if move < 0 and oi_state == 'Rising'
+                     else 'Price rose while open interest fell.' if move >= 0 and oi_state == 'Falling'
+                     else 'Price and open interest fell together.' if move < 0 and oi_state == 'Falling'
+                     else 'Open interest was broadly stable.'
+                     ) if move is not None and oi_state is not None else 'Coming soon — price/OI comparison unavailable.'
+    summary_interp = 'Coming soon — measured OI, funding and positioning are listed separately; no combined pressure or liquidation level is inferred.'
+    funding_interp = ('Positive funding: observed longs pay shorts.' if funding > 0 else
+                      'Negative funding: observed shorts pay longs.' if funding < 0 else
+                      'Funding is flat in this measured observation.') if funding is not None else 'Coming soon — funding unavailable.'
     obs = []
-    obs.append(f"Positioning is {long_pct:.0f}% long vs {short_pct:.0f}% short and has become {pos_trend.lower()} over the last {tf}.")
-    obs.append(f"Open interest is {oi_state.lower()} ({(oi_change_tf or 0):+.1f}% over {tf}). " + _oi_price_read())
-    obs.append(f"Funding is {funding:+.4f}% and {funding_trend.lower()} versus its recent average ({funding_bias.lower()}).")
-    obs.append(f"The long/short account ratio is {lsr:.2f} (vs {lsr_prev:.2f} a {tf} ago), a {('rise' if lsr_change > 0 else 'fall' if lsr_change < 0 else 'flat read')} in relative long crowding.")
-    obs.append(f"{'Downside long-squeeze risk' if squeeze == 'Long Squeeze Risk' else 'Upside short-squeeze risk' if squeeze == 'Short Squeeze Risk' else 'Two-sided squeeze risk'} "
-               f"is currently {'elevated' if max(long_sq, short_sq) >= 55 else 'moderate' if max(long_sq, short_sq) >= 30 else 'low'} "
-               f"based on positioning, funding and OI trend.")
-    if squeeze == 'Long Squeeze Risk':
-        assess_title = 'Elevated Long-Side Risk'
-    elif squeeze == 'Short Squeeze Risk':
-        assess_title = 'Elevated Short-Side Risk'
-    else:
-        assess_title = 'Balanced Leverage Environment'
-    assess_text = (f"{summary_interp} These are probabilistic reads of positioning and leverage, not forecasts of a specific price move.")
+    if lsr is not None:
+        obs.append(f'OKX long/short account ratio {lsr:.2f} (long accounts {long_pct:.1f}%).')
+    if oi_change_tf is not None:
+        obs.append(f'OKX open interest changed {oi_change_tf:+.1f}% over {tf}. {oi_price_read}')
+    if funding is not None:
+        obs.append(f'OKX funding observed at {funding:+.4f}%.')
+    assess_title = 'Observed derivatives' if obs else 'Coming soon'
+    assess_text = ' '.join(obs) if obs else 'Coming soon — no dated leverage observations are available.'
+    impact_expl = 'Coming soon — no modeled leverage vote is counted in Albert’s analysis or paper-trading decisions.'
 
-    # ---- Albert's Call impact (leverage is ONE input) ----
-    impact_points = int(round((short_sq - long_sq) / 6.0))
-    impact_points = max(-15, min(15, impact_points))
-    if impact_points < -2:
-        impact_label = 'Bearish Pressure'
-    elif impact_points > 2:
-        impact_label = 'Bullish Pressure'
-    else:
-        impact_label = 'Neutral'
-    impact_expl = (
-        (f"Elevated long positioning and {oi_state.lower()} open interest are adding modest downside risk to the broader "
-         f"Ask Albert assessment." if impact_points < 0 else
-         f"Crowded shorts into a firm tape are adding modest upside risk to the broader Ask Albert assessment." if impact_points > 0 else
-         "Leverage is broadly balanced and is a neutral input to the broader Ask Albert assessment.")
-        + " Leverage is only one of many signals in Albert's Call.")
-
+    observed = [t for t in (oi_as_of if oi_usd is not None or oi_change_tf is not None else None,
+                            funding_as_of if funding is not None else None,
+                            pos_as_of if lsr is not None else None) if t]
     return {
-        'symbol': sym, 'timeframe': tf, 'price': price, 'price_change_24h': price_chg24, 'as_of': now_iso,
-        'summary': {'pressure': pressure, 'pressure_score': pressure_score, 'bias': bias,
-                    'squeeze': squeeze, 'interpretation': summary_interp},
-        'positioning': {'long_pct': long_pct, 'short_pct': short_pct, 'account_ratio': round(lsr, 3),
-                        'account_ratio_prev': round(lsr_prev, 3), 'position_ratio': None,
-                        'position_ratio_active': False,
+        'realOnlyVersion': 1, 'symbol': sym, 'timeframe': tf,
+        'status': 'ready' if observed else 'coming_soon',
+        'price': price if price_source else None,
+        'price_change_24h': price_chg24 if price_source else None,
+        'price_source': price_source, 'price_as_of': price_as_of if price_source else None,
+        'as_of': max(observed, default=None), 'read_at': now_iso,
+        'summary': {'status': 'coming_soon', 'pressure': None, 'pressure_score': None,
+                    'bias': None, 'squeeze': None, 'interpretation': summary_interp},
+        'positioning': {'status': 'ready' if lsr is not None else 'coming_soon',
+                        'source': f'OKX · {sym} long/short account ratio' if lsr is not None else None,
+                        'as_of': pos_as_of if lsr is not None else None,
+                        'long_pct': long_pct, 'short_pct': short_pct,
+                        'account_ratio': round(lsr, 3) if lsr is not None else None,
+                        'account_ratio_prev': round(lsr_prev, 3) if lsr_prev is not None else None,
+                        'position_ratio': None, 'position_ratio_active': False,
                         'ratio_change_tf': lsr_change, 'trend': pos_trend, 'series': ls_series},
-        'open_interest': {'value_usd': oi_usd, 'change_tf_pct': oi_change_tf, 'state': oi_state,
-                          'series': oi_series, 'interpretation': _oi_price_read()},
-        'funding': {'rate': round(funding, 5), 'direction': funding_dir, 'trend': funding_trend,
-                    'avg_recent': round(fr_avg, 5), 'bias': funding_bias, 'exchanges': funding_exchanges,
+        'open_interest': {'status': 'ready' if oi_usd is not None or oi_change_tf is not None else 'coming_soon',
+                          'source': f'OKX · {inst} open interest' if oi_usd is not None or oi_change_tf is not None else None,
+                          'as_of': oi_as_of if oi_usd is not None or oi_change_tf is not None else None,
+                          'value_usd': oi_usd, 'change_tf_pct': oi_change_tf, 'state': oi_state,
+                          'series': oi_series, 'interpretation': oi_price_read},
+        'funding': {'status': 'ready' if funding is not None else 'coming_soon',
+                    'source': funding_source if funding is not None else None,
+                    'as_of': funding_as_of if funding is not None else None,
+                    'rate': round(funding, 5) if funding is not None else None,
+                    'direction': funding_dir, 'trend': funding_trend,
+                    'avg_recent': round(fr_avg, 5) if fr_avg is not None else None,
+                    'bias': funding_bias, 'exchanges': funding_exchanges,
                     'series': funding_series, 'interpretation': funding_interp,
-                    'exchanges_note': 'Only OKX is a live free feed; multi-exchange funding needs a paid aggregator.'},
-        'estimated_leverage': {'active': False, 'status': 'No data available',
-                               'reason': 'No estimated-leverage data available (needs a live leverage/exchange-reserve feed such as CoinGlass or CryptoQuant).',
-                               'interpretation': 'No estimated-leverage data available.'},
-        'liquidations': {'active': False, 'status': 'No data available',
-                         'reason': 'No liquidation data available (needs a live liquidations feed such as CoinGlass).'},
-        'heatmap': {'active': False, 'status': 'No data available', 'price': price,
-                    'reason': 'No liquidation-heatmap data available (needs a live liquidation-level feed such as CoinGlass).'},
-        'squeeze': {'long_risk': long_sq, 'long_label': long_sq_lbl, 'short_risk': short_sq,
-                    'short_label': short_sq_lbl,
-                    'long_explain': (f"Long positioning is {long_pct:.0f}% with {funding:+.4f}% funding and {oi_state.lower()} OI; "
-                                     "a loss of nearby support could force leveraged longs to close."),
-                    'short_explain': (f"Short positioning is {short_pct:.0f}% while BTC holds firm; "
-                                      "a rapid move higher could force leveraged shorts to cover.")},
+                    'exchanges_note': 'Only dated OKX observations are included.'},
+        'estimated_leverage': {'active': False, 'status': 'Coming soon', 'value': None},
+        'liquidations': {'active': False, 'status': 'Coming soon', 'value': None},
+        'heatmap': {'active': False, 'status': 'Coming soon', 'price': None},
+        'squeeze': {'long_risk': None, 'long_label': 'Coming soon', 'short_risk': None,
+                    'short_label': 'Coming soon', 'long_explain': None, 'short_explain': None},
         'bitmark': {'observations': obs, 'assessment_title': assess_title, 'assessment_text': assess_text},
-        'albert_call': {'impact_label': impact_label, 'impact_points': impact_points, 'explanation': impact_expl},
-        'sources': ['OKX public API (open interest, funding, long/short account ratio, taker) — REAL',
-                    'Liquidations, liquidation heatmap, estimated-leverage & size-weighted position ratio — NO DATA AVAILABLE (no free feed; connect a paid provider such as CoinGlass to activate)'],
-        'disclaimer': ('Market data and CryptoMarkAI analysis are provided for informational purposes only and should not be '
-                       'considered financial advice. Derivatives and leveraged trading involve substantial risk. Liquidation '
-                       'levels and squeeze-risk indicators are estimates and may not reflect actual market outcomes.')}
+        'albert_call': {'impact_label': 'Coming soon', 'impact_points': None, 'explanation': impact_expl},
+        'sources': [x for x in (f'OKX open interest · {oi_as_of}' if oi_usd is not None or oi_change_tf is not None else None,
+                                f'{funding_source} · {funding_as_of}' if funding is not None else None,
+                                f'OKX account ratio · {pos_as_of}' if lsr is not None else None) if x],
+        'disclaimer': 'Only dated observations are shown. Missing or modeled leverage factors are not neutral votes or trade inputs.'}
+
+
+def _leverage_real_only(data):
+    """Hide legacy cached zero/50-50/squeeze defaults, then check each dated feed."""
+    if not isinstance(data, dict) or not data.get('realOnlyVersion'):
+        return {'realOnlyVersion': 1, 'dataAvailability': 'coming_soon',
+                'symbol': (data or {}).get('symbol', 'BTC') if isinstance(data, dict) else 'BTC',
+                'timeframe': (data or {}).get('timeframe', '4H') if isinstance(data, dict) else '4H',
+                'price': None, 'price_change_24h': None, 'price_source': None, 'price_as_of': None,
+                'as_of': None, 'summary': {'status': 'coming_soon', 'pressure': None, 'pressure_score': None,
+                                           'bias': None, 'squeeze': None, 'interpretation': 'Coming soon'},
+                'positioning': {'status': 'coming_soon', 'account_ratio': None, 'long_pct': None,
+                                'short_pct': None, 'source': None, 'as_of': None, 'series': []},
+                'open_interest': {'status': 'coming_soon', 'value_usd': None, 'change_tf_pct': None,
+                                  'state': None, 'source': None, 'as_of': None, 'series': []},
+                'funding': {'status': 'coming_soon', 'rate': None, 'source': None, 'as_of': None,
+                            'series': [], 'exchanges': []},
+                'estimated_leverage': {'active': False, 'status': 'Coming soon'},
+                'liquidations': {'active': False, 'status': 'Coming soon'},
+                'heatmap': {'active': False, 'status': 'Coming soon'},
+                'squeeze': {'long_risk': None, 'short_risk': None, 'long_label': 'Coming soon', 'short_label': 'Coming soon'},
+                'bitmark': {'observations': [], 'assessment_title': 'Coming soon', 'assessment_text': 'No validated leverage observations yet.'},
+                'albert_call': {'impact_label': 'Coming soon', 'impact_points': None,
+                                'explanation': 'No leverage vote is included in Albert’s analysis.'}, 'sources': []}
+    out = dict(data)
+    for key, hours in (('open_interest', 3), ('funding', 12), ('positioning', 36)):
+        row = dict(out.get(key) or {})
+        if not row.get('source') or not _metric_recent(row.get('as_of'), hours):
+            for field in ({'open_interest': ('value_usd', 'change_tf_pct', 'state', 'interpretation'),
+                           'funding': ('rate', 'direction', 'trend', 'avg_recent', 'bias'),
+                           'positioning': ('account_ratio', 'account_ratio_prev', 'long_pct', 'short_pct', 'ratio_change_tf', 'trend')}[key]):
+                row[field] = None
+            row.update({'status': 'coming_soon', 'source': None, 'as_of': None, 'series': []})
+            if key == 'funding':
+                row['exchanges'] = []
+        out[key] = row
+    if not out.get('price_source') or not _metric_recent(out.get('price_as_of'), 3):
+        out.update({'price': None, 'price_change_24h': None, 'price_source': None, 'price_as_of': None})
+    real = [out[key].get('as_of') for key in ('open_interest', 'funding', 'positioning') if out[key].get('status') == 'ready']
+    out.update({'dataAvailability': 'ready' if real else 'coming_soon', 'as_of': max(real, default=None),
+                'summary': {'status': 'coming_soon', 'pressure': None, 'pressure_score': None,
+                            'bias': None, 'squeeze': None, 'interpretation': 'Coming soon — measured factors remain separate.'},
+                'albert_call': {'impact_label': 'Coming soon', 'impact_points': None,
+                                'explanation': 'Missing factors are not neutral votes in Albert’s analysis.'}})
+    return out
 
 
 def get_leverage(timeframe='4H', refresh=False):
@@ -2682,10 +2791,10 @@ def get_leverage(timeframe='4H', refresh=False):
             data = compute_leverage(timeframe)
             lev_col.update_one({'_id': key}, {'$set': {'_id': key, 'data': data,
                                'fetched_ts': time.time()}}, upsert=True)
-            return data
+            return _leverage_real_only(data)
         except Exception:  # noqa
             traceback.print_exc()
-    return c.get('data')
+    return _leverage_real_only(c.get('data'))
 
 
 # =====================================================================
@@ -2791,21 +2900,22 @@ def compute_network_health():
     hseries = [{'ts': x['timestamp'], 'v': round(x['avgHashrate'] / 1e18, 1)}
                for x in (hr.get('hashrates') or [])][-90:]  # EH/s
     fast = fees.get('fastestFee'); half = fees.get('halfHourFee'); hour = fees.get('hourFee')
-    congestion = ('Low' if (mp.get('count') or 0) < 20000 else 'Elevated'
-                  if (mp.get('count') or 0) < 80000 else 'High')
-    fee_state = ('Cheap' if (fast or 0) <= 10 else 'Normal' if (fast or 0) <= 50 else 'Expensive')
+    congestion = ('Low' if mp['count'] < 20000 else 'Elevated' if mp['count'] < 80000 else 'High') if mp.get('count') is not None else None
+    fee_state = ('Cheap' if fast <= 10 else 'Normal' if fast <= 50 else 'Expensive') if fast is not None else None
     dchg = da.get('difficultyChange')
-    # simple health read
-    read = (f"Fees are {fee_state.lower()} (~{fast} sat/vB for a fast confirm) and the mempool looks "
-            f"{congestion.lower()} ({(mp.get('count') or 0):,} txns waiting). "
-            f"Next difficulty adjustment is estimated {('+' if (dchg or 0) >= 0 else '')}{(dchg or 0):.1f}% "
-            f"in ~{round((da.get('remainingTime') or 0)/86400000, 1)} days. "
-            "Hashrate near record levels reflects a well-secured network.")
+    observations = []
+    if fee_state is not None:
+        observations.append(f'Fast confirmation fee: {fast} sat/vB ({fee_state.lower()}).')
+    if congestion is not None:
+        observations.append(f'Mempool: {mp["count"]:,} waiting transactions ({congestion.lower()} congestion).')
+    if dchg is not None and da.get('remainingTime') is not None:
+        observations.append(f'Difficulty adjustment estimate: {dchg:+.1f}% in ~{da["remainingTime"] / 86400000:.1f} days.')
+    read = ' '.join(observations) or 'Coming soon — network observations unavailable.'
     return {
         'hashrate_ehs': (round(cur_hr / 1e18, 1) if cur_hr else (hseries[-1]['v'] if hseries else None)),
         'difficulty': cur_diff, 'difficulty_change_pct': (round(dchg, 2) if dchg is not None else None),
-        'retarget_days': round((da.get('remainingTime') or 0) / 86400000, 1),
-        'retarget_progress_pct': round(da.get('progressPercent') or 0, 1),
+        'retarget_days': round(da['remainingTime'] / 86400000, 1) if da.get('remainingTime') is not None else None,
+        'retarget_progress_pct': round(da['progressPercent'], 1) if da.get('progressPercent') is not None else None,
         'fees': {'fastest': fast, 'half_hour': half, 'hour': hour, 'state': fee_state},
         'mempool': {'count': mp.get('count'), 'vsize': mp.get('vsize'), 'congestion': congestion},
         'hashrate_series': hseries, 'read': read,
@@ -2871,11 +2981,9 @@ def _refresh_onchain_bg(symbol='BTC'):
     try:
         sm = None
         if sym == 'BTC':
-            gc = glassnode_col.find_one({'_id': 'smart_money_btc'}) or {}
-            gn = gc.get('series')
-            if GLASSNODE_API_KEY and (time.time() - gc.get('fetched_ts', 0) >= GLASSNODE_TTL_SEC):
-                threading.Thread(target=_refresh_glassnode_bg, daemon=True).start()
-            sm = build_smart_money_engine(gn)
+            # Zero-cost mode: do not request Glassnode or consume previously paid
+            # entitlement data. Missing entity-level metrics stay Coming soon.
+            sm = build_smart_money_engine(None)
         dv = build_derivatives_engine(sym)
         doc_id = 'btc' if sym == 'BTC' else f'onchain_{sym}'
         onchain_col.update_one({'_id': doc_id}, {'$set': {
@@ -2898,7 +3006,8 @@ def get_onchain_panels(symbol='BTC'):
     empty = (not c.get('smart_money') and not c.get('institutional'))
     if empty or (now - c.get('fetched_ts', 0) >= ONCHAIN_TTL_SEC):
         threading.Thread(target=_refresh_onchain_bg, args=(sym,), daemon=True).start()
-    return {'smart_money': c.get('smart_money'), 'institutional': c.get('institutional')}
+    return {'smart_money': _panel_real_only(c.get('smart_money'), 'smart_money'),
+            'institutional': _panel_real_only(c.get('institutional'), 'institutional')}
 
 
 # =====================================================================
@@ -3073,7 +3182,7 @@ def etf_summary():
     if not totals:
         return None
     net_1d = totals[0]
-    net_7d = round(sum(totals[:7]), 1)
+    net_7d = round(sum(totals[:7]), 1) if len(totals) >= 7 else None
     # sparkline ascending (oldest -> newest) of daily totals
     spark = _spark(list(reversed(totals[:14])), n=14, nd=1)
     # leading issuer of the latest day
@@ -3629,17 +3738,35 @@ AUTH_COOKIE = 'albert_session'
 AUTH_SESSION_DAYS = 7
 # Private two-user app: only these Google emails may sign in (comma-separated env).
 AUTH_EMAIL_ALLOWLIST = {e.strip().lower() for e in os.environ.get('AUTH_EMAIL_ALLOWLIST', '').split(',') if e.strip()}
+PREVIEW_BYPASS_EMAIL = (os.environ.get('PREVIEW_BYPASS_EMAIL') or '').strip().lower() or None
 
 
 def get_current_user(request: Request,
                      albert_session: str = Cookie(default=None, alias=AUTH_COOKIE),
                      authorization: str = Header(default=None)):
     """FastAPI dependency: resolve the signed-in user from the session cookie
-    (or Authorization: Bearer <token>). Raises 401 when not authenticated."""
+    (or Authorization: Bearer <token>). Raises 401 when not authenticated.
+    When PREVIEW_BYPASS_EMAIL is set, unauthenticated requests are auto-resolved
+    to that user account so the preview can be used without a Google login."""
     token = albert_session
     if not token and authorization and authorization.lower().startswith('bearer '):
         token = authorization[7:].strip()
     if not token:
+        # Preview bypass: auto-resolve to the configured preview user.
+        if PREVIEW_BYPASS_EMAIL:
+            user = users_col.find_one({'email': PREVIEW_BYPASS_EMAIL},
+                                      {'_id': 1, 'email': 1, 'name': 1, 'picture': 1})
+            if not user:
+                # Auto-create the preview user if they don't exist yet.
+                uid = str(uuid.uuid4())
+                now = datetime.datetime.utcnow()
+                users_col.insert_one({'_id': uid, 'email': PREVIEW_BYPASS_EMAIL,
+                                      'name': PREVIEW_BYPASS_EMAIL.split('@')[0].replace('.', ' ').title(),
+                                      'picture': '', 'created_at': now, 'updated_at': now})
+                user = users_col.find_one({'_id': uid},
+                                          {'_id': 1, 'email': 1, 'name': 1, 'picture': 1})
+            if user:
+                return user
         raise HTTPException(status_code=401, detail='Not authenticated')
     row = auth_sessions_col.find_one({'token': token})
     now = datetime.datetime.utcnow()
@@ -3840,7 +3967,9 @@ def _global_market_feeds():
         daily = ef.get('daily') or []
         totals = [x.get('total') for x in daily if x.get('total') is not None]
         if totals:
-            L.append(f"- US spot BTC ETF net flow: 1d ${round(totals[0])}M, 7d ${round(sum(totals[:7]))}M, cumulative since launch ${round((ef.get('cum_total') or 0))}M.")
+            cumulative = f", cumulative since launch ${round(ef['cum_total'])}M" if ef.get('cum_total') is not None else ''
+            L.append(f"- Reported US spot BTC ETF net flow: 1d ${round(totals[0])}M, "
+                     f"last {min(7, len(totals))} reported sessions ${round(sum(totals[:7]))}M{cumulative}.")
     except Exception:  # noqa
         pass
     # --- Derivatives: funding / OI / positioning ---
@@ -3848,16 +3977,17 @@ def _global_market_feeds():
         d = get_leverage('4H') or {}
         oi = d.get('open_interest') or {}
         fu = d.get('funding') or {}
-        sm = d.get('summary') or {}
         parts = []
-        if fu:
-            parts.append(f"funding {fu.get('rate')}% ({fu.get('direction')}, bias {fu.get('bias')})")
-        if oi:
-            parts.append(f"open interest {_fmt_usd(oi.get('value_usd'))} ({oi.get('state')}, {oi.get('change_tf_pct')}% this TF)")
-        if sm:
-            parts.append(f"leverage pressure {sm.get('pressure')} ({sm.get('pressure_score')}/100)")
+        if fu.get('status') == 'ready' and fu.get('rate') is not None:
+            parts.append(f"funding {fu['rate']}% (source {fu.get('source')}; as of {fu.get('as_of')})")
+        if oi.get('status') == 'ready' and (oi.get('value_usd') is not None or oi.get('change_tf_pct') is not None):
+            parts.append(f"open interest {_fmt_usd(oi['value_usd']) if oi.get('value_usd') is not None else 'USD value unavailable'} "
+                         f"(change {oi.get('change_tf_pct') if oi.get('change_tf_pct') is not None else 'unavailable'}% this TF; "
+                         f"source {oi.get('source')}; as of {oi.get('as_of')})")
         if parts:
-            L.append('- Derivatives (OKX 4H): ' + ', '.join(parts) + '.')
+            L.append('- Measured derivatives (OKX 4H): ' + ', '.join(parts) + '.')
+        else:
+            L.append('- Derivatives: Coming soon. Missing feeds are excluded, not neutral votes.')
     except Exception:  # noqa
         pass
     # --- On-chain structure (institutional + smart-money panels) ---
@@ -3866,9 +3996,9 @@ def _global_market_feeds():
         for key, tag in (('smart_money', 'Smart money'), ('institutional', 'Institutional')):
             panel = panels.get(key) or {}
             mets = panel.get('metrics') or []
-            picked = [m for m in mets if m.get('value') not in (None, 'n/a', '')][:4]
+            picked = [m for m in mets if m.get('status') == 'ready' and m.get('source') and m.get('as_of')][:4]
             if picked:
-                L.append(f"- {tag} on-chain: " + '; '.join(f"{m.get('name')} {m.get('value')} [{m.get('signal')}]" for m in picked) + '.')
+                L.append(f"- {tag} observed metrics: " + '; '.join(f"{m.get('name')} {m.get('value')} [{m.get('signal')}]; source {m.get('source')}; as of {m.get('as_of')}" for m in picked) + '.')
     except Exception:  # noqa
         pass
     # --- Cross-asset context ---
@@ -5112,18 +5242,21 @@ def compute():
     except Exception:  # noqa
         traceback.print_exc()
 
-    # --- Risk Engine + Smart Money / Institutional (DEMO) ---
+    # --- Risk Engine + sourced observations (no synthetic fallback) ---
     risk = smart_money = institutional = None
     try:
-        risk = compute_risk_engine(quant, chart, decision, data_health, event_calendar, last_close, feats)
+        risk = compute_risk_engine(quant, chart, decision, data_health, event_calendar, last_close, feats,
+                                   observed_at=_observation_time(live_row['timestamp'].iloc[0].isoformat()))
     except Exception:  # noqa
         traceback.print_exc()
     try:
         _panels = get_onchain_panels()
-        smart_money = _panels.get('smart_money') or compute_smart_money_demo(last_close, quant['regime']['regime'])
-        institutional = _panels.get('institutional') or compute_institutional_demo(last_close)
+        smart_money = _panel_real_only(_panels.get('smart_money'), 'smart_money')
+        institutional = _panel_real_only(_panels.get('institutional'), 'institutional')
     except Exception:  # noqa
         traceback.print_exc()
+        smart_money = _panel_real_only(None, 'smart_money')
+        institutional = _panel_real_only(None, 'institutional')
 
     # --- Prediction Ledger + public scorecard ---
     prediction_ledger = None
@@ -5245,12 +5378,17 @@ def compute():
     try:
         lv = get_leverage('4H') or {}
         leverage_snapshot = {
+            'realOnlyVersion': 1,
             'funding_rate': (lv.get('funding') or {}).get('rate'),
             'funding_bias': (lv.get('funding') or {}).get('bias'),
             'funding_dir': (lv.get('funding') or {}).get('direction'),
+            'funding_source': (lv.get('funding') or {}).get('source'),
+            'funding_as_of': (lv.get('funding') or {}).get('as_of'),
             'oi_change_tf_pct': (lv.get('open_interest') or {}).get('change_tf_pct'),
             'oi_state': (lv.get('open_interest') or {}).get('state'),
-            'squeeze': lv.get('squeeze'),
+            'oi_source': (lv.get('open_interest') or {}).get('source'),
+            'oi_as_of': (lv.get('open_interest') or {}).get('as_of'),
+            'squeeze': None,
         }
     except Exception:  # noqa
         traceback.print_exc()
@@ -5574,7 +5712,7 @@ def dashboard(symbol: str = 'BTC'):
         cache_id = f'{symbol}:{today}'
         cached = coin_dash_col.find_one({'_id': cache_id}, {'_id': 0})
         if cached and cached.get('data'):
-            return {'status': 'ready', 'compute_status': 'done', **cached['data']}
+            return {'status': 'ready', 'compute_status': 'done', **_dashboard_real_only(cached['data'])}
         st = _coin_dash_state.get(symbol)
         if st != 'running':
             threading.Thread(target=run_coin_dash_bg, args=(symbol,), daemon=True).start()
@@ -5605,7 +5743,7 @@ def dashboard(symbol: str = 'BTC'):
             doc['decision'] = _sim_trip_decision(doc.get('decision') or {}, doc['drift'])
         except Exception:  # noqa
             traceback.print_exc()
-    return {'status': 'ready', 'compute_status': _state['status'], **doc}
+    return {'status': 'ready', 'compute_status': _state['status'], **_dashboard_real_only(doc)}
 
 
 @app.post('/api/v1/refresh')
@@ -6189,7 +6327,7 @@ def _md_freshness(as_of, quality, source_id=''):
     elif quality == 'CONFLICTING':
         status, label = 'conflicting', 'conflicting'
     elif age is None:
-        status, label = 'fresh', 'live'
+        status, label = 'missing', 'time unavailable'
     elif age <= t1:
         status, label = 'fresh', 'fresh'
     elif age <= t2:
@@ -6215,7 +6353,7 @@ def _compute_market_driver_btc(horizon: str = 'SWING'):
         run = runs_col.find_one(sort=[('created_at', -1)]) or {}
     except Exception:  # noqa
         traceback.print_exc()
-    run_as_of = run.get('created_at') or run.get('as_of')
+    run_as_of = run.get('as_of') or run.get('created_at')
     run_age_h = _md_iso_age_hours(run_as_of)
 
     drivers = []        # each: dict with actor/channel/behavior/stage/... + internal _contrib
@@ -6246,7 +6384,7 @@ def _compute_market_driver_btc(horizon: str = 'SWING'):
     try:
         etf = etf_flows_feed() or {}
         n7 = etf.get('net_7d'); n1 = etf.get('net_1d'); n30 = etf.get('net_30d')
-        if n7 is not None:
+        if n7 is not None and etf.get('latest_date') and _metric_recent(etf.get('latest_date'), 96):
             direction = 'bullish' if n7 > 0 else ('bearish' if n7 < 0 else 'neutral')
             behavior = 'ACCUMULATION' if n7 > 0 else ('DISTRIBUTION' if n7 < 0 else 'NEUTRAL')
             mag = min(100.0, abs(n7) / 12.0)  # ~$1.2B/7d -> saturates
@@ -6256,9 +6394,9 @@ def _compute_market_driver_btc(horizon: str = 'SWING'):
                 conf = 0.6
             add_driver('INSTITUTIONAL', 'ETF_SPOT', behavior, direction, mag, conf, 'OBSERVED',
                        'US spot-ETF net flows',
-                       f"Net ${n7}M over 7d (1d ${n1}M, 30d ${n30}M).",
+                       f"Net ${n7}M over 7 reported sessions (1d {'unavailable' if n1 is None else f'${n1}M'}, 30d {'unavailable' if n30 is None else f'${n30}M'}).",
                        f"etf:{etf.get('latest_date')}",
-                       {'source': etf.get('source'), 'asOf': etf.get('as_of'),
+                       {'source': etf.get('source'), 'asOf': etf.get('latest_date'),
                         'net_1d': n1, 'net_7d': n7, 'net_30d': n30, 'quality': 'OBSERVED'})
         else:
             missing.append('etf_flows')
@@ -6267,10 +6405,13 @@ def _compute_market_driver_btc(horizon: str = 'SWING'):
 
     # --- 2) LEVERAGED_TRADER via perp funding + OI (OBSERVED, OKX/Binance) ------
     lev = run.get('leverage_snapshot') or {}
-    if lev:
-        fr = _num(lev.get('funding_rate')) or 0.0
-        oi = _num(lev.get('oi_change_tf_pct')) or 0.0
-        fbias = (lev.get('funding_bias') or 'Neutral')
+    if (lev.get('realOnlyVersion') == 1 and _num(lev.get('funding_rate')) is not None
+            and _num(lev.get('oi_change_tf_pct')) is not None
+            and lev.get('funding_source') and _metric_recent(lev.get('funding_as_of'), 12)
+            and lev.get('oi_source') and _metric_recent(lev.get('oi_as_of'), 3)):
+        fr = _num(lev['funding_rate'])
+        oi = _num(lev['oi_change_tf_pct'])
+        fbias = lev.get('funding_bias') or 'Direction unavailable'
         # positive funding + rising OI = crowded longs (bullish but fragile);
         # negative funding + firm price = potential short-covering fuel (bullish);
         # positive funding + falling OI = long unwind (bearish).
@@ -6284,12 +6425,13 @@ def _compute_market_driver_btc(horizon: str = 'SWING'):
             direction, behavior = 'bearish', 'PROFIT_TAKING'
         else:
             direction, behavior = 'neutral', 'NEUTRAL'
-        mag = min(100.0, abs(fr) * 90000.0 + abs(oi) * 4.0)
+        mag = min(100.0, abs(fr) * 1000.0 + abs(oi) * 4.0)
         add_driver('LEVERAGED_TRADER', 'PERPETUAL_FUTURES', behavior, direction, mag, 0.8, 'OBSERVED',
-                   'Perp funding & open interest',
-                   f"Funding {round(fr * 100, 4)}% ({fbias}), OI {oi}% ({lev.get('oi_state')}).",
-                   'funding:latest',
-                   {'source': 'OKX/Binance/Bybit', 'asOf': run_as_of, 'funding_rate': fr,
+                   'Dated OKX funding & open interest',
+                   f"Funding {round(fr, 4)}% ({fbias}), OI {oi}% ({lev.get('oi_state')}).",
+                   f"funding:{lev.get('funding_as_of')}",
+                   {'source': 'OKX funding + open interest',
+                    'asOf': min(lev['funding_as_of'], lev['oi_as_of']), 'funding_rate_pct': fr,
                     'oi_change_pct': oi, 'quality': 'OBSERVED'})
     else:
         missing.append('leverage')
@@ -6306,8 +6448,8 @@ def _compute_market_driver_btc(horizon: str = 'SWING'):
             if first and last:
                 chg = (last - first) / first * 100.0
         trend = exf.get('trend') or exf.get('direction')
-        if chg is not None:
-            # balances leaving exchanges (negative change) = accumulation (bullish)
+        if chg is not None and exf.get('as_of') and _metric_recent(exf.get('as_of'), 72):
+            # Falling exchange balances can indicate accumulation, not intent.
             direction = 'bullish' if chg < 0 else ('bearish' if chg > 0 else 'neutral')
             behavior = 'ACCUMULATION' if chg < 0 else ('DISTRIBUTION' if chg > 0 else 'NEUTRAL')
             mag = min(100.0, abs(chg) * 20.0)
@@ -6317,19 +6459,15 @@ def _compute_market_driver_btc(horizon: str = 'SWING'):
                        'exchange_balances:latest',
                        {'source': exf.get('source', 'on-chain reconstruction'), 'asOf': exf.get('as_of'),
                         'balance_change_pct': round(chg, 3), 'quality': 'OBSERVED'})
-        elif trend:
-            direction = 'bullish' if 'out' in str(trend).lower() or 'fall' in str(trend).lower() else 'neutral'
-            add_driver('WHALE', 'ON_CHAIN_TRANSFER', 'ACCUMULATION' if direction == 'bullish' else 'NEUTRAL',
-                       direction, 30, 0.5, 'WEAKLY_INFERRED', 'Exchange balance trend',
-                       f"Reported trend: {trend}.", 'exchange_balances:trend', None)
     except Exception:  # noqa
         traceback.print_exc()
 
     # --- 4) LONG_TERM_HOLDER via on-chain valuation (STRONGLY/WEAKLY INFERRED) --
     try:
-        sm = run.get('smart_money') or {}
-        metrics = {m.get('name'): m for m in (sm.get('metrics') or []) if isinstance(m, dict)}
-        ev = 'STRONGLY_INFERRED' if not sm.get('demo') else 'WEAKLY_INFERRED'
+        sm = _panel_real_only(run.get('smart_money'), 'smart_money')
+        metrics = {m.get('name'): m for m in (sm.get('metrics') or [])
+                   if isinstance(m, dict) and m.get('status') == 'ready' and m.get('source') and m.get('as_of')}
+        ev = 'STRONGLY_INFERRED'
         mvrv = metrics.get('MVRV Z-score') or metrics.get('MVRV')
         sopr = metrics.get('SOPR')
         if mvrv or sopr:
@@ -6351,8 +6489,9 @@ def _compute_market_driver_btc(horizon: str = 'SWING'):
         fg = _misc_get('fear_greed', 30 * 60, compute_fear_greed) or {}
         val = _num(fg.get('value'))
         dec = run.get('decision') or {}
-        news_bias = (dec.get('news_bias') or '').lower()
-        if val is not None:
+        news_bias = (dec.get('news_bias') or '').lower() if dec.get('realOnlyVersion') == 1 else ''
+        fg_time = _observation_time(fg.get('ts') or fg.get('as_of'))
+        if val is not None and _metric_recent(fg_time, 48):
             direction = 'bullish' if val >= 55 else ('bearish' if val <= 45 else 'neutral')
             if 'bull' in news_bias:
                 direction = 'bullish'
@@ -6364,7 +6503,7 @@ def _compute_market_driver_btc(horizon: str = 'SWING'):
                        'Retail sentiment & news flow',
                        f"Fear & Greed {int(val)} ({fg.get('classification', '')}), news bias {news_bias or 'n/a'}.",
                        'sentiment:latest',
-                       {'source': 'alternative.me + news engine', 'asOf': fg.get('as_of'),
+                       {'source': 'Alternative.me · Fear & Greed', 'asOf': fg_time,
                         'fear_greed': val, 'quality': 'WEAKLY_INFERRED'})
     except Exception:  # noqa
         traceback.print_exc()
@@ -6372,16 +6511,17 @@ def _compute_market_driver_btc(horizon: str = 'SWING'):
     # --- 6) MINER via network health (WEAKLY_INFERRED) -------------------------
     try:
         nh = _misc_get('network_health', 10 * 60, compute_network_health) or {}
-        hr = nh.get('hashrate_change_pct') or nh.get('hashrate_7d_pct')
-        if hr is not None:
-            hrv = _num(hr) or 0.0
+        hr = nh.get('hashrate_change_pct') if nh.get('hashrate_change_pct') is not None else nh.get('hashrate_7d_pct')
+        hr_time = _observation_time(nh.get('as_of'))
+        if _num(hr) is not None and _metric_recent(hr_time, 72):
+            hrv = _num(hr)
             direction = 'bullish' if hrv >= 0 else 'bearish'
             behavior = 'NEUTRAL' if abs(hrv) < 3 else ('ACCUMULATION' if hrv > 0 else 'CAPITULATION')
             add_driver('MINER', 'ON_CHAIN_TRANSFER', behavior, direction, min(100.0, abs(hrv) * 6.0), 0.45,
                        'WEAKLY_INFERRED', 'Miner network health',
                        f"Hashrate change {hrv}% — {'expanding' if hrv >= 0 else 'contracting'}.",
                        'network_health:latest',
-                       {'source': 'mempool.space', 'asOf': nh.get('as_of'), 'hashrate_change_pct': hrv,
+                       {'source': 'Mempool.space · hashrate', 'asOf': hr_time, 'hashrate_change_pct': hrv,
                         'quality': 'WEAKLY_INFERRED'})
     except Exception:  # noqa
         traceback.print_exc()
@@ -6454,15 +6594,15 @@ def _compute_market_driver_btc(horizon: str = 'SWING'):
 
     # --- Regime -----------------------------------------------------------------
     leader_actor = current_leader['actor'] if current_leader else 'UNKNOWN'
-    lev_risk = 0
-    try:
+    lev_risk = None
+    if (run.get('leverage_snapshot') or {}).get('realOnlyVersion') == 1:
         sq = (run.get('leverage_snapshot') or {}).get('squeeze') or {}
-        lev_risk = max(_num(sq.get('long_risk')) or 0, _num(sq.get('short_risk')) or 0)
-    except Exception:  # noqa
-        pass
+        readings = [_num(sq.get('long_risk')), _num(sq.get('short_risk'))]
+        if all(v is not None for v in readings):
+            lev_risk = max(readings)
     if data_quality in ('MISSING',) or posture == 'NEUTRAL_OR_MIXED':
         regime = 'MIXED_OR_UNCLEAR'
-    elif lev_risk >= 70 and leader_actor == 'LEVERAGED_TRADER':
+    elif lev_risk is not None and lev_risk >= 70 and leader_actor == 'LEVERAGED_TRADER':
         regime = 'LIQUIDATION_CASCADE'
     elif leader_actor == 'MINER' and posture_sign < 0:
         regime = 'MINER_CAPITULATION'
@@ -9953,14 +10093,10 @@ def whale_tx_feed(min_btc: float = 50.0, limit: int = 40, refresh: int = 0):
 
 @app.get('/api/v1/leverage')
 def leverage_feed(timeframe: str = '4H', refresh: int = 0):
-    """Leverage intelligence — long/short positioning, OI, funding, (est.) leverage,
-    liquidations, squeeze risk & heatmap. Core is REAL (OKX); liquidations/heatmap/
-    estimated-leverage percentile are DERIVED/DEMO and flagged demo=True."""
+    """Only dated OKX measurements; unsupported leverage factors are Coming soon."""
     try:
         data = get_leverage(timeframe if timeframe in _TF_HOURS else '4H', refresh=bool(refresh))
-        if not data:
-            return {'status': 'computing'}
-        return {'status': 'ready', **data}
+        return {**data, 'status': 'ready', 'dataAvailability': data.get('dataAvailability', data.get('status'))}
     except Exception:  # noqa
         traceback.print_exc()
         return {'status': 'error'}
@@ -9976,7 +10112,7 @@ def etf_flows_feed(refresh: int = 0):
             return {'status': 'computing', 'daily': []}
         totals = [d.get('total') for d in daily if d.get('total') is not None]
         net_1d = totals[0] if totals else None
-        net_7d = round(sum(totals[:7]), 1) if totals else None
+        net_7d = round(sum(totals[:7]), 1) if len(totals) >= 7 else None if totals else None
         net_30d = round(sum(totals[:30]), 1) if totals else None
         # cumulative over FULL history (oldest -> newest) for the long-trend chart.
         # Include real BTC close (from TFTC dataset) so the UI can overlay price vs demand.
@@ -15643,7 +15779,7 @@ ALBERT_SECTION_SYSTEM = (
 )
 
 ALBERT_DATA_SECTIONS = {'alerts', 'scorecard', 'performance', 'whales', 'smartmoney',
-                        'institutional', 'events', 'risk'}
+                        'institutional', 'leverage', 'events', 'risk'}
 
 ALBERT_TECH_SYSTEM = (
     "You are 'Albert', the HuCentAI Quant analyst in the Ask Albert Bitcoin dashboard, now giving a MORE TECHNICAL "
@@ -15762,27 +15898,44 @@ async def albert_insight(request: Request, section: str = 'overview', mode: str 
             if symbol != 'BTC':
                 today = datetime.datetime.utcnow().strftime('%Y-%m-%d')
                 _cd = coin_dash_col.find_one({'_id': f'{symbol}:{today}'}, {'_id': 0})
-                _run = (_cd or {}).get('data') or {}
+                _run = _dashboard_real_only((_cd or {}).get('data') or {})
             else:
-                _run = runs_col.find_one(sort=[('created_at', -1)], projection={'_id': 0}) or {}
+                _run = _dashboard_real_only(runs_col.find_one(sort=[('created_at', -1)], projection={'_id': 0}) or {})
             lines = []
             if section == 'smartmoney':
                 sm = _run.get('smart_money') or {}
-                if sm and not sm.get('demo'):
-                    lines.append(f"ON-CHAIN SMART MONEY (source {sm.get('source')}): {sm.get('headline')}.")
+                if sm.get('status') == 'ready':
+                    lines.append('MEASURED ON-CHAIN OBSERVATIONS (not verified whale intent):')
                     for m in sm.get('metrics', []):
-                        lines.append(f"- {m['name']}: {m['value']} ({m['signal']}).")
+                        if m.get('status') == 'ready':
+                            lines.append(f"- {m['name']}: {m['value']} ({m['signal']}); source {m['source']}; as of {m['as_of']}.")
+                    lines.append('Coming soon metrics were excluded; do not treat them as neutral evidence.')
                 else:
-                    lines.append("The Smart Money panel is currently inactive/placeholder — say so plainly and do not invent on-chain figures.")
+                    lines.append('Smart Money: Coming soon. No usable dated on-chain reading; do not infer whales, add a neutral vote, or invent figures.')
             elif section == 'institutional':
                 inst = _run.get('institutional') or {}
-                if inst:
-                    lines.append(f"INSTITUTIONAL & DERIVATIVES (source {inst.get('source')}): {inst.get('headline')}.")
+                if inst.get('status') == 'ready':
+                    lines.append('MEASURED EXCHANGE DERIVATIVES AND ETF FLOWS (not CME positions):')
                     for m in inst.get('metrics', []):
-                        tag = ' [INACTIVE - do not interpret]' if m.get('inactive') else ''
-                        lines.append(f"- {m['name']}: {m['value']} ({m['signal']}){tag}.")
+                        if m.get('status') == 'ready':
+                            lines.append(f"- {m['name']}: {m['value']} ({m['signal']}); source {m['source']}; as of {m['as_of']}.")
+                    lines.append('Coming soon metrics were excluded; do not treat them as neutral evidence.')
                 else:
-                    lines.append("No live derivatives data is available right now — say so plainly.")
+                    lines.append('Institutional Activity: Coming soon. Do not infer or invent missing positions or a neutral vote. ETF flows are available independently when reported.')
+            elif section == 'leverage':
+                lev = get_leverage('4H')
+                lines.append('MEASURED LEVERAGE INPUTS: Missing factors have no neutral vote and cannot change a paper-trading decision.')
+                found = False
+                for label, key, field in (('Funding', 'funding', 'rate'), ('Open interest (USD)', 'open_interest', 'value_usd'),
+                                          ('OI change', 'open_interest', 'change_tf_pct'), ('Long account share', 'positioning', 'long_pct')):
+                    row = lev.get(key) or {}
+                    if row.get('status') == 'ready' and row.get(field) is not None and row.get('source') and row.get('as_of'):
+                        lines.append(f"- {label}: {row[field]}; source {row['source']}; as of {row['as_of']}.")
+                        found = True
+                    else:
+                        lines.append(f'- {label}: Coming soon; exclude this metric.')
+                if not found:
+                    lines.append('No usable dated leverage reading. Do not infer balanced positioning or a squeeze score.')
             elif section == 'events':
                 ec = _run.get('event_calendar') or {}
                 evs = ec.get('events') if isinstance(ec, dict) else (ec if isinstance(ec, list) else [])
@@ -15857,20 +16010,21 @@ async def albert_insight(request: Request, section: str = 'overview', mode: str 
                     lines.append("No graded track record is available yet.")
             elif section == 'risk':
                 rk = _run.get('risk') or {}
-                if rk:
-                    lines.append(f"RISK ENGINE: overall risk is {rk.get('level')} (score {rk.get('score')}/100). "
-                                 f"Realised volatility {rk.get('realised_vol_annual')}% annualised ({rk.get('vol_percentile')} percentile). "
-                                 f"Macro event risk: {rk.get('macro_event_risk')} — {rk.get('macro_note')}. "
-                                 f"Data uncertainty: {rk.get('data_uncertainty')}.")
-                    em = rk.get('expected_move') or {}
-                    for hz, mv in (em.items() if isinstance(em, dict) else []):
-                        if isinstance(mv, dict):
-                            lines.append(f"- Expected {hz} move ±{mv.get('pct')}% (range ${mv.get('low')}–${mv.get('high')}).")
-                    for dv in (rk.get('drivers') or []):
-                        tag = ' [INACTIVE placeholder]' if dv.get('demo') else ''
-                        lines.append(f"- Driver {dv.get('name')}: {dv.get('state')} ({dv.get('value')}){tag}.")
-                else:
-                    lines.append("No risk data is available right now.")
+                if rk.get('score') is not None:
+                    prov = (rk.get('provenance') or {}).get('level') or {}
+                    lines.append(f"MEASURED RISK: {rk.get('level')} (score {rk.get('score')}/100); source {prov.get('source')}; as of {prov.get('as_of')}.")
+                if rk.get('realised_vol_annual') is not None:
+                    prov = (rk.get('provenance') or {}).get('realised_vol_annual') or {}
+                    lines.append(f"- ATR-derived volatility {rk['realised_vol_annual']}% annualised; source {prov.get('source')}; as of {prov.get('as_of')}.")
+                em = rk.get('expected_move') or {}
+                for hz, mv in (em.items() if isinstance(em, dict) else []):
+                    if isinstance(mv, dict):
+                        prov = (rk.get('provenance') or {}).get('expected_move') or {}
+                        lines.append(f"- ATR-derived {hz} range ±{mv.get('pct')}%; source {prov.get('source')}; as of {prov.get('as_of')}.")
+                for dv in rk.get('drivers') or []:
+                    if dv.get('state') != 'Coming soon' and dv.get('value') is not None and dv.get('source') and dv.get('as_of'):
+                        lines.append(f"- {dv.get('name')}: {dv.get('state')} ({dv.get('value')}); source {dv.get('source')}; as of {dv.get('as_of')}.")
+                lines.append('All remaining risk metrics: Coming soon; exclude them from Albert scoring, comparisons and paper trades.')
             if lines:
                 ctx = ctx + f"\n\n===== SECTION-SPECIFIC DATA ({section}) — BASE YOUR ANSWER ON THIS =====\n" + "\n".join(lines) + "\n===== END SECTION DATA ====="
         if mode == 'technical':
@@ -16023,50 +16177,73 @@ def _coin_brief_context(symbol):
 
 
 def _brief_context():
-    run = runs_col.find_one(sort=[('created_at', -1)], projection={'_id': 0}) or {}
+    run = _dashboard_real_only(runs_col.find_one(sort=[('created_at', -1)], projection={'_id': 0}) or {})
     L = []
     dec = run.get('decision') or {}
-    if dec:
-        L.append(f"DECISION: {dec.get('label') or dec.get('stance')} (confidence {dec.get('confidence')}). {dec.get('summary') or ''}".strip())
+    if dec.get('realOnlyVersion') == 1 and dec.get('overall_score') is not None:
+        L.append(f"DECISION: {dec.get('label')} · {dec.get('overall_score')}/100 ({dec.get('status')}). {dec.get('summary') or ''}")
+    else:
+        L.append('DECISION: Coming soon; previous neutral defaults are excluded.')
     rk = run.get('risk') or {}
-    if rk:
-        L.append(f"RISK: {rk.get('level')} (score {rk.get('score')}/100), realised vol {rk.get('realised_vol_annual')}% ann.")
+    if rk.get('score') is not None and (rk.get('provenance') or {}).get('level', {}).get('as_of'):
+        L.append(f"RISK: {rk.get('level')} · {rk.get('score')}/100; as of {rk['provenance']['level']['as_of']}.")
+    else:
+        L.append('RISK: Coming soon; missing factors do not count as neutral evidence.')
     try:
         imp = compute_whale_impact()
-        L.append(f"WHALES: 30d net flow {imp.get('net_flow_30d')} BTC -> {imp.get('trend')} (holders {round(imp.get('holder_balance') or 0):,} BTC, exchanges {round(imp.get('exchange_balance') or 0):,} BTC).")
+        if imp.get('contributors') and _metric_recent(imp.get('as_of'), 72):
+            L.append(f"TRACKED WALLETS: 30d labeled-address change {imp.get('net_flow_30d')} BTC; source {imp.get('source')}; as of {imp.get('as_of')}. This does not prove whale intent.")
+        else:
+            L.append('TRACKED WALLETS: Coming soon; no usable dated wallet changes, no neutral vote.')
     except Exception:  # noqa
         pass
     try:
         xf = _misc_get('exchange_flows', 6 * 3600, compute_exchange_flows)
-        if xf:
-            L.append(f"EXCHANGE FLOW: {xf.get('trend')}; 30d {xf.get('net_30d')} BTC.")
+        if xf and xf.get('net_30d') is not None and _metric_recent(xf.get('as_of'), 72):
+            L.append(f"EXCHANGE FLOW: 30d {xf['net_30d']} BTC; source {xf.get('source')}; as of {xf['as_of']}.")
+        else:
+            L.append('EXCHANGE FLOW: Coming soon; no neutral vote.')
     except Exception:  # noqa
         pass
     try:
         es = etf_summary()
-        if es and es.get('net_1d') is not None:
-            L.append(f"ETF FLOWS: {es['net_1d']:+.0f} $M last day, {es.get('net_7d'):+.0f} $M last 7d.")
+        if es and es.get('net_1d') is not None and _metric_recent(es.get('latest_date'), 96):
+            L.append(f"ETF FLOW: 1d {es['net_1d']:+.0f} $M; source {es.get('source')}; reported date {es['latest_date']}.")
+            if es.get('net_7d') is not None:
+                L.append(f"ETF FLOW: 7 reported sessions {es['net_7d']:+.0f} $M; source {es.get('source')}; as of {es['latest_date']}.")
         else:
-            L.append("ETF FLOWS: no ETF data available.")
+            L.append('ETF FLOW: Coming soon; missing report is not a zero or neutral flow.')
     except Exception:  # noqa
         pass
     try:
         lev = get_leverage('4H')
-        if lev:
-            s = lev.get('summary', {})
-            L.append(f"LEVERAGE: pressure {s.get('pressure')}, bias {s.get('bias')}, {s.get('squeeze')}; long {lev.get('positioning', {}).get('long_pct')}% / short {lev.get('positioning', {}).get('short_pct')}%.")
+        entries = []
+        for label, metric, field in (('Funding', lev.get('funding') or {}, 'rate'),
+                                     ('Open interest', lev.get('open_interest') or {}, 'change_tf_pct'),
+                                     ('Positioning', lev.get('positioning') or {}, 'long_pct')):
+            if metric.get('status') == 'ready' and metric.get(field) is not None and metric.get('source') and metric.get('as_of'):
+                entries.append(f"{label}: {metric[field]}{'%' if label != 'Positioning' else '% long accounts'}; source {metric['source']}; as of {metric['as_of']}")
+        L.append('LEVERAGE: ' + ('; '.join(entries) if entries else 'Coming soon; no neutral vote.'))
     except Exception:  # noqa
         pass
     try:
         fg = _misc_get('fear_greed', 30 * 60, compute_fear_greed)
-        if fg:
-            L.append(f"SENTIMENT: Fear & Greed {fg.get('value')} ({fg.get('label')}).")
+        fg_as_of = _observation_time(fg.get('ts') or fg.get('as_of')) if fg else None
+        if fg and fg.get('value') is not None and _metric_recent(fg_as_of, 48):
+            L.append(f"SENTIMENT: Fear & Greed {fg['value']} ({fg.get('label')}); source Alternative.me; as of {fg_as_of}.")
+        else:
+            L.append('SENTIMENT: Coming soon; no neutral vote.')
     except Exception:  # noqa
         pass
     try:
         nh = _misc_get('network_health', 10 * 60, compute_network_health)
         if nh:
-            L.append(f"NETWORK: fees {nh.get('fees', {}).get('state')} (~{nh.get('fees', {}).get('fastest')} sat/vB), mempool {nh.get('mempool', {}).get('congestion')}, hashrate ~{nh.get('hashrate_ehs')} EH/s.")
+            dated = []
+            if nh.get('hashrate_ehs') is not None and _metric_recent(nh.get('as_of'), 72):
+                dated.append(f"hashrate {nh['hashrate_ehs']} EH/s (mempool.space; as of {nh['as_of']})")
+            if nh.get('fees', {}).get('fastest') is not None and nh.get('as_of'):
+                dated.append(f"fast fee {nh['fees']['fastest']} sat/vB (mempool.space; read at {nh['as_of']})")
+            L.append('NETWORK: ' + ('; '.join(dated) if dated else 'Coming soon; no neutral vote.'))
     except Exception:  # noqa
         pass
     return "\n".join(L), run.get('as_of')
@@ -18450,7 +18627,8 @@ def compute_coin_dashboard(symbol):
     except Exception:  # noqa
         traceback.print_exc()
     try:
-        risk = compute_risk_engine(quant, chart, decision, None, None, last_close, feats)
+        risk = compute_risk_engine(quant, chart, decision, None, None, last_close, feats,
+                                   observed_at=_observation_time(live_row['timestamp'].iloc[0].isoformat()))
     except Exception:  # noqa
         traceback.print_exc()
     try:
