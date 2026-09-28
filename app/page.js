@@ -3739,7 +3739,7 @@ export default function DashboardPage() {
 
           <main className={`mx-auto ${active === 'home' || active.startsWith('dashboard-') ? 'max-w-[1920px] px-3 py-3 md:px-4' : 'max-w-6xl px-4 py-6 md:px-8'}`}><ErrorBoundary label={activeSection?.label || DASHBOARD_AREAS[active.slice('dashboard-'.length)]?.title || active} resetKey={active}>{renderSection()}</ErrorBoundary></main>
           <footer className="space-y-2 px-4 pb-8 text-center md:px-8">
-            <div className="flex justify-center"><PublishStamp publishedAt={d?.created_at} /></div>
+            <div className="flex justify-center"><PublishStamp publishedAt={process.env.NEXT_PUBLIC_PREVIEW_MODE === 'true' ? new Date().toISOString() : d?.created_at} /></div>
           </footer>
         </div>
       </div>
