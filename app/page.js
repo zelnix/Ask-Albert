@@ -3672,7 +3672,7 @@ export default function DashboardPage() {
           {/* One global header: a shared menu on Home and every detail screen. */}
           <header className="sticky top-0 z-30 flex min-w-0 flex-wrap items-center gap-2 border-b border-slate-800 bg-slate-950/95 px-3 py-2 md:px-4">
             <a href="/?section=home" onClick={(e) => { e.preventDefault(); navigate('home'); }} aria-label="Ask Albert Home" className="flex shrink-0 items-center gap-1 rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400">
-              <img src="/ask-albert-logo.png" alt="" className="h-9 w-auto max-w-[90px] object-contain" /><span className="hidden text-xs font-bold text-amber-300 sm:inline">Ask Albert</span>
+              <img src="/ask-albert-logo.png" alt="Ask Albert" className="h-14 w-auto max-w-[135px] object-contain" />
             </a>
             {/* published stamp moved to footer only */}
             {active === 'home' ? <HomeTicker d={data} ticker={ticker} snapshot={oneScreen} dashboardStatus={status} onNav={navigate} /> : <div className="flex min-w-0 flex-1 items-center gap-2">
