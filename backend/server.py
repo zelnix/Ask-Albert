@@ -2175,7 +2175,7 @@ def _bdata_series(metric, key, days=30):
         out = []
         for x in js:
             v = x.get(key)
-            stamp = x.get('date') or x.get('timestamp') or x.get('t')
+            stamp = x.get('d') or x.get('date') or x.get('timestamp') or x.get('t')
             if v is not None and stamp:
                 try:
                     out.append({'value': float(v), 'as_of': _observation_time(stamp)})
@@ -2228,8 +2228,8 @@ def _fng_series(days=30):
 def build_smart_money_engine(gn_series=None):
     metrics = []
 
-    def add(name, value, s, inactive=False, spark=None, source=None, as_of=None):
-        valid = not inactive and value is not None and source and _metric_recent(as_of)
+    def add(name, value, s, inactive=False, spark=None, source=None, as_of=None, max_hours=96):
+        valid = not inactive and value is not None and source and _metric_recent(as_of, max_hours=max_hours)
         m = {'name': name, 'value': value if valid else None,
              'signal': s if valid else None, 'source': source if valid else None,
              'as_of': as_of if valid else None, 'status': 'ready' if valid else 'coming_soon'}
@@ -2239,9 +2239,36 @@ def build_smart_money_engine(gn_series=None):
             m['spark'] = spark
         metrics.append(m)
 
-    # Publication rights for BGeometrics' free tier are not established for a
-    # public production dashboard. MVRV and SOPR remain Coming soon; do not
-    # fetch them or count them as neutral evidence.
+    # --- BGeometrics on-chain: MVRV Z-score and SOPR (free tier, ~7-day delay) ---
+    # Uses /last endpoint (1 req each) for the latest value.  If the series
+    # endpoint succeeds too, a 30-day sparkline is included as a bonus.
+    # Rate limit: 10 req/hour on the free tier – the 2h onchain TTL keeps us
+    # well within budget (≈2 requests per refresh cycle).
+    for _bg_metric, _bg_key, _bg_name, _bg_fmt, _bg_thresh in (
+        ('mvrv-zscore', 'mvrvZscore', 'MVRV Z-score', '.2f',
+         lambda v: 'Bullish' if v < 0 else 'Bearish' if v > 6 else 'Neutral'),
+        ('sopr', 'sopr', 'SOPR', '.3f',
+         lambda v: 'Bullish' if v < 0.98 else 'Bearish' if v > 1.03 else 'Neutral'),
+    ):
+        try:
+            _bg_last = _bdata_last(_bg_metric)
+            if isinstance(_bg_last, dict) and _bg_last.get(_bg_key) is not None:
+                _bg_val = float(_bg_last[_bg_key])
+                _bg_date = _observation_time(_bg_last.get('d') or _bg_last.get('unixTs'))
+                # Attempt sparkline from series endpoint (may fail under rate limit)
+                _bg_spark = None
+                try:
+                    _bg_series = _bdata_series(_bg_metric, _bg_key, 30)
+                    if _bg_series and len(_bg_series) >= 2:
+                        _bg_spark = _spark([p['value'] for p in _bg_series])
+                except Exception:
+                    pass
+                add(_bg_name, f'{_bg_val:{_bg_fmt}}', _bg_thresh(_bg_val),
+                    spark=_bg_spark,
+                    source=f'BGeometrics · {_bg_name}', as_of=_bg_date, max_hours=240)
+        except Exception:
+            pass
+
     aa = _bc_chart('n-unique-addresses', '30days')
     if aa and len(aa) >= 2:
         try:
@@ -2432,9 +2459,9 @@ def _panel_real_only(panel, kind):
     rows = []
     for name in names:
         metric = by_name.get(name) or {}
-        hours = 96 if name.startswith(('MVRV', 'SOPR', 'Exchange balance', 'Accumulation', 'Long-term holder', 'Spot ETF')) else 48 if name.startswith(('Active addresses', 'Fear & Greed')) else 36 if name.startswith(('Long/short', 'Taker')) else 12 if name == 'Funding rate' else 3
+        hours = 240 if name.startswith(('MVRV', 'SOPR')) else 96 if name.startswith(('Exchange balance', 'Accumulation', 'Long-term holder', 'Spot ETF')) else 48 if name.startswith(('Active addresses', 'Fear & Greed')) else 36 if name.startswith(('Long/short', 'Taker')) else 12 if name == 'Funding rate' else 3
         valid = (not metric.get('demo') and not metric.get('inactive') and metric.get('value') not in (None, '', 'No data available')
-                 and bool(metric.get('source')) and not any(provider in str(metric.get('source', '')).lower() for provider in ('glassnode', 'bgeometrics', 'bitcoin-data.com'))
+                 and bool(metric.get('source')) and not any(provider in str(metric.get('source', '')).lower() for provider in ('glassnode',))
                  and _metric_recent(metric.get('as_of'), hours))
         rows.append({**metric, 'name': name, 'value': metric.get('value') if valid else None,
                      'signal': metric.get('signal') if valid else None,
@@ -4396,8 +4423,8 @@ def compute_data_health(source, crossmarket, policy, dominance, news_doc, core_i
         'Daily US spot BTC ETF net flows. Publishes only on US market days — weekend/holiday gaps are expected.',
         core=False)
     oc_iso, oc_ok = _feed_iso(onchain_col, 'btc')
-    add('onchain', 'On-Chain (MVRV / SOPR / holder proxies)', 'Glassnode / keyless', oc_ok, oc_iso, 1440,
-        'On-chain cost-basis and holder-behaviour metrics; refreshed daily.', core=False)
+    add('onchain', 'On-Chain (MVRV / SOPR / holder proxies)', 'BGeometrics / Blockchain.com', oc_ok, oc_iso, 1440,
+        'On-chain cost-basis and holder-behaviour metrics; MVRV Z-score and SOPR from BGeometrics (free tier, ~7-day delay).', core=False)
     lev_iso, lev_ok = _feed_iso(lev_col, 'BTC:4H')
     add('leverage', 'Derivatives & Leverage (OI / funding)', 'OKX', lev_ok, lev_iso, 720,
         'Open interest, funding and long/short positioning from OKX (4H).', core=False)
