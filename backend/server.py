@@ -7285,14 +7285,49 @@ from albert import market_adapter as _verified_market  # noqa: E402
 
 
 def _simulation_cg_get(path, params):
-    """Reuse the app's existing public CoinGecko endpoint/client; never place orders."""
+    """Reuse the app's existing public CoinGecko endpoint/client; never place orders.
+    Returns detailed failure info instead of bare None when possible."""
     if path == '/coins/markets':
         url = COINGECKO_MARKETS_URL
     elif path.startswith('/coins/') and path.endswith('/market_chart'):
         url = COINGECKO_MARKETS_URL.rsplit('/coins/markets', 1)[0] + path
     else:
         raise ValueError('Unsupported public market-data path')
-    return _engine_get(url, params=params)
+    try:
+        r = requests.get(url, params=params or {}, timeout=15)
+        if r.status_code == 200:
+            return r.json()
+        if r.status_code == 429:
+            retry_after = r.headers.get('Retry-After')
+            raise _verified_market.MarketUnavailable(
+                'COINGECKO_RATE_LIMITED',
+                f'HTTP 429 from CoinGecko; Retry-After={retry_after}',
+                provider_failures=[{'provider': 'coingecko', 'code': 'HTTP_429',
+                                    'detail': f'status=429 retry_after={retry_after}',
+                                    'ts': _time_mod.time(), 'http_status': 429}])
+        raise _verified_market.MarketUnavailable(
+            'COINGECKO_HTTP_ERROR',
+            f'HTTP {r.status_code} from CoinGecko',
+            provider_failures=[{'provider': 'coingecko', 'code': f'HTTP_{r.status_code}',
+                                'detail': f'status={r.status_code}',
+                                'ts': _time_mod.time(), 'http_status': r.status_code}])
+    except _verified_market.MarketUnavailable:
+        raise
+    except requests.exceptions.Timeout as exc:
+        raise _verified_market.MarketUnavailable(
+            'COINGECKO_TIMEOUT', f'Request timed out: {exc}',
+            provider_failures=[{'provider': 'coingecko', 'code': 'TIMEOUT',
+                                'detail': str(exc), 'ts': _time_mod.time()}]) from exc
+    except requests.exceptions.ConnectionError as exc:
+        raise _verified_market.MarketUnavailable(
+            'COINGECKO_CONNECTION_ERROR', f'Connection failed: {exc}',
+            provider_failures=[{'provider': 'coingecko', 'code': 'CONNECTION_ERROR',
+                                'detail': str(exc), 'ts': _time_mod.time()}]) from exc
+    except Exception as exc:
+        raise _verified_market.MarketUnavailable(
+            'COINGECKO_REQUEST_FAILED', f'{type(exc).__name__}: {exc}',
+            provider_failures=[{'provider': 'coingecko', 'code': type(exc).__name__,
+                                'detail': str(exc), 'ts': _time_mod.time()}]) from exc
 
 
 _verified_market.configure_coingecko(_simulation_cg_get)
@@ -7484,7 +7519,7 @@ def _market_observation(sym):
     ts = data.get('ts')             # timestamp of a successful public quote fetch
     src = data.get('source') or 'ticker'
     frozen = _asset_caps.candidate(sym)
-    identity_bound = bool(frozen and src == 'coingecko' and data.get('assetId') == frozen['id'])
+    identity_bound = bool(frozen and data.get('assetId') == frozen['id'])
     fresh = bool(price is not None and price > 0 and identity_bound and
                  data.get('execution', {}).get('simulationReady') and
                  float(data.get('retrievalAgeSec') or 0) < 60)
@@ -7872,9 +7907,10 @@ def _studio_rule_check(strat, sym, side, px, acct, obs=None):
     peak = (acct.get('strategyRulePeaks') or {}).get((lot or {}).get('lotId'))
     result = _strategy_rules.evaluate(rules, side, sym, px, history=history, lot=lot, peak=peak,
                                       change_pct_24h=(obs or {}).get('changePct24h'))
-    result['dataSource'] = {'price': 'coingecko-id-bound',
+    result['dataSource'] = {'price': (obs or {}).get('source') or (obs or {}).get('provider') or 'market-adapter',
                             'changePct24h': (obs or {}).get('obsId') if (obs or {}).get('changePct24h') is not None else None,
                             'indicator': history.get('assetId') if history else None,
+                            'provider': history.get('provider') if history else None,
                             'closedAt': history.get('latestClosedTs') if history else None}
     return result
 
@@ -11641,6 +11677,14 @@ ASK_ALBERT_SYSTEM = (
     "capability registry: four implemented routes are required. Unsupported means no paper BUY; wallet restrictions "
     "are not implementation gaps, and a temporary data outage means WAIT. Never substitute coins or weights. "
     "Never claim a workflow is verified without an approved end-to-end check.\n"
+    "5a. DATA SOURCE FAILURES: when a decision includes scoringFailure or providerBlocker context, explain the "
+    "ACTUAL cause accurately. Distinguish: (a) a specific provider request failing, (b) the app delaying a retry, "
+    "(c) one asset lacking history while another asset's data is fine, (d) a fallback provider supplying data "
+    "successfully. If a fallback recovered, say so (e.g. 'CoinGecko did not respond, so the engine is using Kraken "
+    "for this reading'). Do NOT say 'outage verified' merely because a decision snapshot has a timestamp. Do NOT "
+    "promise restoration at the next engine run. A score of zero from a data failure is NOT a measured assessment — "
+    "state that Albert is waiting for data, not that the opportunity is zero. A regime of RANGE from missing data "
+    "is a default fallback, not an observed market condition.\n"
     "6. SCENARIO RANGES: if the context contains a scenario band, it is a HISTORICAL SCENARIO RANGE from "
     "comparable past conditions — never a forecast, prediction, expectation or target. Quote it as \"comparable "
     "past conditions produced X% to Y% over N days\" and always name the horizon. NEVER present the median or "
@@ -11705,11 +11749,24 @@ def _engine_code_public_meta(review):
 
 
 def _engine_code_safe_reply(text, review):
-    """Defense in depth: source is internal, never a user-facing code/diff response."""
+    """Defense in depth: source is internal, never a user-facing code/diff response.
+    Convert ordinary status codes in backticks to readable descriptions instead of
+    replacing them with [internal code withheld]."""
     if not review or not review.get('available'):
         return text
     safe = re.sub(r'```[\s\S]*?```', '[source excerpt withheld]', text or '')
-    safe = re.sub(r'`[^`\n]{1,240}`', '[internal code withheld]', safe)
+    # Only redact backtick spans that look like actual code (contain dots, slashes,
+    # underscores in a code-like pattern, or are longer than 60 chars) rather than
+    # ordinary status labels like `WAIT` or `RANGE` or `STALE_DATA`.
+    def _backtick_replace(m):
+        content = m.group(0)[1:-1]  # strip backticks
+        # Keep short status-like labels readable.
+        if len(content) <= 60 and re.match(r'^[A-Z_]+$', content):
+            return content  # e.g. WAIT, RANGE, STALE_DATA -> plain text
+        if len(content) <= 60 and not any(c in content for c in './()\n'):
+            return content  # ordinary label, not code
+        return '[source excerpt withheld]'
+    safe = re.sub(r'`[^`\n]{1,240}`', _backtick_replace, safe)
     safe = re.sub(r'(?m)^\s*(?:def\s+\w+\(|class\s+\w+|from\s+albert\.|import\s+\w+|'
                   r'@app\.|[+-]{3}\s+[ab]/|[+-]\s*(?:def|class|return)\s).*$',
                   '[source excerpt withheld]', safe)
@@ -11829,9 +11886,16 @@ def _ask_read_current_decisions(pid, sop):
                 'asset', 'symbol', 'call', 'action', 'reasonCode', 'opportunityScore', 'score',
                 'confidence', 'regime', 'eligible', 'currentPrice', 'invalidation',
                 'decisionSnapshotId') if k in dsn}
+            # Carry through scoring failure context so Albert can explain the actual cause.
+            if dsn.get('scoringFailure'):
+                row['scoringFailure'] = dsn['scoringFailure']
+            if dsn.get('ineligibilityReason'):
+                row['ineligibilityReason'] = dsn['ineligibilityReason']
             support = _studio_capability_row(dsn.get('symbol') or dsn.get('asset'), mandate)
             row['paperSupport'] = {'state': support['supportState'], 'implemented': support['paperSupported'],
                                    'verified': support['paperSupportVerified'], 'reason': support['reason']}
+            if support.get('lastProviderBlocker'):
+                row['providerBlocker'] = support['lastProviderBlocker']
             if not support['startEligible'] and (row.get('action') == 'BUY' or row.get('call') == 'BUY'):
                 row['action'] = row['call'] = 'WAIT'  # never recommend unsupported paper entry
                 row['eligible'] = False
@@ -12196,6 +12260,27 @@ def _studio_canonical(draft):
     if 'startingCash' in draft:
         cash = _strategy_rules.decimal(draft.get('startingCash'))
         contract['startingCash'] = str(cash) if cash is not None else None
+    # Preserve proposal metadata and extended fields.
+    if draft.get('currency'):
+        contract['currency'] = str(draft['currency']).strip().upper()[:10]
+    if draft.get('horizonDays'):
+        try:
+            contract['horizonDays'] = int(draft['horizonDays'])
+        except (ValueError, TypeError):
+            pass
+    if draft.get('objective'):
+        contract['objective'] = str(draft['objective']).strip()[:2000]
+    if draft.get('protectedReserve'):
+        contract['protectedReserve'] = str(draft['protectedReserve']).strip()[:100]
+    if draft.get('proposalId'):
+        contract['proposalId'] = str(draft['proposalId']).strip()[:60]
+    if draft.get('proposalRevision'):
+        try:
+            contract['proposalRevision'] = int(draft['proposalRevision'])
+        except (ValueError, TypeError):
+            pass
+    if draft.get('unresolvedInstructions'):
+        contract['unresolvedInstructions'] = [str(u).strip()[:500] for u in draft['unresolvedInstructions'][:10]]
     return contract
 
 
@@ -12270,15 +12355,24 @@ def _studio_public(doc):
             'backtestRunId', 'backtestVersion')} | {'lifecycleState': doc.get('status'), 'paperOnly': True}
 
 
-def _studio_idem(pid, key, result=None):
-    """Idempotency: first writer stores; replays return the stored result (one effect)."""
+def _studio_idem(pid, key, result=None, expected_hash=None):
+    """Idempotency: first writer stores; replays return the stored result (one effect).
+    When expected_hash is provided, a replay with different content returns conflict."""
     _id = f'{pid}:{key}'
     if result is None:
         row = studio_idem_col.find_one({'_id': _id})
-        return row.get('result') if row else None
-    studio_idem_col.update_one({'_id': _id}, {'$setOnInsert': {'_id': _id, 'result': result,
-                               'at': datetime.datetime.utcnow().isoformat()}}, upsert=True)
-    return studio_idem_col.find_one({'_id': _id}).get('result')
+        if row:
+            if expected_hash and row.get('hash') and row['hash'] != expected_hash:
+                return {'_conflict': True, 'detail': 'A different strategy was saved with this operation key.'}
+            return row.get('result')
+        return None
+    doc = {'_id': _id, 'result': result, 'hash': expected_hash or '',
+           'at': datetime.datetime.utcnow().isoformat()}
+    studio_idem_col.update_one({'_id': _id}, {'$setOnInsert': doc}, upsert=True)
+    stored = studio_idem_col.find_one({'_id': _id})
+    if stored and expected_hash and stored.get('hash') and stored['hash'] != expected_hash:
+        return {'_conflict': True, 'detail': 'Concurrent save conflict.'}
+    return stored.get('result')
 
 
 def _studio_get(sid, pid):
@@ -12570,8 +12664,10 @@ def studio_save(payload: dict = Body(...), user: dict = Depends(get_current_user
     idem = str(body.get('idempotencyKey') or '').strip()
     if not idem:
         raise HTTPException(status_code=422, detail='idempotencyKey is required.')
-    prior = _studio_idem(pid, 'save:' + idem)
+    prior = _studio_idem(pid, 'save:' + idem, expected_hash=body.get('expectedHash'))
     if prior is not None:
+        if isinstance(prior, dict) and prior.get('_conflict'):
+            raise HTTPException(status_code=409, detail=prior['detail'])
         return prior
     draft = body.get('draft') or body.get('contract') or {}
     c, chash, errors = _studio_validate(draft, pid)
@@ -12637,7 +12733,7 @@ def studio_save(payload: dict = Body(...), user: dict = Depends(get_current_user
         paper_accounts_col.update_one({'paperAccountId': acct['paperAccountId'], 'ownerId': pid},
                                       {'$set': {'strategyVersion': version, 'strategyContractHash': chash}})
     result = {'status': 'ready', **_studio_public(doc)}
-    return _studio_idem(pid, 'save:' + idem, result)
+    return _studio_idem(pid, 'save:' + idem, result, expected_hash=chash)
 
 
 @app.get('/api/v1/albert/studio/strategies')
@@ -14972,6 +15068,32 @@ def albert_chat_delete(payload: dict = Body(...), user: dict = Depends(get_curre
     return {'status': 'ready', 'deleted': tid}
 
 
+@app.post('/api/v1/chat/prepare-proposal')
+def chat_prepare_proposal(payload: dict = Body(...), user: dict = Depends(get_current_user)):
+    """Extract a structured strategy proposal from the current chat conversation.
+    Used when the user wants to review/save a strategy discussed in prose."""
+    pid = owner_pid(user)
+    session_id = (str(payload.get('session_id') or '')).strip()[:80]
+    if not pid:
+        return JSONResponse(status_code=401, content={'error': 'Not authenticated'})
+    # Load recent conversation messages to build context.
+    try:
+        from config import albert_chat_col
+        thread = albert_chat_col.find_one({'pid': pid}, sort=[('updatedAt', -1)])
+        messages = (thread or {}).get('messages', []) if thread else []
+    except Exception:
+        messages = []
+    # Build a strategy goal from the last few user messages.
+    user_msgs = [m.get('text', '') for m in messages[-10:] if m.get('role') == 'user' and m.get('text')]
+    goal = '\n'.join(user_msgs[-3:]) if user_msgs else ''
+    if not goal.strip():
+        return {'error': 'No conversation found to extract a strategy from.', 'basket_draft': None}
+    draft = _build_basket_draft(goal)
+    if draft.get('error'):
+        return {'error': draft['error'], 'basket_draft': None}
+    return {'basket_draft': draft, 'error': None}
+
+
 
 
 
@@ -16791,20 +16913,18 @@ def _normalize_basket_draft(raw):
 
 
 def _fallback_basket_draft(goal=''):
-    raw = {'title': 'Majors Momentum Basket',
-           'thesis': 'Equal-weight long on the large-cap majors with disciplined stops — ride broad market strength.',
-           'horizon_days': 30, 'legs': []}
-    for s in ['BTC', 'ETH', 'SOL']:
-        spot = _spot_price(s) or 0
-        raw['legs'].append({'symbol': s, 'position': 'long', 'weight_pct': round(100 / 3, 2),
-                            'targets': [{'price': round(spot * 1.1, 2), 'label': 'TP1', 'pct_of_position': 100}],
-                            'stop': {'price': round(spot * 0.9, 2)}})
-    return _normalize_basket_draft(raw)
+    """DEPRECATED: No longer used. Generic baskets are not created as fallback.
+    Kept for backward compatibility with any existing callers."""
+    return {'error': 'Strategy generation failed — no generic fallback.',
+            'title': '', 'thesis': '', 'horizon_days': 30, 'legs': []}
 
 
 def _build_basket_draft(goal=''):
+    """Build a structured proposal from a goal using Gemini. Returns error on failure
+    instead of a generic BTC/ETH/SOL fallback."""
     if not (LLM_READY_KEY and _HAS_LLM):
-        return _fallback_basket_draft(goal)
+        return {'error': 'LLM is not configured. Please describe the strategy more specifically.',
+                'title': '', 'thesis': '', 'horizon_days': 30, 'legs': []}
     ctx = build_chat_context('BTC')
     prices = [f"{s}=${_spot_price(s):,.2f}" for s in BASKET_UNIVERSE if _spot_price(s)]
     umsg = ((f"User's goal/constraints: {goal}\n" if goal else '')
@@ -16823,10 +16943,17 @@ def _build_basket_draft(goal=''):
         text = (reply if isinstance(reply, str) else (getattr(reply, 'content', None) or getattr(reply, 'text', None) or '')).strip()
         s, e = text.find('{'), text.rfind('}')
         draft = _normalize_basket_draft(json.loads(text[s:e + 1]))
-        return draft if draft.get('legs') else _fallback_basket_draft(goal)
+        if not draft.get('legs'):
+            return {'error': 'Could not extract strategy assets from the conversation. Ask Albert to specify the coins, allocations and rules.',
+                    'title': '', 'thesis': '', 'horizon_days': 30, 'legs': []}
+        # Attach proposal metadata.
+        draft['proposalId'] = f'prop_{uuid.uuid4().hex[:12]}'
+        draft['revision'] = 1
+        return draft
     except Exception:  # noqa
         traceback.print_exc()
-        return _fallback_basket_draft(goal)
+        return {'error': 'Strategy generation failed. Please try again or be more specific about assets and allocations.',
+                'title': '', 'thesis': '', 'horizon_days': 30, 'legs': []}
 
 
 _BASKET_BUILD_VERBS = ('build', 'make', 'create', 'draft', 'design', 'construct',
@@ -17501,6 +17628,8 @@ def _daily_ohlcv(symbol, limit=720):
             df.attrs['coverage'] = result['coverage']
             df.attrs['volumeUnit'] = result.get('volumeUnit', 'BASE')
             df.attrs['priceType'] = result.get('priceType', 'OHLCV')
+            df.attrs['provider'] = result.get('provider', 'unknown')
+            df.attrs['assetId'] = result.get('assetId')
             _OHLCV_CACHE[sym] = (now, df)
             _SCORING_FAILURES.pop(sym, None)
             return df

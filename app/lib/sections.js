@@ -125,8 +125,32 @@ const TECH_GROUPS = [
 
 const PRIMARY_IDS = PRIMARY_NAV.map(s => s.id);
 
-// Sections that are Bitcoin-specific and hidden from the nav when an altcoin is selected.
-const BTC_ONLY_SECTIONS = ['smartmoney', 'whales', 'etf', 'macro', 'events', 'timemachine', 'leverage', 'network', 'dataaudit', 'admin', 'drivers', 'scenarios', 'scenario-evaluation', 'opportunities'];
+// Screen-scope metadata: which screens have a fixed asset scope vs local selector.
+// This is informational — it does NOT hide screens from navigation.
+const SCREEN_SCOPE = {
+  'scenarios': 'BTC',        // BTC scenarios only (for now)
+  'scenario-evaluation': 'BTC',
+  'smartmoney': 'BTC',
+  'whales': 'BTC',
+  'etf': 'BTC',
+  'leverage': 'BTC',
+  'network': 'BTC',
+  'timemachine': 'BTC',
+  'drivers': 'BTC',
+  'macro': 'market',
+  'events': 'market',
+  'dataaudit': 'market',
+  'admin': 'system',
+  'checkup': 'system',
+  'settings': 'system',
+  'paper': 'portfolio',
+  'paperengine': 'portfolio',
+  'strategies': 'portfolio',
+  'ask': 'context',
+  'opportunities': 'multi-asset',
+};
+// Kept for backward compatibility but no longer used to hide sections.
+const BTC_ONLY_SECTIONS = [];
 // Sections removed from the app entirely (superseded by the global coin picker).
 const REMOVED_SECTIONS = ['compare'];
 

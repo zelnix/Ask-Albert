@@ -1,105 +1,109 @@
 'use client';
 
 import React from 'react';
-import { Volume2, VolumeX, ExternalLink, BellPlus, Check, Loader2, Crosshair } from 'lucide-react';
-import { API_BASE } from '../lib/api';
-import { speakAlbert, stopAlbert } from '../lib/albertVoice';
+import { Button } from '@/components/ui/button';
+import { Bookmark, ArrowRight, ExternalLink, Clock, ShieldCheck } from 'lucide-react';
+import { API_BASE, getPid } from '../lib/api';
 
-// Detect whether Albert's answer contains an actionable directional call worth
-// turning into a tracked strategy (buy/sell/long/short/accumulate + a level).
-function hasDirectionalCall(text) {
-  const t = String(text || '').toLowerCase();
-  const dir = /\b(buy|sell|long|short|accumulate|take profit|add here|entry|enter|target|stop[- ]?loss|invalidat|breakout|breakdown)\b/.test(t);
-  const hasLevel = /\$\s?\d/.test(t);
-  return dir && hasLevel;
-}
+/**
+ * AlbertReplyMeta — Action buttons beneath an Albert reply.
+ * Only shows "Review & save strategy" when the reply has a structured proposal (basket_draft).
+ * Text-only replies get "Prepare strategy for review" which asks the backend to extract a proposal.
+ */
+export default function AlbertReplyMeta({ msg, onNav, sessionId }) {
+  const [preparing, setPreparing] = React.useState(false);
+  const [prepError, setPrepError] = React.useState(null);
+  const [savedLink, setSavedLink] = React.useState(msg?._savedStrategyId || null);
 
-// Pull dollar levels Albert mentions (e.g. "$74,000", "$77411") so we can offer
-// one-tap price alerts for them.
-function extractLevels(text) {
-  const out = [];
-  const seen = new Set();
-  const re = /\$\s?(\d{1,3}(?:,\d{3})+|\d{4,7})(?:\.\d+)?/g;
-  let m;
-  while ((m = re.exec(text)) !== null) {
-    const n = Number(m[1].replace(/,/g, ''));
-    if (n >= 100 && !seen.has(n)) { seen.add(n); out.push(n); }
-  }
-  return out.slice(0, 5);
-}
+  // When the reply has a structured proposal, offer direct review.
+  const hasProposal = msg?.basket_draft && Array.isArray(msg.basket_draft.legs) && msg.basket_draft.legs.length > 0;
 
-export default function AlbertReplyMeta({ text, sources = [], symbol = 'BTC', pid = '' }) {
-  const [speaking, setSpeaking] = React.useState(false);
-  const [warming, setWarming] = React.useState(false);
-  const [alerted, setAlerted] = React.useState({});
-  const levels = React.useMemo(() => extractLevels(text || ''), [text]);
-  const showStrategy = React.useMemo(() => hasDirectionalCall(text || ''), [text]);
+  // Detect strategy-like discussion (mentions portfolio, allocation, position) but NO structured data.
+  const text = (msg?.text || '').toLowerCase();
+  const hasStrategyDiscussion = !hasProposal && (
+    /\b(portfolio|allocation|position|strategy|basket|rebalance)\b/.test(text) &&
+    /\b(buy|sell|long|short|hold|weight|allocat)\b/.test(text)
+  );
 
-  const saveAsStrategy = () => {
+  const prepareProposal = async () => {
+    setPreparing(true);
+    setPrepError(null);
     try {
-      window.dispatchEvent(new CustomEvent('albert:build-strategy', {
-        detail: { symbol: symbol || 'BTC', seed: String(text || '') },
-      }));
-    } catch (e) { /* noop */ }
-  };
-
-  React.useEffect(() => () => { try { stopAlbert(); } catch (e) { /* noop */ } }, []);
-  // Warm up the TTS voice list (some browsers load voices asynchronously).
-  React.useEffect(() => {
-    try { window.speechSynthesis?.getVoices(); } catch (e) { /* noop */ }
-  }, []);
-
-  const speak = () => {
-    if (speaking || warming) { stopAlbert(); setSpeaking(false); setWarming(false); return; }
-    if (!String(text || '').trim()) return;
-    setWarming(true);
-    speakAlbert(text, {
-      onStart: () => { setWarming(false); setSpeaking(true); },
-      onEnd: () => { setSpeaking(false); setWarming(false); },
-    });
-  };
-
-  const setAlert = async (level) => {
-    setAlerted((a) => ({ ...a, [level]: true }));
-    try {
-      await fetch(`${API_BASE}/v1/price-alert`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pid, asset: symbol, level }),
+      const r = await fetch(`${API_BASE}/v1/chat/prepare-proposal`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ session_id: sessionId, pid: getPid() }),
       });
-      // Let the Alert Manager card refresh immediately (instead of waiting for its poll).
-      try { window.dispatchEvent(new CustomEvent('albert:alert-created')); } catch (e) { /* noop */ }
+      const j = await r.json();
+      if (j.basket_draft && j.basket_draft.legs?.length > 0) {
+        // Dispatch the structured proposal to Studio.
+        window.dispatchEvent(new CustomEvent('albert:build-strategy', {
+          detail: {
+            proposal: j.basket_draft,
+            proposalId: j.basket_draft.proposalId || null,
+            revision: j.basket_draft.revision || 1,
+            assets: j.basket_draft.legs.map((l) => l.symbol),
+          },
+        }));
+      } else {
+        setPrepError(j.error || 'Could not extract a structured strategy from this conversation. Try asking Albert to be more specific about assets, allocations and rules.');
+      }
     } catch (e) {
-      setAlerted((a) => ({ ...a, [level]: false }));
+      setPrepError('Network error — please try again.');
+    } finally {
+      setPreparing(false);
     }
   };
 
-  return (
-    <div className="mt-2 space-y-1.5">
-      <div className="flex flex-wrap items-center gap-1.5">
-        <button onClick={speak}
-          className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors ${warming ? 'border-amber-500/50 bg-amber-500/10 text-amber-200' : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:text-white'}`}>
-          {warming ? <><Loader2 className="h-3 w-3 animate-spin" />Warming up…</> : speaking ? <><VolumeX className="h-3 w-3" />Stop</> : <><Volume2 className="h-3 w-3" />Listen</>}
+  if (savedLink) {
+    return (
+      <div className="mt-2 flex items-center gap-2">
+        <ShieldCheck className="h-4 w-4 text-emerald-400" />
+        <button onClick={() => { if (typeof window !== 'undefined') { window.sessionStorage.setItem('dashboard:strategyId', savedLink); } onNav?.('strategies'); }}
+          className="text-xs font-semibold text-emerald-300 underline hover:text-emerald-200">
+          Saved — open strategy
         </button>
-        {showStrategy && (
-          <button onClick={saveAsStrategy}
-            className="inline-flex items-center gap-1 rounded-full border border-violet-500/40 bg-violet-500/10 px-2 py-0.5 text-[11px] font-medium text-violet-200 transition-colors hover:bg-violet-500/20">
-            <Crosshair className="h-3 w-3" />Save as strategy
-          </button>
-        )}
-        {levels.map((lv) => (
-          <button key={lv} onClick={() => setAlert(lv)} disabled={!!alerted[lv]}
-            className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors ${alerted[lv] ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300' : 'border-sky-600/40 bg-sky-500/10 text-sky-300 hover:bg-sky-500/20'}`}>
-            {alerted[lv] ? <><Check className="h-3 w-3" />Alerting ${lv.toLocaleString()}</> : <><BellPlus className="h-3 w-3" />Alert @ ${lv.toLocaleString()}</>}
-          </button>
-        ))}
       </div>
-      {sources && sources.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-[10px] uppercase tracking-wide text-slate-500">Sources</span>
-          {sources.map((s, i) => (
-            <a key={i} href={s.url} target="_blank" rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 rounded-full border border-slate-700 bg-slate-800/40 px-2 py-0.5 text-[11px] text-slate-400 transition-colors hover:text-sky-300">
-              <ExternalLink className="h-3 w-3" />{(s.title || 'source').slice(0, 28)}
+    );
+  }
+
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-2">
+      {/* Structured proposal — direct review */}
+      {hasProposal && (
+        <Button size="sm" variant="outline" onClick={() => {
+          window.dispatchEvent(new CustomEvent('albert:build-strategy', {
+            detail: {
+              proposal: msg.basket_draft,
+              proposalId: msg.basket_draft.proposalId || null,
+              revision: msg.basket_draft.revision || 1,
+              assets: msg.basket_draft.legs.map((l) => l.symbol),
+            },
+          }));
+        }} className="h-7 gap-1.5 border-violet-500/40 text-[12px] text-violet-300 hover:bg-violet-500/10">
+          <ArrowRight className="h-3.5 w-3.5" />Review &amp; save strategy
+        </Button>
+      )}
+
+      {/* Strategy-like discussion without structured data */}
+      {hasStrategyDiscussion && !hasProposal && (
+        <Button size="sm" variant="outline" onClick={prepareProposal} disabled={preparing}
+          className="h-7 gap-1.5 border-sky-500/40 text-[12px] text-sky-300 hover:bg-sky-500/10">
+          {preparing ? <Clock className="h-3.5 w-3.5 animate-spin" /> : <Bookmark className="h-3.5 w-3.5" />}
+          Prepare strategy for review
+        </Button>
+      )}
+
+      {prepError && <p className="text-[11px] text-amber-300">{prepError}</p>}
+
+      {/* Source links */}
+      {(msg?.sources || []).length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {msg.sources.slice(0, 3).map((s, i) => (
+            <a key={i} href={s.url || '#'} target="_blank" rel="noopener noreferrer"
+              className="inline-flex items-center gap-0.5 rounded-full bg-slate-800 px-2 py-0.5 text-[10px] text-slate-400 hover:text-slate-200">
+              <ExternalLink className="h-2.5 w-2.5" />{s.title || s.url || 'Source'}
             </a>
           ))}
         </div>

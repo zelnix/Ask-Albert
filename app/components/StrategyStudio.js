@@ -23,6 +23,55 @@ const STUDIO_EXEC_RULES = {
 
 const get = (path, signal) => fetch(`${API_BASE}${path}`, { credentials: 'include', cache: 'no-store', signal });
 
+
+/**
+ * Convert a structured chat proposal into a Studio-compatible draft object.
+ * Maps proposal.legs → assets, proposal.rules → rules, preserving capital/horizon/thesis.
+ */
+function proposalToDraft(proposal) {
+  const legs = proposal.legs || [];
+  const assets = legs.map((l) => ({
+    symbol: String(l.symbol || '').toUpperCase(),
+    direction: String(l.position || l.direction || 'long').toUpperCase(),
+    weightPct: Number(l.weight_pct || l.weight || 0),
+    target: l.target || null,
+    stop: l.stop || null,
+    notes: l.notes || '',
+  }));
+  // Preserve rules from the proposal, mapping to Studio format.
+  const rules = [];
+  if (proposal.entryConditions) rules.push({ type: 'ENTRY', description: proposal.entryConditions });
+  if (proposal.profitTaking) rules.push({ type: 'PROFIT_TAKING', description: proposal.profitTaking });
+  if (proposal.stopLoss) rules.push({ type: 'STOP_LOSS', description: proposal.stopLoss });
+  if (proposal.managementRules) rules.push({ type: 'MANAGEMENT', description: proposal.managementRules });
+  if (Array.isArray(proposal.rules)) {
+    proposal.rules.forEach((r) => {
+      if (typeof r === 'string') rules.push({ type: 'OTHER', description: r });
+      else if (r?.description) rules.push(r);
+    });
+  }
+  // Unresolved or unsupported instructions.
+  const unresolved = [];
+  if (proposal.unresolvedInstructions) {
+    (Array.isArray(proposal.unresolvedInstructions) ? proposal.unresolvedInstructions : [proposal.unresolvedInstructions])
+      .forEach((u) => unresolved.push(typeof u === 'string' ? u : u?.description || JSON.stringify(u)));
+  }
+  return {
+    name: proposal.title || proposal.name || 'Chat Strategy',
+    requestedPlan: proposal.thesis || '',
+    assets,
+    rules: rules.length ? rules : undefined,
+    unresolvedInstructions: unresolved.length ? unresolved : undefined,
+    startingCash: proposal.startingCapital ? String(proposal.startingCapital) : undefined,
+    currency: proposal.currency || 'USD',
+    protectedReserve: proposal.protectedReserve || undefined,
+    horizonDays: proposal.horizon_days || proposal.horizonDays || undefined,
+    objective: proposal.objective || proposal.thesis || '',
+    proposalId: proposal.proposalId || undefined,
+    proposalRevision: proposal.revision || 1,
+  };
+}
+
 const readStudio = async (path, valid) => {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 25000);
@@ -125,7 +174,7 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
   const [draft, setDraft] = useState(initialDraft ? {
     ...initialDraft, rules: initialDraft.rules || [],
     walletName: initialDraft.walletName || `${initialDraft.name || 'Strategy'} wallet`,
-    startingCash: initialDraft.startingCash || '100000.00',
+    startingCash: initialDraft.startingCash || '',
   } : null);
   const [review, setReview] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -177,24 +226,32 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
   const addRule = () => updateDraft({ ...draft, rules: [...(draft.rules || []), {
     symbol: draft.assets?.[0]?.symbol || '', side: 'BUY', kind: 'PRICE', operator: 'BELOW', value: '', indicator: '' }] });
 
+  // Stable save key: one reviewed proposal has one stable save-operation identifier.
+  // A material edit invalidates it.
+  const [saveKey, setSaveKey] = useState(() => idem());
+  useEffect(() => { if (review && review.hash) setSaveKey('k_' + review.hash + '_' + (revisionId || 'new')); }, [review?.hash, revisionId]);
+  const [inflight, setInflight] = useState(false);
+
   const save = async () => {
-    if (!readyToSave) { setErr('Needs changes — wait for a valid review before saving.'); return; }
+    if (!readyToSave || inflight) { setErr('Needs changes — wait for a valid review before saving.'); return; }
+    setInflight(true);
     setBusy(true); setErr('');
     try {
       const r = await post('/v1/albert/studio/save', { draft, name: draft.name, strategyId: revisionId,
-        confirm: true, idempotencyKey: idem(), expectedHash: review.hash });
+        confirm: true, idempotencyKey: saveKey, expectedHash: review.hash,
+        proposalId: draft.proposalId || null, proposalRevision: draft.proposalRevision || null });
       const j = await r.json();
       if (r.ok) onSaved(j.strategyId);
       else setErr(j.detail || 'Save failed.');
-    } catch (e) { setErr('Save failed.'); }
-    finally { setBusy(false); }
+    } catch (e) { setErr('Save failed — your proposal and edits are preserved. Try again.'); }
+    finally { setBusy(false); setInflight(false); }
   };
 
   return (
     <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
       <div className="mb-3 flex items-center gap-2">
         <Sparkles className="h-4 w-4 text-violet-400" />
-        <h3 className="text-sm font-bold text-white">{revisionId ? 'Review a new version' : 'Build a strategy with Albert'}</h3>
+        <h3 className="text-sm font-bold text-white">{revisionId ? 'Review a new version' : initialDraft?.fromProposal ? 'Review chat strategy proposal' : 'Build a strategy with Albert'}</h3>
         <button onClick={onCancel} className="ml-auto rounded p-1 text-slate-400 hover:text-white"><X className="h-4 w-4" /></button>
       </div>
       {revisionId && <p className="mb-3 text-[12px] text-amber-200">Saving a reviewed version stops new entries under the old version. It keeps this strategy’s existing wallet, cash, holdings, exits and history; select a mode and Start the new version when ready.</p>}
@@ -771,7 +828,7 @@ function Detail({ sid, onChange, onRevise }) {
   );
 }
 
-export default function StrategyStudio({ chatGoal = '', chatDraftKey = null, onChatDismiss }) {
+export default function StrategyStudio({ chatGoal = '', chatDraftKey = null, chatProposal = null, onChatDismiss }) {
   const [list, setList] = useState([]);
   const [listError, setListError] = useState('');
   const [sel, setSel] = useState(() => typeof window !== 'undefined' ? window.sessionStorage.getItem('dashboard:selectedStrategyId') || null : null);
@@ -799,7 +856,20 @@ export default function StrategyStudio({ chatGoal = '', chatDraftKey = null, onC
     const requested = typeof window !== 'undefined' ? window.sessionStorage.getItem('dashboard:strategyId') : null;
     if (requested) { window.sessionStorage.removeItem('dashboard:strategyId'); setSel(requested); setBuilding(false); }
   }, []);
-  useEffect(() => { if (chatDraftKey) { setRevision(null); setSel(null); setBuilding(true); } }, [chatDraftKey]);
+  // Chat proposal handoff: if we receive a structured proposal, convert it to a draft
+  // and go directly to the Builder review form — skip "Draft with Albert."
+  useEffect(() => {
+    if (chatDraftKey && chatProposal && Array.isArray(chatProposal.legs) && chatProposal.legs.length > 0) {
+      const draft = proposalToDraft(chatProposal);
+      setRevision({ id: null, version: null, goal: chatProposal.thesis || chatGoal || '', draft, fromProposal: true });
+      setSel(null);
+      setBuilding(true);
+    } else if (chatDraftKey) {
+      setRevision(null);
+      setSel(null);
+      setBuilding(true);
+    }
+  }, [chatDraftKey, chatProposal, chatGoal]);
   const revise = (s) => {
     setRevision({ id: s.strategyId, version: s.version, goal: s.contract?.requestedPlan || '',
       draft: { ...(s.contract || {}), name: s.name, rules: s.contract?.rules || [],
@@ -862,7 +932,11 @@ export default function StrategyStudio({ chatGoal = '', chatDraftKey = null, onC
           {building ? <Builder key={revision ? `${revision.id}:v${revision.version}` : chatDraftKey || 'new'}
               initialGoal={revision ? revision.goal : chatGoal} initialDraft={revision?.draft || null} revisionId={revision?.id || null}
               onCancel={() => { setBuilding(false); if (revision) setSel(revision.id); setRevision(null); onChatDismiss?.(); }}
-              onSaved={(sid) => { setBuilding(false); setRevision(null); onChatDismiss?.(); load(); setSel(sid); }} />
+              onSaved={(sid) => {
+                setBuilding(false); setRevision(null); onChatDismiss?.(); load(); setSel(sid);
+                // Notify chat cards that this proposal was saved.
+                try { window.dispatchEvent(new CustomEvent('albert:strategy-saved', { detail: { strategyId: sid } })); } catch (x) { /* noop */ }
+              }} />
             : sel ? <Detail key={sel} sid={sel} onChange={load} onRevise={revise} />
             : <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800"><p className="text-[13px] text-slate-400">Select a strategy, or build a new one with Albert.</p></Card>}
         </div>

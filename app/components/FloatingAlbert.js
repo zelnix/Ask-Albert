@@ -45,6 +45,12 @@ export default function FloatingAlbert({ active, symbol, onExpand }) {
   const scopeLabel = SECTION_LABELS[active] || 'all things Ask Albert';
   const shown = search.trim() ? messages.filter((m) => (m.text || '').toLowerCase().includes(search.trim().toLowerCase())) : messages;
 
+  // Listen for close-chat event from strategy handoff.
+  React.useEffect(() => {
+    const onClose = () => setOpen(false);
+    window.addEventListener('albert:close-chat', onClose);
+    return () => window.removeEventListener('albert:close-chat', onClose);
+  }, []);
   React.useEffect(() => { if (open) endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading, open]);
   const copyAll = () => {
     const txt = chatToText(messages);

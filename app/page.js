@@ -3327,18 +3327,27 @@ export default function DashboardPage() {
   }, [symbol, authUser]);
 
   // Chat can initiate only Studio's draft -> review -> save flow. Never create a
-  // separate legacy tracked strategy or discard the chat plan's assets/weights.
+  // Chat → Strategy Studio handoff: receive structured proposal from chat and open Studio.
   useEffect(() => {
     const onBuild = (e) => {
-      const seed = String(e.detail?.seed || '').trim();
-      const sym = String(e.detail?.symbol || symbol).toUpperCase();
-      setChatStrategy({ goal: seed || `Follow Albert's canonical BUY and SELL decisions for ${sym} at 100% allocation.`,
-        key: `${Date.now()}-${Math.random()}` });
+      const proposal = e.detail?.proposal;
+      const proposalId = e.detail?.proposalId;
+      const revision = e.detail?.revision || 1;
+      const assets = e.detail?.assets || [];
+      if (proposal && Array.isArray(proposal.legs) && proposal.legs.length > 0) {
+        // Structured proposal — open Studio with it directly for review.
+        setChatStrategy({ proposal, proposalId, revision, assets, key: `${Date.now()}-${Math.random()}` });
+      } else {
+        // Fallback for legacy events without structured data.
+        setChatStrategy({ goal: '', key: `${Date.now()}-${Math.random()}` });
+      }
+      // Close floating chat if open, so Studio is visible.
+      try { window.dispatchEvent(new CustomEvent('albert:close-chat')); } catch (x) { /* noop */ }
       setActive('strategies');
     };
     window.addEventListener('albert:build-strategy', onBuild);
     return () => window.removeEventListener('albert:build-strategy', onBuild);
-  }, [symbol]);
+  }, []);
 
   // Driver -> chat handoff: buffer the ask and jump to the Ask Albert section so the
   // chat (which mounts on demand) can drain it and send with the driver context.
@@ -3649,7 +3658,7 @@ export default function DashboardPage() {
     if (active === 'performance') return <PerformanceHubSection d={d} />;
     if (active === 'timemachine') return <TimeMachineSection />;
     if (active === 'ask') return <AskAlbert onNav={setActive} />;
-    if (active === 'strategies') return <StrategyStudio chatGoal={chatStrategy?.goal} chatDraftKey={chatStrategy?.key} onChatDismiss={() => setChatStrategy(null)} />;
+    if (active === 'strategies') return <StrategyStudio chatGoal={chatStrategy?.goal || ''} chatDraftKey={chatStrategy?.key} chatProposal={chatStrategy?.proposal || null} onChatDismiss={() => setChatStrategy(null)} />;
     if (active === 'alert-engine') return <AlertEngineSection />;
     if (active === 'alerts') return <AlertsSection d={d} alertsData={alertsData} onAck={ackAlerts} filter={alertFilter} onFilter={setAlertFilter} coins={coins} />;
     if (active === 'settings') return <SettingsSection />;

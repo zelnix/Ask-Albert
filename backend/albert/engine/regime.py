@@ -17,8 +17,10 @@ def compute_regime():
         sma50 = float(close.rolling(50).mean().iloc[-1])  # noqa: F841 (retained for parity)
         slope = float(close.iloc[-1] - close.iloc[-30]) / max(1e-9, float(close.iloc[-30]))
     except Exception:  # noqa
-        return {'regime': 'RANGE', 'confidence': 30, 'reasons': ['Insufficient BTC data \u2014 defaulting to RANGE.'],
-                'btc_price': None, 'sma200': None}
+        return {'regime': 'RANGE', 'confidence': 30,
+                'reasons': ['Insufficient BTC data \u2014 defaulting to RANGE. This is not an observed market regime.'],
+                'btc_price': None, 'sma200': None, 'dataFallback': True,
+                'failureDetail': 'Daily BTC history unavailable for regime computation'}
     try:
         strengths = deps.sector_strength() or {}
         vals = list(strengths.values())

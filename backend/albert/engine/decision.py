@@ -113,11 +113,16 @@ def build_decisions(pid, summary_override=None, strategy_symbols=None):
                 'evaluatedAt': pass_ts, '_dataOk': bool(sc.get('ok'))}
 
         if not sc.get('ok'):
+            failure_code = sc.get('failureCode', 'STALE_DATA')
+            failure_detail = sc.get('failureDetail', 'Market data is stale or insufficient')
             base.update({'action': 'WAIT', 'opportunityScore': 0, 'confidence': 20,
                          'scoreComponents': {}, 'invalidationPrice': None,
-                         'eligible': False, 'ineligibilityReason': 'STALE_DATA',
+                         'eligible': False, 'ineligibilityReason': failure_code,
                          'reasonCode': _REASON_WAIT_STALE,
-                         'reasons': ['Market data is stale or insufficient \u2014 Albert waits rather than guesses.']})
+                         'scoringFailure': {'code': failure_code, 'detail': failure_detail,
+                                            'category': sc.get('failureCategory', 'data'),
+                                            'provider': sc.get('failureProvider')},
+                         'reasons': [f'{failure_detail} \u2014 Albert waits rather than guesses.']})
             base['precedenceRuleApplied'] = 'WAIT'
             if held_h is not None:
                 _apply_sell(base, {

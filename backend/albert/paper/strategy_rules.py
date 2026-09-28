@@ -235,7 +235,7 @@ def evaluate(rules, side, symbol, mark, *, history=None, lot=None, peak=None, ch
                 high = max(entry, decimal(peak) or entry, px)
                 observed = (high - px) / high * 100
         if observed is None:
-            data_need = ('verified CoinGecko rolling 24-hour percentage change' if kind == 'CHANGE_PCT_24H' else
+            data_need = ("the asset's rolling 24-hour percentage change" if kind == 'CHANGE_PCT_24H' else
                          'complete, current closed daily candles' if kind == 'INDICATOR' else 'an open position')
             results.append({'ruleId': r['ruleId'], 'kind': kind, 'state': 'WAIT',
                             'reason': f'WAIT: {symbol} {kind} needs {data_need}; no signal was substituted.'})

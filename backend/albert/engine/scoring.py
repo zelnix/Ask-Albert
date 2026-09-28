@@ -31,19 +31,31 @@ def score_asset(symbol, regime):
     df = deps.daily_ohlcv(symbol, 400)
     if df is None:
         return {'ok': False, 'reason': 'missing_or_stale_closed_daily_history',
+                'failureCode': 'HISTORY_UNAVAILABLE', 'failureCategory': 'data',
+                'failureDetail': f'{symbol} daily history could not be retrieved from any configured provider',
+                'failureProvider': df.attrs.get('provider') if df is not None else None,
                 'requiredByFeature': FEATURE_LOOKBACKS,
                 'currentPrice': deps.spot_price(symbol) or None}
     coverage = df.attrs.get('coverage') or {}
     if coverage.get('lastClosedUtcMs') is not None and (coverage.get('lastClosedUtcMs')
             != coverage.get('expectedLastClosedUtcMs')):
         return {'ok': False, 'reason': 'stale_daily_history',
+                'failureCode': 'STALE_HISTORY', 'failureCategory': 'data',
+                'failureDetail': f'{symbol} daily history is stale (last closed date does not match expected)',
+                'failureProvider': df.attrs.get('provider'),
                 'availableClosedDays': len(df), 'requiredByFeature': FEATURE_LOOKBACKS}
     if coverage.get('missingIntervalsInFeatureWindow'):
         return {'ok': False, 'reason': 'gapped_required_history',
+                'failureCode': 'GAPPED_HISTORY', 'failureCategory': 'data',
+                'failureDetail': f'{symbol} daily history has gaps in the required feature window',
+                'failureProvider': df.attrs.get('provider'),
                 'missingIntervals': coverage['missingIntervalsInFeatureWindow'][:8],
                 'requiredByFeature': FEATURE_LOOKBACKS}
     if len(df) < MIN_SCORING_CANDLES:
         return {'ok': False, 'reason': 'insufficient_feature_lookback',
+                'failureCode': 'INSUFFICIENT_LOOKBACK', 'failureCategory': 'data',
+                'failureDetail': f'{symbol} has {len(df)} daily candles but {MIN_SCORING_CANDLES} are required',
+                'failureProvider': df.attrs.get('provider'),
                 'availableClosedDays': len(df),
                 'missingFeatureLookbacks': {k: n for k, n in FEATURE_LOOKBACKS.items()
                                             if k != 'yearHigh' and len(df) < n},
