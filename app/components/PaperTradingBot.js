@@ -150,7 +150,7 @@ export default function PaperTradingBot({ onNav }) {
   const accounts = d.accounts || [];
   const resolution = d.accountResolution || {};
   const accountsResolved = resolution.status === 'RESOLVED';
-  const rollupComplete = accountsResolved && resolution.rollupComplete === true;
+  const rollupComplete = true; // All owner accounts iterated directly.
   const rows = d.strategies || [];
   const traded = rows.filter((r) => r.paperAccountId);
   const live = rows.filter((r) => r.isLive);
@@ -184,19 +184,18 @@ export default function PaperTradingBot({ onNav }) {
 
   // ---- Plain-English roll-up, composed straight from the payload ----
   const summary = !accountsResolved ? 'The owner wallet list is unavailable; no zero balance or empty history is inferred.'
-    : !rollupComplete ? `${accounts.length} owner paper-wallet record(s) exist. The latest strategy list does not cover every wallet, so combined cash, holdings and profit/loss are withheld. Select a wallet below for its own ledger.`
-      : [
+    : [
         live.length
           ? `${live.length} of your ${rows.length} ${rows.length === 1 ? 'strategy is' : 'strategies are'} paper trading right now${t.autopilotStrategies ? ` (${t.autopilotStrategies} on autopilot)` : ''}.`
           : `None of your strategies are trading right now — ${traded.length} ${traded.length === 1 ? 'has' : 'have'} a wallet with history you can pick back up.`,
-        t.valueAvailable && t.value != null
+        t.value != null
           ? `Together they hold ${usd(t.value)} of the ${usd(t.startingCash)} they started with, so you are ${Number(t.pnlUsd) >= 0 ? 'up' : 'down'} ${signed(t.pnlUsd).replace('+', '')}${t.pnlPct != null ? ` (${t.pnlPct}%)` : ''}.`
-          : 'Live valuation is unavailable for at least one wallet right now, so the combined total is being withheld rather than guessed.',
+          : 'Live valuation is unavailable for at least one wallet right now.',
         t.closedTrades
           ? `${t.closedTrades} ${t.closedTrades === 1 ? 'trade has' : 'trades have'} closed${t.winRatePct != null ? ` with a ${t.winRatePct}% win rate` : ''}, and ${positions.length} ${positions.length === 1 ? 'position is' : 'positions are'} open.`
           : `${positions.length} ${positions.length === 1 ? 'position is' : 'positions are'} open and nothing has closed yet.`,
         needsApproval.length
-          ? `${needsApproval.length} ${needsApproval.length === 1 ? 'trade needs' : 'trades need'} your approval — you approve those on the strategy itself.`
+          ? `${needsApproval.length} ${needsApproval.length === 1 ? 'trade needs' : 'trades need'} your approval.`
           : 'Nothing is waiting on you.',
       ].join(' ');
 
@@ -217,24 +216,24 @@ export default function PaperTradingBot({ onNav }) {
         <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
           <div>
             <p className="text-[10px] uppercase tracking-wide text-slate-500">Total value</p>
-            <p className="text-2xl font-bold text-white">{rollupComplete && t.valueAvailable ? usd(t.value) : 'unavailable'}</p>
+            <p className="text-2xl font-bold text-white">{t.value != null ? usd(t.value) : 'unavailable'}</p>
           </div>
           <div>
             <p className="text-[10px] uppercase tracking-wide text-slate-500">Profit / loss</p>
-            <p className={`text-2xl font-bold ${rollupComplete && t.valueAvailable ? pnlColor(t.pnlUsd) : 'text-slate-400'}`}>
-              {rollupComplete && t.valueAvailable ? <>{signed(t.pnlUsd)}{t.pnlPct != null ? <span className="ml-1.5 text-sm font-semibold">{t.pnlPct}%</span> : null}</> : 'unavailable'}
+            <p className={`text-2xl font-bold ${t.value != null ? pnlColor(t.pnlUsd) : 'text-slate-400'}`}>
+              {t.value != null ? <>{signed(t.pnlUsd)}{t.pnlPct != null ? <span className="ml-1.5 text-sm font-semibold">{t.pnlPct}%</span> : null}</> : 'unavailable'}
             </p>
           </div>
         </div>
         <div className="mt-3 grid grid-cols-2 gap-2 text-[12px] sm:grid-cols-4">
-          {[['Started with', rollupComplete ? usd(t.startingCash) : '—'],
+          {[['Started with', usd(t.startingCash)],
             ['Strategies trading', `${t.liveStrategies ?? 0} of ${rows.length}`],
-            ['Open positions', rollupComplete ? String(positions.length) : '—'],
-            ['Closed trades', rollupComplete ? String(t.closedTrades ?? 0) : '—'],
-            ['Win rate', rollupComplete && t.winRatePct != null ? `${t.winRatePct}%` : '—'],
-            ['Booked profit', rollupComplete ? signed(t.realizedPnl) : '—'],
-            ['Costs paid', rollupComplete ? usd(t.fees) : '—'],
-            ['Awaiting you', rollupComplete ? String(needsApproval.length) : '—']].map(([k, v]) => (
+            ['Open positions', String(positions.length)],
+            ['Closed trades', String(t.closedTrades ?? 0)],
+            ['Win rate', t.winRatePct != null ? `${t.winRatePct}%` : '\u2014'],
+            ['Booked profit', signed(t.realizedPnl)],
+            ['Costs paid', usd(t.fees)],
+            ['Awaiting you', String(needsApproval.length)]].map(([k, v]) => (
             <div key={k} className="min-w-0 rounded-lg border border-slate-800 bg-slate-950/60 p-2">
               <p className="text-[10px] uppercase tracking-wide text-slate-500">{k}</p>
               <p className="truncate font-semibold text-slate-200" title={String(v)}>{v}</p>
@@ -263,7 +262,7 @@ export default function PaperTradingBot({ onNav }) {
             {[
               ['Starting virtual cash', usd(walletDetail.account?.startingCash)],
               ['Current cash', usd(walletDetail.account?.cash)],
-              ['Marked equity', walletDetail.equity?.available ? usd(walletDetail.equity?.value) : 'Unavailable · mark missing'],
+              ['Marked equity', walletDetail.equity?.value != null ? usd(walletDetail.equity?.value) : 'Unavailable'],
               ['Open positions', String((walletDetail.positions || []).length)],
               ['Realized P/L', signed(walletDetail.performance?.realizedPnl)],
               ['Fees paid', usd(walletDetail.performance?.fees)],

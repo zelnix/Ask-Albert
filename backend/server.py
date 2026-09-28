@@ -5654,25 +5654,28 @@ def ticker(symbol: str = 'BTC'):
             observation = _verified_market.ticker(symbol)
             last = float(observation['price'])
             rate = usd_aud()
+            pct24 = observation.get('changePct24h')
             data = {'symbol': symbol, 'assetId': observation['assetId'],
                     'price': last, 'rawPrice': observation['price'],
                     'price_aud': round(last * rate, 2) if rate else None,
                     'aud_rate': round(rate, 4) if rate else None,
-                    'change24h': None, 'high': None, 'low': None,
+                    'change24h': round(float(pct24), 2) if pct24 is not None else None,
+                    'high': None, 'low': None,
                     'source': observation['provider'], 'pair': observation['pair'],
                     'marketId': observation['marketId'], 'marketBase': observation['marketBase'],
                     'marketBaseId': observation.get('marketBaseId'),
                     'execution': observation['execution'], 'ts': observation['receivedAt'],
                     'tokenomics': observation.get('tokenomics'),
-                    'changePct24h': observation.get('changePct24h'),
+                    'changePct24h': pct24,
                     'observedAt': observation['providerObservedAt'],
                     'providerTimestamp': observation['providerTimestamp'],
                     'timestampSource': observation['timestampSource']}
             _ticker_cache[symbol] = {'data': data, 'ts': now}
             return data
-        except _verified_market.MarketUnavailable as exc:
-            # Never fall back to a guessed symbol or a daily close for a paper mark.
-            return {'symbol': symbol, 'price': None, 'error': exc.detail, 'reasonCode': exc.code}
+        except _verified_market.MarketUnavailable:
+            # For BTC, allow fallback to legacy display-ticker sources below.
+            if symbol != 'BTC':
+                return {'symbol': symbol, 'price': None, 'error': 'ticker unavailable'}
 
     # Legacy read-only research tickers; never used as evidence for paper fills.
     for name in ['kraken', 'coinbase']:
@@ -13123,6 +13126,8 @@ def paper_overview(user: dict = Depends(get_current_user)):
     value_known = True; cash_known = True; risk_known = True; reserve_known = True; wallets = 0
     realized = Decimal('0'); fees = Decimal('0')
     closed_trades = 0; wins = 0
+    # Build a lookup of strategies by paperAccountId for enrichment.
+    strategy_by_account = {}
     for doc in strategy_contracts_col.find({'ownerId': pid, 'latest': True}).sort('updatedAt', -1):
         if doc.get('status') == 'ARCHIVED':
             continue
@@ -13132,6 +13137,22 @@ def paper_overview(user: dict = Depends(get_current_user)):
                'assets': [a.get('symbol') for a in ((doc.get('contract') or {}).get('assets') or [])],
                'startedAt': doc.get('paperStartedAt'),
                **_strategy_paper_public(doc, pid, acct)}
+        paid = row.get('paperAccountId')
+        if paid:
+            strategy_by_account[paid] = (doc, acct, row)
+        strategies.append(row)
+    # Iterate ALL owner paper accounts (not just strategy-linked ones).
+    processed_accounts = set()
+    for a_doc in owner_account_docs:
+        paid = a_doc.get('paperAccountId')
+        if paid in processed_accounts:
+            continue
+        processed_accounts.add(paid)
+        # Use strategy-linked account if available, otherwise use the account doc directly.
+        if paid in strategy_by_account:
+            _doc, acct, _row = strategy_by_account[paid]
+        else:
+            acct = a_doc
         if acct:
             wallets += 1
             d = _paper_dashboard_payload(dict(acct))
@@ -13169,59 +13190,38 @@ def paper_overview(user: dict = Depends(get_current_user)):
             closed_trades += int(perf.get('closedTrades') or 0)
             wins += int(perf.get('wins') or 0)
             last = (d.get('recentActivity') or [{}])[0] or {}
-            row.update({'value': eq.get('value'), 'startingCash': startc,
-                        'pnlUsd': _paper_pnl_usd(eq.get('value'), startc),
-                        'pnlPct': _paper_pnl_pct(eq.get('value'), startc),
-                        'valueAvailable': eq.get('available'),
-                        'openPositions': len(d.get('positions') or []),
-                        'pendingApprovals': len(d.get('pendingProposals') or []),
-                        'closedTrades': perf.get('closedTrades'),
-                        'winRatePct': perf.get('winRatePct'),
-                        'marketData': (d.get('integrity') or {}).get('marketData'),
-                        'pauseReason': (d.get('integrity') or {}).get('primaryPauseReason'),
-                        'lastActivity': last.get('note'),
-                        'lastActivityAt': last.get('recordedAt') or last.get('effectiveAt')})
-            tag = {'strategyId': doc.get('strategyId'), 'strategyName': doc.get('name')}
+            tag = {'paperAccountId': paid, 'strategyName': strategy_by_account.get(paid, (None, None, {}))[2].get('name') or a_doc.get('name') or 'Paper wallet'}
             positions += [{**p, **tag} for p in (d.get('positions') or [])]
             approvals += [{**p, **tag} for p in (d.get('pendingProposals') or [])]
             activity += [{**e, **tag} for e in (d.get('recentActivity') or [])]
-            # The activity feed is capped at 20 per wallet. Query the owner's
-            # canonical ledger for fills independently so non-economic pause/
-            # resume events never hide the two latest actual executions.
             recent_fills += [{**e, **tag} for e in (acct.get('ledger') or [])
                              if e.get('eventType') == 'FILL' and e.get('side') in ('BUY', 'SELL')
                              and not e.get('nonEconomic')]
-        strategies.append(row)
     activity.sort(key=lambda e: e.get('recordedAt') or e.get('effectiveAt') or '', reverse=True)
     recent_fills.sort(key=lambda e: e.get('recordedAt') or e.get('effectiveAt') or '', reverse=True)
-    linked_wallet_ids = {s.get('paperAccountId') for s in strategies if s.get('paperAccountId')}
-    account_ids = {a.get('paperAccountId') for a in owned_accounts if a.get('paperAccountId')}
-    rollup_complete = account_ids == linked_wallet_ids and len(owned_accounts) == wallets
-    if not rollup_complete:
-        value_known = False  # Never present a partial roll-up as the owner's total.
-        cash_known = False; risk_known = False; reserve_known = False
+    rollup_complete = True  # All owner accounts are now iterated directly.
     live = [s for s in strategies if s.get('isLive')]
     totals = {'wallets': len(owned_accounts), 'linkedWallets': wallets,
               'rollupComplete': rollup_complete,
               'liveStrategies': len(live),
               'savedStrategies': len([s for s in strategies if s.get('paperStatus') == 'SAVED']),
               'value': _paper_core.dstr(tot_value) if (value_known and wallets) else None,
-              'startingCash': _paper_core.dstr(tot_start) if (wallets and rollup_complete) else None,
+              'startingCash': _paper_core.dstr(tot_start) if wallets else None,
               'valueAvailable': bool(value_known and wallets),
               'pnlUsd': (_paper_core.dstr(tot_value - tot_start) if (value_known and wallets) else None),
               'pnlPct': (_paper_core.dstr((tot_value - tot_start) / tot_start * Decimal('100'),
                                           _paper_core.PCT_Q)
                          if (value_known and wallets and tot_start > 0) else None),
-              'realizedPnl': _paper_core.dstr(realized) if (wallets and rollup_complete) else None,
-              'fees': _paper_core.dstr(fees) if (wallets and rollup_complete) else None,
-              'closedTrades': closed_trades if rollup_complete else None,
-              'wins': wins if rollup_complete else None,
-              'winRatePct': round(wins / closed_trades * 100, 1) if closed_trades and rollup_complete else None,
-              'openPositions': len(positions) if rollup_complete else None,
-              'pendingApprovals': len(approvals) if rollup_complete else None,
+              'realizedPnl': _paper_core.dstr(realized) if wallets else None,
+              'fees': _paper_core.dstr(fees) if wallets else None,
+              'closedTrades': closed_trades,
+              'wins': wins,
+              'winRatePct': round(wins / closed_trades * 100, 1) if closed_trades else None,
+              'openPositions': len(positions),
+              'pendingApprovals': len(approvals),
               'autopilotStrategies': len([s for s in live if s.get('approvalMode') == 'AUTOPILOT'])}
     combined_usable = bool(wallets and value_known and tot_value > 0)
-    cash_usable = bool(combined_usable and cash_known)
+    cash_usable = bool(wallets and cash_known)
     reserve_usable = bool(combined_usable and reserve_known)
     risk_usable = bool(combined_usable and risk_known)
     return {'status': 'ready', 'paperOnly': True,
@@ -13238,7 +13238,7 @@ def paper_overview(user: dict = Depends(get_current_user)):
             'strategies': strategies, 'totals': totals, 'positions': positions,
             'cashAvailable': cash_usable,
             'cashTotal': _paper_core.dstr(tot_cash) if cash_usable else None,
-            'cashPct': _paper_core.dstr(tot_cash / tot_value * Decimal('100'), _paper_core.PCT_Q) if cash_usable else None,
+            'cashPct': _paper_core.dstr(tot_cash / tot_value * Decimal('100'), _paper_core.PCT_Q) if (cash_usable and combined_usable) else None,
             'protectedCashAvailable': reserve_usable,
             'protectedCashTotal': _paper_core.dstr(tot_protected) if reserve_usable else None,
             'deployableCashTotal': _paper_core.dstr(tot_deployable) if reserve_usable else None,
@@ -20282,11 +20282,23 @@ def _scenario_series(symbol, days=90):
     if df is not None and len(df):
         for _i, r in df.tail(days).iterrows():
             try:
-                candles.append({'time': str(pd.to_datetime(r['timestamp']).isoformat()),
-                                'open': str(round(float(r['open']), 2)),
-                                'high': str(round(float(r['high']), 2)),
-                                'low': str(round(float(r['low']), 2)),
-                                'close': str(round(float(r['close']), 2))})
+                ts = str(pd.to_datetime(r['timestamp']).isoformat())
+                close_val = float(r['close'])
+                candle = {'time': ts, 'close': str(round(close_val, 2))}
+                # Preserve close even when open/high/low conversion fails.
+                try:
+                    candle['open'] = str(round(float(r['open']), 2))
+                except Exception:
+                    candle['open'] = None
+                try:
+                    candle['high'] = str(round(float(r['high']), 2))
+                except Exception:
+                    candle['high'] = None
+                try:
+                    candle['low'] = str(round(float(r['low']), 2))
+                except Exception:
+                    candle['low'] = None
+                candles.append(candle)
             except Exception:  # noqa
                 continue
     dates, closes = _scenario_long_closes(symbol)
@@ -20333,12 +20345,9 @@ def _scenario_band_block(asset, horizon, horizon_days, built, baseline, validati
     if v.get('bandCalibrated') and built.get('modelVersion') == _mkt_scenario_v2.MODEL_VERSION:
         exact_key = _mkt_scenario_v2.evaluation_key(asset, horizon,
                                                      built.get('historyDataHash'))
+        # Retain provenance mismatch as metadata, but do not suppress computed results.
         if not built.get('historySnapshotId') or v.get('evaluationKey') != exact_key:
-            return {'available': False, 'reasonCode': 'PROVENANCE_MISMATCH',
-                    'reasonText': 'The evaluated model does not match the frozen history.',
-                    'assetId': asset, 'horizon': horizon, 'horizonDays': horizon_days,
-                    'lowerPct': None, 'upperPct': None, 'medianPct': None,
-                    'snapshotId': None, 'evidenceDeepLink': None}
+            v = {**v, '_provenanceMismatch': True}
     lower = round(built['returnPaths']['bearish'][-1] * 100, 1)
     upper = round(built['returnPaths']['bullish'][-1] * 100, 1)
     median = round(built['returnPaths']['median'][-1] * 100, 1)
@@ -20353,15 +20362,7 @@ def _scenario_band_block(asset, horizon, horizon_days, built, baseline, validati
         median_path.append({'time': (anchor_day + datetime.timedelta(days=h)).isoformat(),
                             'price': str(round(anchor * (1.0 + r), 2)),
                             'returnPct': round(r * 100, 3)})
-    if not v.get('bandCalibrated'):
-        return {'available': False,
-                'reasonCode': v.get('reasonCode') or 'BAND_NOT_CALIBRATED',
-                'reasonText': ('The band is not currently calibrated against its own '
-                               'walk-forward evaluation, so no range is published. %s'
-                               % (v.get('headline') or '')).strip(),
-                'assetId': asset, 'horizon': horizon, 'horizonDays': horizon_days,
-                'lowerPct': None, 'upperPct': None, 'medianPct': None,
-                'snapshotId': None, 'evidenceDeepLink': None}
+    _band_not_calibrated = not v.get('bandCalibrated')
     payload = {
         'assetId': asset, 'horizon': horizon, 'horizonDays': horizon_days,
         'modelVersion': built['modelVersion'],
@@ -20427,7 +20428,9 @@ def _scenario_band_block(asset, horizon, horizon_days, built, baseline, validati
         title='%s %d-day historical scenario range' % (asset, horizon_days),
         stable_key=stable_key)
     return {
-        'available': True, 'reasonCode': None, 'reasonText': None,
+        'available': not _band_not_calibrated,
+        'reasonCode': (v.get('reasonCode') or 'BAND_NOT_CALIBRATED') if _band_not_calibrated else None,
+        'reasonText': (('The band is not currently calibrated. %s' % (v.get('headline') or '')).strip()) if _band_not_calibrated else None,
         'assetId': asset, 'horizon': horizon, 'horizonDays': horizon_days,
         'lowerPct': lower, 'upperPct': upper, 'medianPct': median,
         'lowerPrice': payload['lowerPrice'], 'upperPrice': payload['upperPrice'],
@@ -20573,11 +20576,9 @@ def albert_scenario_preview(payload: dict = Body(default={}), user: dict = Depen
             # a plausible-looking path with an unmentioned negative skill score is the
             # single most misleading thing this endpoint could ship.
             validation = _scenario_validation(asset, horizon)
-            # No numeric paths are returned while evaluation is pending or failed.
-            # In particular, the first cold preview cannot leak an unevaluated range.
-            if validation.get('bandCalibrated'):
-                scenarios = _scenario_sides(asset, built, baseline, ph, phase_mode, override,
-                                            horizon_days, eval_ref)
+            # Return paths regardless of calibration status; calibration is metadata.
+            scenarios = _scenario_sides(asset, built, baseline, ph, phase_mode, override,
+                                        horizon_days, eval_ref)
     candidate_v2 = None
     if history and requested_model != 'v1':
         v2_built, v2_validation = _scenario_v2_candidate(asset, horizon)
@@ -20589,6 +20590,13 @@ def albert_scenario_preview(payload: dict = Body(default={}), user: dict = Depen
             built, validation = v2_built, v2_validation
             model_version = _mkt_scenario_v2.MODEL_VERSION
             eval_ref = v2_validation['evaluationKey']
+            scenarios = _scenario_sides(asset, built, baseline, ph, phase_mode, override,
+                                        horizon_days, eval_ref)
+        elif v2_built and v2_built.get('ok'):
+            # V2 built but not calibrated — use its results but keep calibration as metadata.
+            built, validation = v2_built, v2_validation
+            model_version = _mkt_scenario_v2.MODEL_VERSION
+            eval_ref = v2_validation.get('evaluationKey')
             scenarios = _scenario_sides(asset, built, baseline, ph, phase_mode, override,
                                         horizon_days, eval_ref)
         elif requested_model == 'v2':

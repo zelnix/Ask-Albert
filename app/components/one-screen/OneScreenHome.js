@@ -16,7 +16,6 @@ const signed = (v, unit = '%') => v == null || !Number.isFinite(Number(v)) ? 'un
   : `${Number(v) > 0 ? '+' : ''}${Number(v).toFixed(1)}${unit}`;
 const pct = (v) => v == null || !Number.isFinite(Number(v)) ? 'unavailable' : `${Number(v).toFixed(1)}%`;
 const num = (v) => v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v);
-// All server timestamps without a timezone are UTC. Format them in the reader's local zone.
 const parseTime = (v) => {
   if (!v) return null;
   const raw = String(v);
@@ -40,64 +39,56 @@ const linkTo = (id) => `/?section=${encodeURIComponent(id)}`;
 const NavigateLink = ({ id, children, onNav, className = '' }) => <a href={linkTo(id)} onClick={(e) => { e.preventDefault(); onNav(id); }}
   className={`inline-flex items-center gap-1 font-semibold text-sky-300 hover:text-sky-200 focus-visible:rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 ${className}`}>{children}</a>;
 
-const TickerContent = ({ d, ticker, snapshot, dashboardStatus = 'loading' }) => {
-  const { sop, paper, outlook, streams, driver, etf, health } = snapshot;
-  const publishedState = !d ? dashboardStatus === 'error' ? 'error' : 'loading'
-    : dashboardStatus !== 'ready' || isOld(d.created_at, 26) ? 'stale' : 'ready';
+/* ── Ticker ── */
+const TickerContent = ({ d, ticker, snapshot }) => {
+  const { sop, etf, outlook, streams } = snapshot;
   const phase = sop?.marketStreams?.phaseAssessment || streams?.phaseAssessment;
   const breadth = phase?.inputs;
-  const uni = streams?.universe || sop?.marketStreams;
   const band = outlook?.band;
-  const validation = outlook?.validation || band?.validation;
-  const evaluation = validation?.evaluation;
-  const evaluationStale = Boolean(evaluation?.lastEvaluatedAt) && (isOld(evaluation.lastEvaluatedAt, 240) || health?.outlook === 'stale');
-  const measured = health?.outlook === 'ready' && validation?.predictiveValidation === true && evaluation?.evaluationPoints > 0 && !evaluationStale && Boolean(evaluation?.lastEvaluatedAt);
-  const performance = measured ? `Validated · ${num(evaluation.skillVsNoChange)?.toFixed(2)} skill`
-    : health?.outlook !== 'ready' || evaluationStale || validation?.status === 'PENDING' || !validation ? 'Evaluation unavailable' : 'Not validated';
   const net = etf?.net_1d;
   const claim = (sop?.briefing?.claims || []).find((c) => c.claimId === 'briefing.direction');
+  const change24 = ticker?.change24h ?? ticker?.changePct24h;
+  const ledger = d?.prediction_ledger?.overall || {};
+  const accuracy = num(ledger.accuracy);
+  const graded = num(ledger.n);
+  const forecastPerf = accuracy != null && graded != null && graded > 0
+    ? `${accuracy.toFixed(0)}% \u00b7 ${graded} graded` : 'Forecast results unavailable';
   return [
-    { title: 'BTC spot', value: ticker?.price && ticker.symbol === 'BTC' ? `${money(ticker.price)} · ${signed(ticker.change24h)}` : 'Quote unavailable', to: 'market-intel',
-      what: ticker?.price && ticker.symbol === 'BTC' ? `BTC/USD spot ${money(ticker.price)}; 24-hour change ${signed(ticker.change24h)} as of ${when(ticker.ts)}.` : 'A current BTC/USD quote is not available.',
-      why: 'The spot quote anchors current market context; it is not the last closed candle used by the scenario provider.',
-      how: `Reported by ${ticker?.source || 'the quote feed when available'}. The percentage is the exchange’s 24-hour price change, not a forecast.`,
-      next: 'The quote feed updates on the next successful request (normally every 10 seconds); timing is not guaranteed.', source: ticker?.symbol === 'BTC' ? ticker?.source || 'BTC/USD spot ticker' : 'BTC/USD spot ticker', asOf: ticker?.symbol === 'BTC' ? ticker?.ts : null, version: 'ticker quote', state: ticker?.price && ticker?.symbol === 'BTC' ? isOld(ticker.ts, 0.1) ? 'stale' : 'ready' : 'unavailable' },
-    { title: 'BTC dominance', value: num(d?.dominance?.dominance) != null ? `${num(d.dominance.dominance).toFixed(1)}%${num(d.dominance.change_7d) != null ? ` · ${signed(d.dominance.change_7d, ' pts')}` : ''}` : 'Unavailable', to: 'crossmarket',
-      what: num(d?.dominance?.dominance) != null ? `BTC makes up ${num(d.dominance.dominance).toFixed(2)}% of total crypto market cap in the ${when(d?.created_at)} dashboard publication; seven-day point change ${signed(d.dominance.change_7d, ' pts')}.` : 'BTC market-cap dominance was not reported in this dashboard publication.',
-      why: 'A shift in BTC market-cap share can indicate relative leadership, but does not by itself measure cash flowing into or out of Bitcoin.',
-      how: 'BTC market cap divided by the total covered crypto market cap from CoinGecko; the denominator is the covered crypto market, not spot turnover. Point change compares recorded daily dominance snapshots.',
-      next: 'Reassess after the next published market-cap observation; its release time is not confirmed.', source: 'CoinGecko / dashboard run', asOf: d?.created_at, version: 'market-cap dominance', state: d?.dominance?.dominance == null ? publishedState === 'ready' ? 'unavailable' : publishedState : publishedState },
+    { title: 'BTC spot', value: ticker?.price && ticker.symbol === 'BTC' ? `${money(ticker.price)} \u00b7 ${change24 != null ? signed(change24) : 'change unavailable'}` : 'Quote unavailable', to: 'market-intel',
+      what: ticker?.price && ticker.symbol === 'BTC' ? `BTC/USD spot ${money(ticker.price)}; 24-hour change ${change24 != null ? signed(change24) : 'unavailable'} as of ${when(ticker.ts)}.` : 'A current BTC/USD quote is not available.',
+      why: 'The spot quote anchors current market context.', how: `Reported by ${ticker?.source || 'the quote feed'}.`,
+      next: 'Updates on the next successful request.', source: 'BTC/USD spot ticker', asOf: ticker?.ts, version: 'ticker quote', state: ticker?.price ? 'ready' : 'unavailable' },
+    { title: 'BTC dominance', value: num(d?.dominance?.dominance) != null ? `${num(d.dominance.dominance).toFixed(1)}%${num(d.dominance.change_7d) != null ? ` \u00b7 ${signed(d.dominance.change_7d, ' pts')}` : ''}` : 'Unavailable', to: 'crossmarket',
+      what: num(d?.dominance?.dominance) != null ? `BTC dominance ${num(d.dominance.dominance).toFixed(2)}%; 7d change ${signed(d.dominance.change_7d, ' pts')}.` : 'Not reported.',
+      why: 'Shifts in BTC dominance indicate relative leadership.', how: 'CoinGecko market cap ratio.',
+      next: 'Next market-cap observation.', source: 'CoinGecko', asOf: d?.created_at, version: 'dominance', state: d?.dominance?.dominance != null ? 'ready' : 'unavailable' },
     { title: 'Altcoin breadth', value: breadth?.altsWithReturns > 0 ? `${breadth.altsBeatingBtc}/${breadth.altsWithReturns} beat BTC` : 'Unavailable', to: 'market-intel',
-      what: breadth?.altsWithReturns > 0 ? `${breadth.altsBeatingBtc} of ${breadth.altsWithReturns} eligible altcoins beat BTC over ${phase?.window || 'the measured window'}; ${uni?.eligibleAltCount ?? 'unknown'} eligible in the universe.` : 'The current eligible-altcoin comparison cannot be measured.',
-      why: 'Broad participation is more informative than one coin rallying alone; narrow leadership is easier to reverse.',
-      how: `Eligible coins with returns over the same BTC comparison window form the denominator. ${uni?.excluded?.length ? `${uni.excluded.length} exclusions reported in the universe; open the market detail for reasons.` : 'Exclusion details are unavailable for this snapshot.'} It does not measure all tokens.`,
-      next: 'Reassess on the next completed universe/price update; exact time not confirmed.', source: 'market-streams phase assessment', asOf: phase?.assessedAt || uni?.sourceTimestamp, version: phase?.ruleVersion, snapshotId: streams?.phaseAssessment?.snapshotId, state: breadth?.altsWithReturns > 0 ? health?.sop !== 'ready' || phase?.status === 'STALE' ? 'stale' : 'ready' : health?.sop === 'loading' ? 'loading' : 'unavailable' },
-    { title: 'ETF net flow', value: net == null ? 'Session unavailable' : `${signed(net, 'm')} · ${etf?.latest_date ? etf.latest_date.slice(5) : 'date missing'}`, to: 'institutional',
-      what: net == null ? 'The latest reported US spot BTC ETF session is unavailable.' : `US spot BTC ETF net flow was ${signed(net, 'm USD')} for the reported session ${etf?.latest_date || 'date not provided'}. This is not a live intraday flow.`,
-      why: 'Net creations can require ETF issuers to source BTC; net redemptions can relieve demand, but secondary-market hedging complicates the link to spot price.',
-      how: `Sum of reporting issuers’ daily net creations/redemptions in USD millions. Source: ${etf?.source || 'Farside/TFTC reporting feed'}. It is a reported session, not continuously updated.`,
-      next: 'Reassess when the next issuer session is published; release time is not confirmed.', source: etf?.source || 'US BTC ETF report', asOf: etf?.latest_date, version: 'daily issuer flow', state: net == null ? health?.etf === 'loading' ? 'loading' : 'unavailable' : health?.etf !== 'ready' || isOld(etf?.latest_date, 96) ? 'stale' : 'ready' },
+      what: breadth?.altsWithReturns > 0 ? `${breadth.altsBeatingBtc} of ${breadth.altsWithReturns} altcoins beat BTC.` : 'Unavailable.',
+      why: 'Broad participation is more durable than narrow leadership.', how: 'Phase assessment eligible-coin comparison.',
+      next: 'Next universe update.', source: 'phase assessment', asOf: phase?.assessedAt, version: phase?.ruleVersion, state: breadth?.altsWithReturns > 0 ? 'ready' : 'unavailable' },
+    { title: 'ETF net flow', value: net == null ? 'Session unavailable' : `${signed(net, 'm')} \u00b7 ${etf?.latest_date ? etf.latest_date.slice(5) : 'date missing'}`, to: 'institutional',
+      what: net == null ? 'Latest ETF session unavailable.' : `Net flow ${signed(net, 'm USD')} for ${etf?.latest_date || 'unknown date'}.`,
+      why: 'ETF creations may require sourcing BTC.', how: `Issuer session totals. Source: ${etf?.source || 'Farside/TFTC'}.`,
+      next: 'Next issuer session.', source: etf?.source || 'US BTC ETF report', asOf: etf?.latest_date, version: 'daily flow', state: net != null ? 'ready' : 'unavailable' },
     { title: 'Market stance', value: sop?.market?.regime ? titleCase(sop.market.regime) : 'Unavailable', to: 'briefing',
-      what: claim?.text || (sop?.market?.regime ? `The canonical regime reads ${titleCase(sop.market.regime)}.` : 'There is no current engine stance.'),
-      why: 'This is the starting context for Albert’s market and paper-risk interpretation, not a probability that BTC will rise.',
-      how: 'The canonical regime balances trend and participation inputs; the full Brief names the supporting and opposing claims. It is qualified whenever feeds are stale.',
-      next: claim?.invalidation || 'Reassess at the next canonical engine publication; exact time not confirmed.', source: 'canonical regime', asOf: sop?.market?.asOf || sop?.generatedAt, version: sop?.briefing?.ruleVersion, snapshotId: getSnap(claim), state: health?.sop !== 'ready' ? health?.sop === 'loading' ? 'loading' : sop ? 'stale' : 'unavailable' : !sop?.market?.asOf ? 'unavailable' : sop?.market?.freshness?.toLowerCase() || health?.sop },
-    { title: '7d historical range', value: band?.available && band.horizonDays === 7 ? `${signed(band.lowerPct)} to ${signed(band.upperPct)}` : 'Range unavailable', to: 'scenarios',
-      what: band?.available && band.horizonDays === 7 ? `In comparable past conditions, the middle 60% of Bitcoin's next seven-day moves fell between ${signed(band.lowerPct)} and ${signed(band.upperPct)}. Future prices can fall outside that range. It is historical context, not a forecast.` : `No range is published: ${band?.reasonText || 'evaluation or matched sample unavailable'}.`,
-      why: 'The band illustrates how similar historical conditions resolved, not the chance of a trade succeeding.',
-      how: band?.available ? `20th–80th percentile of ${band.matchedDays ?? 'the'} matched days, seven-day horizon; ${band.independentEpisodes ?? 'unknown'} independent episodes. Anchored to the closed candle on ${when(band.anchorDate, true)}.` : 'The provider withholds a numeric band until its own sample and walk-forward calibration gate are met.',
-      next: 'Reassess after the next closed daily candle and completed walk-forward evaluation; exact time not confirmed.', source: 'scenario-outlooks/preview', asOf: outlook?.baseline?.observedAt, version: outlook?.modelVersion, snapshotId: band?.snapshotId, state: band?.available && band.horizonDays === 7 ? health?.outlook !== 'ready' || isOld(outlook?.baseline?.observedAt, 50) ? 'stale' : 'ready' : health?.outlook === 'loading' ? 'loading' : 'unavailable' },
-    { title: 'Forecast performance', value: performance, to: 'scenario-evaluation',
-      what: measured ? `Walk-forward evaluation over ${evaluation.evaluationPoints} chronological checks: skill ${num(evaluation.skillVsNoChange)?.toFixed(2)} vs assuming no change; last evaluated ${when(evaluation.lastEvaluatedAt, true)}.` : evaluationStale ? 'The last measured evaluation is too old to present as current validation. Await a new completed evaluation.' : `${performance}. ${validation?.headline || band?.reasonText || 'The measured evaluation is not available.'}`,
-      why: 'A historical scenario range can be descriptive even if the middle path has no predictive edge. Measured skill must be validated separately before calling it predictive.',
-      how: `The provider checks past predictions chronologically against a no-change baseline and tests interval coverage. ${validation?.materialSkillThreshold == null ? 'Predictive threshold is not available.' : `Material skill threshold ${validation.materialSkillThreshold}.`} No range or ticker direction is substituted for measured performance.`,
-      next: 'Reassess when the provider completes the next walk-forward evaluation; exact time not confirmed.', source: 'scenario-outlooks evaluation', asOf: evaluation?.lastEvaluatedAt, version: outlook?.modelVersion, snapshotId: band?.snapshotId, state: measured ? 'ready' : health?.outlook !== 'ready' && validation ? 'stale' : health?.outlook === 'loading' ? 'loading' : 'unavailable' },
+      what: claim?.text || (sop?.market?.regime ? `Regime: ${titleCase(sop.market.regime)}.` : 'No stance.'),
+      why: 'Starting context for market interpretation.', how: 'Canonical regime from trend and participation.',
+      next: claim?.invalidation || 'Next engine publication.', source: 'canonical regime', asOf: sop?.market?.asOf || sop?.generatedAt, version: sop?.briefing?.ruleVersion, snapshotId: getSnap(claim), state: sop?.market?.regime ? 'ready' : 'unavailable' },
+    { title: '7d historical range', value: band?.lowerPct != null && band?.upperPct != null && band?.horizonDays === 7 ? `${signed(band.lowerPct)} to ${signed(band.upperPct)}` : 'Range unavailable', to: 'scenarios',
+      what: band?.lowerPct != null ? `20th\u201380th pct: ${signed(band.lowerPct)} to ${signed(band.upperPct)}, 7d.` : `No range: ${band?.reasonText || 'unavailable'}.`,
+      why: 'Historical context, not a forecast.', how: band?.lowerPct != null ? `${band.matchedDays ?? ''} matched days.` : 'Pending calibration.',
+      next: 'Next closed daily candle.', source: 'scenario-outlooks/preview', asOf: outlook?.baseline?.observedAt, version: outlook?.modelVersion, snapshotId: band?.snapshotId, state: band?.lowerPct != null ? 'ready' : 'unavailable' },
+    { title: 'Forecast performance', value: forecastPerf, to: 'scenario-evaluation',
+      what: accuracy != null ? `Prediction Ledger: ${accuracy.toFixed(0)}% accuracy, ${graded} graded forecasts.` : 'Forecast results unavailable.',
+      why: 'Measured accuracy shows whether ranges historically resolved within bounds.',
+      how: 'Prediction Ledger: correct / graded.',
+      next: 'Next graded resolution.', source: 'prediction_ledger', asOf: d?.prediction_ledger?.overall?.lastGradedAt || d?.created_at, version: 'prediction ledger', state: accuracy != null ? 'ready' : 'unavailable' },
   ];
 };
 
 const Explanation = ({ item, onNav, onEvidence }) => <div className="space-y-3 text-sm leading-relaxed text-slate-300">
   {[['What is observed', item.what], ['Why it matters', item.why], ['How it works / uncertainty', item.how], ['When to revisit', item.next]].map(([label, text]) => <p key={label}><strong className="block text-xs uppercase tracking-wide text-sky-300">{label}</strong>{text || 'Not available for this snapshot.'}</p>)}
-  <p className="border-t border-slate-700 pt-3 text-xs text-slate-400">Source: {item.source || 'source unavailable'} · As of {when(item.asOf)} · Version: {item.version || 'not provided'} · Status: {item.state || 'unavailable'}</p>
+  <p className="border-t border-slate-700 pt-3 text-xs text-slate-400">Source: {item.source || 'source unavailable'} \u00b7 As of {when(item.asOf)} \u00b7 Version: {item.version || 'not provided'} \u00b7 Status: {item.state || 'unavailable'}</p>
   {item.snapshotId && <button type="button" onClick={() => onEvidence(item.snapshotId)} className="flex items-center gap-1.5 text-sm font-semibold text-sky-300 underline"><ShieldCheck className="h-4 w-4" />Open immutable evidence</button>}
   {(item.links || (item.to ? [[item.destination || 'Open detailed screen', item.to]] : [])).length > 0 && <div className="border-t border-slate-700 pt-3">
     <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-400">Explore the complete detail</p>
@@ -125,7 +116,8 @@ const HomeTicker = ({ d, ticker, snapshot, onNav, dashboardStatus }) => {
   </>;
 };
 
-const CARD_ID_BY_TITLE = { 'Albert’s Brief': 'brief', 'Paper Trading': 'paper', 'Portfolio & Risk': 'portfolio', 'BTC Bull & Bear': 'btc', 'Market Intelligence': 'intelligence', 'News, Macro & Policy': 'news', 'Evidence & Engines': 'evidence', 'On-Chain & Flows': 'flows', 'Opportunity Radar': 'radar' };
+/* ── Card chrome ── */
+const CARD_ID_BY_TITLE = { "Albert\u2019s Brief": 'brief', 'Paper Trading': 'paper', 'Portfolio & Risk': 'portfolio', 'BTC Bull & Bear': 'btc', 'Market Intelligence': 'intelligence', 'News, Macro & Policy': 'news', 'Evidence & Engines': 'evidence', 'On-Chain & Flows': 'flows', 'Opportunity Radar': 'radar' };
 const DashboardCard = ({ cardId, title, icon: Icon, status, summary, freshness, children, onOpen, onAsk, detail }) => <article
   onClick={(e) => { if (!e.target.closest('button, a')) onOpen(); }}
   className="flex min-w-0 cursor-pointer flex-col rounded-lg border border-slate-700/80 bg-slate-900/80 p-3 shadow-sm shadow-black/20 xl:min-h-[195px]">
@@ -143,6 +135,7 @@ const DashboardCard = ({ cardId, title, icon: Icon, status, summary, freshness, 
   </div>
 </article>;
 
+/* ── Home ── */
 const OneScreenHome = ({ d, dashboardStatus = 'loading', ticker, news, newsStatus, snapshot, onNav }) => {
   const [chart, setChart] = useState(null);
   const [selected, setSelected] = useState(null);
@@ -157,100 +150,69 @@ const OneScreenHome = ({ d, dashboardStatus = 'loading', ticker, news, newsStatu
   }, []);
   const [evidenceId, setEvidenceId] = useState(null);
   const { sop, paper, outlook, eth, streams, driver, etf, whales, network, sentiment, health } = snapshot;
-  const publishedState = !d ? dashboardStatus === 'error' ? 'error' : 'loading'
-    : dashboardStatus !== 'ready' || isOld(d.created_at, 26) ? 'stale' : 'ready';
-  const sourceState = (key, timestamp, maxAge) => health?.[key] === 'ready'
-    ? !timestamp ? 'unavailable' : isOld(timestamp, maxAge) ? 'stale' : 'ready' : health?.[key] || 'unavailable';
-  const claimTime = sop?.market?.asOf || sop?.generatedAt;
+  // Derive card states from health without suppressing displayed data.
   const claims = sop?.briefing?.claims || [];
   const directionClaim = claims.find((c) => c.claimId === 'briefing.direction');
-  const briefState = sourceState('sop', sop?.market?.asOf, 26) === 'ready' && !directionClaim ? 'unavailable' : sop?.market?.asOf ? sourceState('sop', sop.market.asOf, 26) : sop && health?.sop === 'ready' ? 'unavailable' : health?.sop || 'unavailable';
-  const paperState = health?.paper === 'ready' && paper?.accountResolution?.status !== 'RESOLVED' ? 'unavailable' : health?.paper || 'loading';
-  const portfolioClaim = claims.find((c) => c.claimId === 'briefing.portfolio');
   const leadershipClaim = claims.find((c) => c.claimId === 'briefing.leadership');
+  const portfolioClaim = claims.find((c) => c.claimId === 'briefing.portfolio');
+  const secondReason = claims.find((c) => c.claimId === 'briefing.turnover');
   const totals = paper?.totals;
   const paperLoading = health?.paper === 'loading' || health?.paper === 'idle';
-  const paperError = health?.paper === 'error' || health?.paper === 'unavailable';
-  const accountResolved = !paperLoading && !paperError && paper?.accountResolution?.status === 'RESOLVED';
-  const accountCount = accountResolved ? Number(paper.accountResolution.count) : null;
-  const noAccount = paperState === 'ready' && accountCount === 0;
-  const rollupComplete = accountResolved && paper?.accountResolution?.rollupComplete === true;
-  const entries = (paper?.recentFills || []).filter((e) => e.eventType === 'FILL' && (e.side === 'BUY' || e.side === 'SELL')).slice(0, 2);
-  const hasStalePrices = (paper?.strategies || []).some((s) => s.marketData === 'STALE');
-  const paperIntegrityMismatch = paper?.ledgerIntegrity?.status === 'MISMATCH';
-  const valuationReady = paperState === 'ready' && rollupComplete && totals?.valueAvailable && !hasStalePrices && paper?.ledgerIntegrity?.status === 'MATCH';
-  const pnl = valuationReady && num(totals?.startingCash) > 0 ? num(totals.pnlUsd) : null;
-  const openValue = valuationReady && paper?.cashAvailable && num(totals.value) != null && num(paper.cashTotal) != null ? num(totals.value) - num(paper.cashTotal) : null;
-  const pnlState = paperLoading ? 'Loading wallet' : paperError ? 'Wallet data unavailable' : paperState === 'stale' ? 'Stale wallet read' : !accountResolved ? 'Wallet status unavailable'
-    : noAccount ? 'No paper wallet' : !rollupComplete ? 'Wallet roll-up unavailable'
-      : paperIntegrityMismatch ? 'Reconciliation mismatch' : paper?.ledgerIntegrity?.status !== 'MATCH' ? 'Reconciliation unavailable' : !totals?.valueAvailable ? 'Valuation unavailable' : hasStalePrices ? 'Stale prices'
-        : pnl == null ? 'Basis unavailable' : Math.abs(pnl) < 0.005 ? 'Neutral' : pnl > 0 ? 'Profit' : 'Loss';
   const positions = paper?.positions || [];
-  const leadingPosition = rollupComplete ? positions.map((p) => ({
+  const entries = (paper?.recentFills || []).filter((e) => e.eventType === 'FILL' && (e.side === 'BUY' || e.side === 'SELL')).slice(0, 2);
+  // Display each returned field independently — no rollupComplete gate.
+  const pnlVal = num(totals?.pnlUsd);
+  const pnlLabel = pnlVal == null ? (paperLoading ? 'Loading' : totals ? 'Basis unavailable' : 'Unavailable')
+    : Math.abs(pnlVal) < 0.005 ? 'Neutral' : pnlVal > 0 ? 'Profit' : 'Loss';
+  const leadingPosition = positions.map((p) => ({
     asset: p.asset, value: num(p.currentPrice) != null && num(p.netQuantity) != null ? num(p.currentPrice) * num(p.netQuantity) : null
-  })).filter((p) => p.value != null).sort((a, b) => b.value - a.value)[0] : null;
+  })).filter((p) => p.value != null).sort((a, b) => b.value - a.value)[0] || null;
   const phase = streams?.phaseAssessment || sop?.marketStreams?.phaseAssessment;
   const research = streams?.researchFindings || sop?.marketStreams?.researchFindings;
-  const findings = (research?.findings || []).filter((f) => f.status === 'OPEN' && !['AVOID_FOR_NOW', 'INSUFFICIENT_EVIDENCE'].includes(f.priority) && f.confirmIf && f.invalidateIf).slice(0, 2);
+  // Display source findings with their classification — no additional exclusions.
+  const findings = (research?.findings || []).filter((f) => f.status === 'OPEN').slice(0, 2);
   const lead = driver?.currentLeader;
   const next = driver?.nextMoverCandidates?.[0];
   const paperNews = [...(news?.cards || [])].filter((c) => c?.title).sort((a, b) => (b.impact || 0) - (a.impact || 0));
   const story = paperNews[0];
-  const newsMechanism = !story ? 'The price/liquidity transmission cannot be assessed without a sourced development.'
-    : /stablecoin|regulat/i.test(`${story.title} ${story.ai?.summary}`)
-      ? 'Clearer issuer rules might improve institutional on-ramps and BTC liquidity, while compliance costs or slower adoption could work against that. The near-term price effect is unproven.'
-      : /inflation|rate decision|interest rate|cpi/i.test(`${story.title} ${story.ai?.summary}`)
-        ? 'Rates staying higher can draw capital toward cash and bonds and away from crypto risk; a softer release could have the opposite effect. Neither path is assured.'
-        : 'The BTC transmission is conditional; a sourced development alone does not establish the direction or timing of a price move.';
   const band = outlook?.band;
   const val = outlook?.validation || band?.validation;
-  const valText = val?.predictiveValidation && val?.evaluation?.evaluationPoints > 0 && !isOld(val?.evaluation?.lastEvaluatedAt, 240) && health.outlook === 'ready'
-    ? `Validated · ${val.evaluation.evaluationPoints} checks` : !val || val.status === 'PENDING' || isOld(val?.evaluation?.lastEvaluatedAt, 240) ? 'Evaluation unavailable' : 'Not validated';
+  // Display engine evaluation result directly — no browser 240-hour decision.
+  const valText = val?.predictiveValidation && val?.evaluation?.evaluationPoints > 0
+    ? `Validated \u00b7 ${val.evaluation.evaluationPoints} checks` : !val || val.status === 'PENDING' ? 'Evaluation unavailable' : 'Not validated';
   const participants = (streams?.participants?.participants || []).filter((p) => p?.finding && p?.status !== 'MISSING').slice(0, 2);
   const marketRows = matchedMarketSeries(outlook, eth);
   const lastSharedMarket = marketRows.filter((p) => p.BTC != null && p.ETH != null).at(-1);
-  const returns = lastSharedMarket ? `BTC ${signed(lastSharedMarket.BTC - 100)} · ETH ${signed(lastSharedMarket.ETH - 100)}` : 'Matched comparison unavailable';
+  const returns = lastSharedMarket ? `BTC ${signed(lastSharedMarket.BTC - 100)} \u00b7 ETH ${signed(lastSharedMarket.ETH - 100)}` : 'Matched comparison unavailable';
   const dashboardTime = d?.created_at;
   const briefChanges = (sop?.changesSinceLastVisit || []).slice(0, 1);
-  const secondReason = claims.find((c) => c.claimId === 'briefing.turnover');
   const nextEvent = d?.event_calendar?.next_high_impact;
   const nextEventTime = nextEvent?.date || nextEvent?.at || nextEvent?.time;
   const currentLeader = lead?.label || lead?.actor;
-  const marketStates = [sourceState('driver', driver?.asOf, 26), sourceState('outlook', outlook?.baseline?.observedAt, 50), sourceState('eth', eth?.baseline?.observedAt, 50), sourceState('streams', streams?.generatedAt, 26), publishedState];
-  const marketState = marketStates.includes('error') ? 'error' : driver?.dataQuality === 'STALE' || marketStates.includes('stale') ? 'stale'
-    : driver?.dataQuality && driver.dataQuality !== 'VERIFIED' ? 'unavailable'
-      : marketStates.every((v) => v === 'loading') ? 'loading' : marketStates.every((v) => v === 'ready') ? 'ready' : 'unavailable';
   const whale = (whales?.whales || []).find((w) => w.change_7d != null) || whales?.whales?.[0];
-  const whaleState = sourceState('whales', whales?.as_of, 36);
-  const flowStates = [whaleState, sourceState('etf', etf?.latest_date, 96), network?.as_of ? sourceState('network', network.as_of, 36) : health?.network === 'ready' ? 'unavailable' : health?.network, sourceState('sentiment', sentiment?.ts, 48)];
-  const flowState = flowStates.includes('error') ? 'error' : flowStates.includes('stale') ? 'stale'
-    : flowStates.every((x) => x === 'loading') ? 'loading'
-      : flowStates.every((x) => x === 'ready') ? 'ready' : 'unavailable';
+  // Display available results from each source independently — no all-feeds-ready requirement.
   const newsState = newsStatus === 'ready' ? (story?.published ? isOld(story.published, 72) ? 'stale' : story?.verification && story.verification !== 'Confirmed' ? 'unverified' : 'ready' : 'unavailable')
     : story ? 'stale' : newsStatus === 'error' ? 'error' : 'loading';
-  const last = (source, asOf, dateOnly = false) => `${source} · ${when(asOf, dateOnly)}`;
-  // A chart run older than the canonical closed-candle snapshot cannot supply
-  // current support/ceiling levels; keep the date visible but withhold its lines.
-  const availableLevels = isOld(d?.created_at, 72) ? [] : Array.isArray(d?.chart?.sr_levels) ? d.chart.sr_levels : [];
+  const last = (source, asOf, dateOnly = false) => `${source} \u00b7 ${when(asOf, dateOnly)}`;
+  // No 72-hour rule — use levels as returned.
+  const availableLevels = Array.isArray(d?.chart?.sr_levels) ? d.chart.sr_levels : [];
   const anchor = num(outlook?.history?.at(-1)?.close);
   const support = anchor != null ? availableLevels.filter((l) => l.type === 'support' && num(l.price) != null && num(l.price) < anchor).sort((a, b) => Number(b.price) - Number(a.price))[0] : null;
   const ceiling = anchor != null ? availableLevels.filter((l) => l.type === 'resistance' && num(l.price) != null && num(l.price) > anchor).sort((a, b) => Number(a.price) - Number(b.price))[0] : null;
+  const claimTime = sop?.market?.asOf || sop?.generatedAt;
   const info = {
-    brief: { title: 'Albert’s Brief', to: 'briefing', what: directionClaim?.text || 'A current market judgment is unavailable.', why: leadershipClaim?.text || 'Market leadership is not confirmed in this snapshot.', how: directionClaim?.invalidation || 'The canonical regime is based on measured trend and participation; a stale feed blocks action calls.', next: 'At the next canonical engine and market-stream publication; exact time not confirmed.', source: 'state-of-play briefing', asOf: sop?.market?.asOf || sop?.generatedAt, version: sop?.briefing?.ruleVersion, snapshotId: getSnap(directionClaim), state: sop?.market?.freshness?.toLowerCase() || health.sop, links: CARD_LINKS.brief },
-    paper: { title: 'Paper Trading', to: 'paper', what: noAccount ? 'No paper wallet exists yet.' : !accountResolved ? `${pnlState}. The owner’s account list has not resolved; no zero balance is inferred.` : paperState !== 'ready' ? 'Only a stale paper ledger read is available; current balance and P&L are withheld.' : !rollupComplete ? `${accountCount} wallet record(s) exist, but the latest strategy roll-up does not cover every wallet. Combined figures are withheld.` : paperIntegrityMismatch ? 'Ledger reconciliation mismatch; current wallet value and P&L are withheld.' : paper?.ledgerIntegrity?.status !== 'MATCH' ? 'Ledger reconciliation unavailable; current wallet value and P&L are withheld.' : !totals.valueAvailable ? 'Combined valuation is unavailable; one or more held assets cannot be marked safely.' : hasStalePrices ? `Last marked paper value ${money(totals.value, 2)} may be stale; profit/loss is withheld until a fresh mark.` : pnl == null ? `Combined value ${money(totals.value, 2)}; profit/loss basis unavailable.` : `Combined value ${money(totals.value, 2)}. ${pnlState} ${money(Math.abs(pnl), 2)} (${signed(totals.pnlPct)}) against ${money(totals.startingCash, 2)} starting cash.`, why: 'Only completed fills affect the ledger and paper account; pending proposals do not count as trades.', how: 'The paper engine sums owner-scoped virtual wallets only when every wallet is included. Missing marks or unlinked wallets withhold the combined result.', next: 'Recalculate after a new mark or completed paper fill; next market time not confirmed.', source: 'paper/overview, owner account ledgers', asOf: paper?.asOf, version: 'owner-scoped paper read', snapshotId: getSnap(portfolioClaim), state: hasStalePrices ? 'stale' : health.paper, links: CARD_LINKS.paper },
-    portfolio: { title: 'Portfolio & Risk', to: 'paper', what: noAccount ? 'No paper wallet exists yet.' : !accountResolved ? `${pnlState}; holdings are not known.` : paperState !== 'ready' ? 'Last owner wallet read is stale; current holdings and risk cannot be confirmed.' : !rollupComplete ? `${accountCount} owner wallet(s) exist; combined holdings and risk are withheld because the roll-up is incomplete.` : !valuationReady ? `${pnlState}; combined allocation and risk are withheld.` : `${positions.length} open holdings across ${accountCount} paper wallets. ${paper?.cashAvailable ? `Cash ${money(paper.cashTotal, 2)} (${pct(paper.cashPct)} of combined value).` : 'Combined cash allocation unavailable.'} ${paper?.protectedCashAvailable ? `Protected ${money(paper.protectedCashTotal, 2)} and deployable ${money(paper.deployableCashTotal, 2)}.` : 'Protected and deployable cash unavailable.'} ${leadingPosition ? `Largest marked holding: ${leadingPosition.asset} ${money(leadingPosition.value, 2)}.` : 'Largest marked holding unavailable.'} ${paper?.openRiskAvailable ? `Combined open risk ${pct(paper.openRiskPct)} against the paper profile cap ${pct(paper.openRiskLimitPct)}.` : 'Combined open risk unavailable.'}`, why: 'Holdings expose the account to mark-to-market moves; the paper profile open-risk cap and owner mandate drawdown limit are separate safeguards.', how: 'Cash and open risk are summed from owner-scoped wallet projections only when all wallets are accounted for.', next: 'Recalculate after a fill, mark or mandate change; next provider update time not confirmed.', source: 'paper/overview + owner mandate', asOf: paper?.asOf, version: 'paper equity/risk projection', snapshotId: getSnap(portfolioClaim), state: health.paper, links: CARD_LINKS.portfolio },
-    btc: { title: 'BTC Bull & Bear', to: 'scenarios', what: band?.available ? `Historical 7-day 20th–80th percentile: ${signed(band.lowerPct)} to ${signed(band.upperPct)}. Not a forecast${val?.predictiveValidation ? ' despite passing measured validation' : ''}.` : `No range published: ${band?.reasonText || 'evaluation or sample unavailable'}.`, why: 'Observed history ends at Now. Bull/bear paths are conditional historical comparisons, not guarantees or price limits.', how: `Closed daily candles and measured historical analogs. ${availableLevels?.length ? `Support and ceiling are clustered daily swing reactions from the ${when(d?.created_at)} dashboard study, not promises.` : `The last daily support/ceiling study (${when(d?.created_at)}) is stale or unavailable; its lines are withheld from this newer chart.`}`, next: 'Recheck after the next closed daily candle and evaluation; exact time not confirmed.', source: 'scenario-outlooks/preview + chart intelligence', asOf: outlook?.baseline?.observedAt, version: outlook?.modelVersion, snapshotId: band?.snapshotId, state: health.outlook, links: CARD_LINKS.btc },
-    intelligence: { title: 'Market Intelligence', to: 'drivers', what: lead ? `Current leading driver: ${titleCase(lead.actor || lead.label)} (${lead.evidenceStatus || 'qualification unavailable'}). ${next ? `Watch ${titleCase(next.actor)} next — ${next.probabilityBand || 'unrated'} band.` : 'Next driver not established.'}` : 'A current leading driver is not established.', why: 'A leader may explain observed market movement; a possible next driver is conditional, not a trading signal.', how: `Market-driver engine ${driver?.engineVersion || 'version unavailable'} weighs observed and inferred evidence separately. The chart matches actual BTC/ETH daily dates, normalized to 100; gaps are not filled.`, next: next?.condition ? `Review if ${next.condition}; exact event time not confirmed.` : 'Next driver review time not confirmed; check market source.', source: 'market-driver + matched closed candles', asOf: driver?.asOf || outlook?.baseline?.observedAt, version: driver?.engineVersion, snapshotId: null, state: health.driver, links: CARD_LINKS.intelligence },
-    news: { title: 'News, Macro & Policy', to: 'news', what: story ? `${story.title} (${story.verification || 'verification unknown'}).` : 'No sourced current development is available.', why: story?.ai?.why_it_matters || 'The effect on this portfolio is not established by the available source.', how: story?.ai?.summary ? `${story.ai.summary} ${newsMechanism}` : newsMechanism, next: 'Reassess after independent source confirmation or the next scheduled event; exact time not confirmed — check the Events calendar.', source: story?.source || 'news feed', asOf: story?.published, version: 'news verification', state: newsState, links: CARD_LINKS.news },
-    evidence: { title: 'Evidence & Engines', to: 'scenario-evaluation', what: `Data ${titleCase(sop?.dataQuality?.status || 'unavailable')}; paper ${paper?.status || 'unavailable'}; scenario ${valText}.`, why: 'Traceable fills and source health determine whether an attractive number is safe to use. A descriptive range is not measured predictive performance.', how: 'Paper results trace to ledger fills and strategy attribution; evaluation checks the matched-history provider chronologically against no change. Neither chat nor UI changes the engine.', next: 'Recheck after the next mark, evaluation or health update; exact time not confirmed.', source: 'state-of-play + scenario evaluation + paper ledger', asOf: val?.evaluation?.lastEvaluatedAt || sop?.generatedAt, version: outlook?.modelVersion || sop?.briefing?.ruleVersion, snapshotId: band?.snapshotId, state: val?.evaluation?.lastEvaluatedAt && isOld(val.evaluation.lastEvaluatedAt, 240) ? 'stale' : health.sop, links: CARD_LINKS.evidence },
-    flows: { title: 'On-Chain & Flows', to: 'institutional', what: `${etf?.net_1d != null ? `Latest reported ETF session ${etf.latest_date || 'date unavailable'}: ${signed(etf.net_1d, 'm USD')}.` : 'Latest ETF session unavailable.'} ${participants[0]?.finding || 'Whale/network readings not confirmed.'}`, why: 'ETF creations may require sourcing BTC; whale and network changes can alter liquid supply, but one feed alone does not prove a price move.', how: 'Issuer session totals plus separately classified market-participant observations; stale/missing cohorts cannot be treated as a live signal.', next: 'Next provider or issuer reporting update; time not confirmed.', source: 'US ETF reported sessions + market participants', asOf: etf?.latest_date || streams?.generatedAt, version: streams?.version, snapshotId: streams?.participants?.snapshotId, state: health.etf === 'ready' ? health.streams : health.etf, links: CARD_LINKS.flows },
-    radar: { title: 'Opportunity Radar', to: 'opportunities', what: findings[0] ? `${findings[0].title} — research ${titleCase(findings[0].priority)}; no trade proposed unless an actual proposal is pending.` : 'No qualified setup. No trade proposed.', why: findings[0]?.hypothesis || 'No setup currently has both a measurable confirmation and invalidation.', how: findings[0] ? `Confirm: ${findings[0].confirmIf}. Invalidate: ${findings[0].invalidateIf}. Risk/mandate fit must be checked in the strategy workflow, not assumed here.` : 'Only a measured research finding with a falsifiable trigger can enter this radar; research alone never executes a trade.', next: findings[0]?.resolveBy ? `Review on the next provider observation, no later than resolution deadline ${when(findings[0].resolveBy)}; exact next review time not confirmed.` : 'Review on the next market-stream refresh; exact time not confirmed.', source: 'market-streams research findings', asOf: findings[0]?.openedAt || streams?.generatedAt, version: research?.ruleVersion, snapshotId: findings[0]?.snapshotId, state: health.streams === 'stale' || (health.streams === 'error' && research) ? 'stale' : health.streams === 'error' ? 'error' : findings.length ? 'WAIT' : health.streams === 'loading' ? 'loading' : 'unavailable', links: CARD_LINKS.radar },
+    brief: { title: "Albert\u2019s Brief", to: 'briefing', what: directionClaim?.text || 'Market assessment unavailable.', why: leadershipClaim?.text || 'Leadership not confirmed.', how: directionClaim?.invalidation || 'Based on measured trend and participation.', next: 'Next canonical engine publication.', source: 'state-of-play briefing', asOf: claimTime, version: sop?.briefing?.ruleVersion, snapshotId: getSnap(directionClaim), state: health?.sop, links: CARD_LINKS.brief },
+    paper: { title: 'Paper Trading', to: 'paper', what: totals ? `Value ${money(totals.value, 2)}; ${pnlLabel}${pnlVal != null ? ` ${money(Math.abs(pnlVal), 2)} (${signed(totals.pnlPct)})` : ''}.` : paperLoading ? 'Loading wallet...' : 'Paper wallet data unavailable.', why: 'Only completed fills affect the ledger.', how: 'Owner-scoped virtual wallets.', next: 'Recalculate after next fill or mark.', source: 'paper/overview', asOf: paper?.asOf, version: 'paper read', state: health?.paper, links: CARD_LINKS.paper },
+    portfolio: { title: 'Portfolio & Risk', to: 'paper', what: `${positions.length} holdings. ${paper?.cashAvailable ? `Cash ${money(paper.cashTotal, 2)}.` : ''} ${leadingPosition ? `Largest: ${leadingPosition.asset} ${money(leadingPosition.value, 0)}.` : ''}`, why: 'Holdings expose the account to mark-to-market moves.', how: 'Summed from owner-scoped wallet projections.', next: 'After fill, mark or mandate change.', source: 'paper/overview + mandate', asOf: paper?.asOf, version: 'paper equity/risk', state: health?.paper, links: CARD_LINKS.portfolio },
+    btc: { title: 'BTC Bull & Bear', to: 'scenarios', what: band?.lowerPct != null ? `Historical 7d: ${signed(band.lowerPct)} to ${signed(band.upperPct)}. ${valText}.` : `Range unavailable: ${band?.reasonText || 'pending evaluation'}.`, why: 'Historical comparison, not a guarantee.', how: 'Closed daily candles and matched-history analogs.', next: 'After next closed daily candle.', source: 'scenario-outlooks/preview', asOf: outlook?.baseline?.observedAt, version: outlook?.modelVersion, snapshotId: band?.snapshotId, state: health?.outlook, links: CARD_LINKS.btc },
+    intelligence: { title: 'Market Intelligence', to: 'drivers', what: lead ? `Leading: ${titleCase(lead.actor || lead.label)} (${lead.evidenceStatus || 'unqualified'}). ${next ? `Watch ${titleCase(next.actor)} \u2014 ${next.probabilityBand || 'unrated'}.` : ''}` : 'Leading driver not established.', why: lead?.detail || 'A driver may explain observed movement.', how: `Driver engine ${driver?.engineVersion || 'unavailable'}. ${lead?.explanation || ''}`, next: next?.condition ? `If ${next.condition}.` : 'Next driver review.', source: 'market-driver', asOf: driver?.asOf, version: driver?.engineVersion, state: health?.driver, links: CARD_LINKS.intelligence },
+    news: { title: 'News, Macro & Policy', to: 'news', what: story ? `${story.title} (${story.verification || 'unverified'}).` : 'No sourced development.', why: story?.ai?.why_it_matters || 'Effect not established.', how: story?.ai?.summary || 'Source analysis unavailable.', next: nextEvent?.title ? `${nextEvent.title} \u00b7 ${nextEventTime ? when(nextEventTime) : 'time unconfirmed'}` : 'See calendar.', source: story?.source || 'news feed', asOf: story?.published, version: 'news', state: newsState, links: CARD_LINKS.news },
+    evidence: { title: 'Evidence & Engines', to: 'scenario-evaluation', what: `Scenario: ${valText}. Paper: ${health?.paper || 'unavailable'}. Data: ${titleCase(sop?.dataQuality?.status || 'unavailable')}.`, why: 'Source health determines whether numbers are safe to use.', how: 'Paper traces to ledger fills; evaluation checks predictions chronologically.', next: 'After next mark, evaluation or health update.', source: 'state-of-play + evaluation + paper', asOf: val?.evaluation?.lastEvaluatedAt || sop?.generatedAt, version: outlook?.modelVersion || sop?.briefing?.ruleVersion, snapshotId: band?.snapshotId, state: health?.sop, links: CARD_LINKS.evidence },
+    flows: { title: 'On-Chain & Flows', to: 'institutional', what: `${etf?.net_1d != null ? `ETF ${etf.latest_date || ''}: ${signed(etf.net_1d, 'm USD')}.` : 'ETF unavailable.'} ${participants[0]?.finding || 'Whale/network not confirmed.'}`, why: 'ETF creations may require sourcing BTC; whale changes alter liquid supply.', how: 'Issuer session totals plus market-participant observations.', next: 'Next provider reporting.', source: 'US ETF + market participants', asOf: etf?.latest_date || streams?.generatedAt, version: streams?.version, state: health?.etf, links: CARD_LINKS.flows },
+    radar: { title: 'Opportunity Radar', to: 'opportunities', what: findings[0] ? `${findings[0].title} \u2014 ${titleCase(findings[0].priority)}.` : 'No qualified setup.', why: findings[0]?.hypothesis || 'No current setup.', how: findings[0] ? `Confirm: ${findings[0].confirmIf || 'not specified'}. Invalidate: ${findings[0].invalidateIf || 'not specified'}.` : 'Only measured research enters the radar.', next: findings[0]?.resolveBy ? `By ${when(findings[0].resolveBy)}.` : 'Next market-stream observation.', source: 'market-streams research', asOf: findings[0]?.openedAt || streams?.generatedAt, version: research?.ruleVersion, state: health?.streams, links: CARD_LINKS.radar },
   };
   const ask = (id) => setSelected({ ...info[id], title: info[id].title, to: `dashboard-${id}` });
-  const open = (id) => {
-    if (typeof window !== 'undefined') window.__dashboardReturnCard = id;
-    onNav(`dashboard-${id}`);
-  };
+  const open = (id) => { if (typeof window !== 'undefined') window.__dashboardReturnCard = id; onNav(`dashboard-${id}`); };
   const focusableChart = (type, title, preview) => <button type="button" onClick={() => setChart(type)} aria-label={`Expand ${title} chart to full viewport`}
     className="group relative mt-1 block w-full rounded-md border border-slate-700/70 bg-slate-950/60 p-1.5 text-left hover:border-sky-500/50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400">
     {preview}<span className="absolute right-1 top-1 rounded bg-slate-900/90 p-1 text-sky-200 group-hover:bg-sky-500/30"><Maximize2 className="h-3 w-3" /></span>
@@ -258,61 +220,69 @@ const OneScreenHome = ({ d, dashboardStatus = 'loading', ticker, news, newsStatu
   return <>
     <div className="mb-2 flex flex-wrap items-center gap-2">
       <h1 className="text-base font-bold text-white">Your market at a glance</h1>
-      <span className="text-xs text-slate-400">Nine evidence-led views · paper only</span>
+      <span className="text-xs text-slate-400">Nine evidence-led views \u00b7 paper only</span>
       <button type="button" onClick={snapshot.refresh} aria-label="Refresh dashboard reads" className="ml-auto rounded-md border border-slate-700 p-1.5 text-slate-300 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"><RefreshCw className="h-4 w-4" /></button>
     </div>
     <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,1fr)_280px] lg:items-start xl:grid-cols-[minmax(0,1fr)_320px] xl:items-stretch 2xl:grid-cols-[minmax(0,1fr)_350px]">
       <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 xl:grid-rows-3">
-        <DashboardCard cardId="brief" title="Albert’s Brief" icon={Sparkles} status={briefState} summary={briefState === 'loading' && !sop ? 'Loading the current market assessment…' : directionClaim?.text || 'Market assessment unavailable; no judgment is inferred.'} freshness={last(sop?.market?.asOf ? 'Regime source' : 'Brief built (regime time missing)', claimTime)} onAsk={() => ask('brief')} onOpen={() => open('brief')}>
-          <p className="line-clamp-1"><b>Drivers:</b> {leadershipClaim?.text || 'Leadership unavailable'} · {secondReason?.text || 'Turnover unavailable'}</p>
+        {/* 1. Albert's Brief */}
+        <DashboardCard cardId="brief" title="Albert\u2019s Brief" icon={Sparkles} status={health?.sop} summary={directionClaim?.text || (sop ? 'Market assessment unavailable.' : 'Loading\u2026')} freshness={last('Regime source', claimTime)} onAsk={() => ask('brief')} onOpen={() => open('brief')}>
+          <p className="line-clamp-1"><b>Drivers:</b> {leadershipClaim?.text || 'Leadership unavailable'} \u00b7 {secondReason?.text || 'Turnover unavailable'}</p>
           <p className="mt-1 line-clamp-1"><b>Since last visit:</b> {briefChanges[0]?.detail || (sop ? 'No recorded change' : 'Loading')}</p>
-          <p className="mt-1 line-clamp-1"><b>My paper position:</b> {accountResolved && valuationReady ? `${accountCount} wallet(s) · ${money(totals.value, 2)} combined` : pnlState}</p>
-          <p className="mt-1 line-clamp-1 text-slate-400">Next: {directionClaim?.invalidation || 'next published engine run · time not confirmed'}</p>
+          <p className="mt-1 line-clamp-1"><b>My paper position:</b> {portfolioClaim?.text || (totals ? `${money(totals.value, 2)} combined` : 'Unavailable')}</p>
+          <p className="mt-1 line-clamp-1 text-slate-400">Next: {directionClaim?.invalidation || 'next engine run'}</p>
         </DashboardCard>
-        <DashboardCard cardId="paper" title="Paper Trading" icon={Wallet} status={paperIntegrityMismatch ? 'error' : paperState === 'ready' && hasStalePrices ? 'stale' : paperState} summary={noAccount ? 'No paper wallet exists yet (owner accounts checked).' : !accountResolved || paperState !== 'ready' ? pnlState : !rollupComplete ? `${accountCount} wallet(s) · combined totals withheld` : `Paper wallet value: ${valuationReady ? money(totals.value, 2) : 'unavailable'} · ${pnlState}${pnl != null ? ` ${money(Math.abs(pnl), 2)} (${signed(totals.pnlPct)})` : ''}`} freshness={`${last('Owner ledger read', paper?.asOf)} · price-mark time not supplied`} onAsk={() => ask('paper')} onOpen={() => open('paper')}>
-          <p className="line-clamp-1"><b>Basis:</b> {valuationReady && num(totals?.startingCash) > 0 ? money(totals.startingCash, 2) : 'unavailable'} virtual starting cash · <b>Cash:</b> {valuationReady && paper?.cashAvailable ? money(paper.cashTotal, 2) : 'unavailable'} · <b>Open value:</b> {openValue != null ? money(openValue, 2) : 'unavailable'}</p>
-          {paperState === 'ready' && accountResolved && entries.length ? <div className="mt-1 space-y-0.5">{entries.map((e, i) => <p key={e.ledgerEventId || i} className="truncate" title={e.note}>{e.side === 'BUY' ? 'Bought' : 'Sold'} {e.qty} {e.asset} @ {money(e.fillPx, 2)} · {when(e.effectiveAt || e.recordedAt)}</p>)}</div> : <p className="mt-1 text-slate-400">{paperLoading ? 'Checking owner wallet records…' : paperError ? 'Retry the wallet read in Paper Trading.' : noAccount ? 'Start a saved strategy to create a virtual wallet.' : accountResolved && paperState === 'ready' ? 'No completed paper trades yet.' : 'Completed fills unavailable.'}</p>}
-          <p className="mt-1 text-amber-200">Pending Buy/Sell proposals: {paperState === 'ready' && accountResolved && rollupComplete ? paper?.pendingApprovals?.length ?? 0 : 'unavailable'} · not completed trades</p>
+        {/* 2. Paper Trading — lead with value, P&L, cash, holdings, two latest fills */}
+        <DashboardCard cardId="paper" title="Paper Trading" icon={Wallet} status={health?.paper} summary={totals?.value != null ? `${money(totals.value, 2)} \u00b7 ${pnlLabel}${pnlVal != null ? ` ${money(Math.abs(pnlVal), 2)} (${signed(totals.pnlPct)})` : ''}` : paperLoading ? 'Loading wallet\u2026' : 'Paper wallet data unavailable'} freshness={last('Owner ledger', paper?.asOf)} onAsk={() => ask('paper')} onOpen={() => open('paper')}>
+          <p className="line-clamp-1"><b>Start:</b> {money(totals?.startingCash, 2)} \u00b7 <b>Cash:</b> {paper?.cashAvailable ? money(paper.cashTotal, 2) : (totals?.value != null ? money(num(totals.value) - positions.reduce((s, p) => s + (num(p.currentPrice) || 0) * (num(p.netQuantity) || 0), 0), 2) : 'unavailable')} \u00b7 <b>Holdings value:</b> {positions.length ? money(positions.reduce((s, p) => s + (num(p.currentPrice) || 0) * (num(p.netQuantity) || 0), 0), 2) : 'none'}</p>
+          {entries.length ? <div className="mt-1 space-y-0.5">{entries.map((e, i) => <p key={e.ledgerEventId || i} className="truncate">{e.side === 'BUY' ? 'Bought' : 'Sold'} {e.qty} {e.asset} @ {money(e.fillPx, 2)} \u00b7 {when(e.effectiveAt || e.recordedAt)}</p>)}</div> : <p className="mt-1 text-slate-400">{paperLoading ? 'Checking\u2026' : 'No completed paper trades yet.'}</p>}
+          <p className="mt-1 text-amber-200">Pending Buy/Sell proposals: {paper?.pendingApprovals?.length ?? 0}</p>
         </DashboardCard>
-        <DashboardCard cardId="portfolio" title="Portfolio & Risk" icon={ShieldAlert} status={paperIntegrityMismatch ? 'error' : paperState === 'ready' && hasStalePrices ? 'stale' : paperState} summary={noAccount ? 'No paper wallet; mandate remains separate from virtual holdings.' : !accountResolved || paperState !== 'ready' ? `${pnlState}; allocation not resolved` : !rollupComplete ? `${accountCount} owner wallet(s) · allocation withheld` : !valuationReady ? `${pnlState} · allocation withheld` : `${positions.length} holdings · cash ${valuationReady && paper?.cashAvailable ? pct(paper.cashPct) : 'unavailable'} · largest ${leadingPosition && valuationReady ? `${leadingPosition.asset} ${money(leadingPosition.value, 0)}` : 'unavailable'}`} freshness={last('Owner ledger read (mark time separate)', paper?.asOf)} onAsk={() => ask('portfolio')} onOpen={() => open('portfolio')}>
-          <p className="line-clamp-2"><b>Allocation:</b> {valuationReady && positions.length ? positions.slice(0, 2).map((p) => `${p.asset} ${num(p.currentPrice) != null && num(p.netQuantity) != null && num(totals.value) > 0 ? pct(num(p.currentPrice) * num(p.netQuantity) / num(totals.value) * 100) : 'unpriced'}`).join(' · ') : noAccount ? 'No paper holdings' : 'Unavailable'} · cash {valuationReady && paper?.cashAvailable ? money(paper.cashTotal, 0) : 'unavailable'}</p>
-          <p className="mt-1 line-clamp-1"><b>Protected / deployable:</b> {valuationReady && paper?.protectedCashAvailable ? `${money(paper.protectedCashTotal, 0)} / ${money(paper.deployableCashTotal, 0)}` : 'unavailable'}</p>
-          <p className="mt-1 line-clamp-1"><b>Open risk / paper cap:</b> {valuationReady && paper?.openRiskAvailable ? `${pct(paper.openRiskPct)} / ${pct(paper.openRiskLimitPct)}` : 'unavailable'} · mandate drawdown limit {pct(sop?.user?.maxDrawdownPct)}</p>
-          <p className="mt-1 line-clamp-1 text-slate-400">Next risk check: new priced mark or fill · time not confirmed</p>
+        {/* 3. Portfolio & Risk — render each returned field independently */}
+        <DashboardCard cardId="portfolio" title="Portfolio & Risk" icon={ShieldAlert} status={health?.paper} summary={`${positions.length} holdings \u00b7 cash ${paper?.cashAvailable ? pct(paper.cashPct) : 'unavailable'} \u00b7 largest ${leadingPosition ? `${leadingPosition.asset} ${money(leadingPosition.value, 0)}` : 'unavailable'}`} freshness={last('Owner ledger', paper?.asOf)} onAsk={() => ask('portfolio')} onOpen={() => open('portfolio')}>
+          <p className="line-clamp-2"><b>Allocation:</b> {positions.length ? positions.slice(0, 2).map((p) => `${p.asset} ${num(p.currentPrice) != null && num(p.netQuantity) != null && num(totals?.value) > 0 ? pct(num(p.currentPrice) * num(p.netQuantity) / num(totals.value) * 100) : 'unpriced'}`).join(' \u00b7 ') : 'No holdings'} \u00b7 cash {paper?.cashAvailable ? money(paper.cashTotal, 0) : 'unavailable'}</p>
+          <p className="mt-1 line-clamp-1"><b>Protected / deployable:</b> {paper?.protectedCashAvailable ? `${money(paper.protectedCashTotal, 0)} / ${money(paper.deployableCashTotal, 0)}` : 'unavailable'}</p>
+          <p className="mt-1 line-clamp-1"><b>Open risk / cap:</b> {paper?.openRiskAvailable ? `${pct(paper.openRiskPct)} / ${pct(paper.openRiskLimitPct)}` : 'unavailable'} \u00b7 drawdown limit {pct(sop?.user?.maxDrawdownPct)}</p>
         </DashboardCard>
-        <DashboardCard cardId="btc" title="BTC Bull & Bear" icon={GitBranch} status={sourceState('outlook', outlook?.baseline?.observedAt, 50)} summary={band?.available && band?.horizonDays === 7 ? `Historical 7d: ${signed(band.lowerPct)} to ${signed(band.upperPct)} · ${valText} · not a forecast` : `Historical range unavailable · ${band?.reasonText || (health?.outlook === 'loading' ? 'loading evaluation' : 'insufficient evaluated history')}`} freshness={last('Closed BTC candle', outlook?.baseline?.observedAt)} onAsk={() => ask('btc')} onOpen={() => open('btc')} detail="Full scenarios">
+        {/* 4. BTC Bull & Bear */}
+        <DashboardCard cardId="btc" title="BTC Bull & Bear" icon={GitBranch} status={health?.outlook} summary={band?.lowerPct != null && band?.horizonDays === 7 ? `Historical 7d: ${signed(band.lowerPct)} to ${signed(band.upperPct)} \u00b7 ${valText}` : `Range unavailable \u00b7 ${band?.reasonText || 'pending evaluation'}`} freshness={last('Closed BTC candle', outlook?.baseline?.observedAt)} onAsk={() => ask('btc')} onOpen={() => open('btc')} detail="Full scenarios">
           {focusableChart('btc', 'BTC historical bull and bear', <BTCChart outlook={outlook} levels={availableLevels} />)}
-          <p className="mt-1 truncate text-[11px] text-slate-400">Now: {anchor != null ? money(anchor) : 'unavailable'} · Support {support ? money(support.price) : 'unavailable'} / ceiling {ceiling ? money(ceiling.price) : 'unavailable'} · daily study {when(dashboardTime, true)}</p>
+          <p className="mt-1 truncate text-[11px] text-slate-400">Now: {anchor != null ? money(anchor) : 'unavailable'} \u00b7 Support {support ? money(support.price) : 'unavailable'} / ceiling {ceiling ? money(ceiling.price) : 'unavailable'} \u00b7 study {when(dashboardTime, true)}</p>
         </DashboardCard>
-        <DashboardCard cardId="intelligence" title="Market Intelligence" icon={BarChart3} status={marketState} summary={currentLeader ? `Leading: ${titleCase(currentLeader)} · ${driver?.marketPosture || 'posture unavailable'} · confidence ${driver?.confidence != null ? pct(num(driver.confidence) * 100) : 'unavailable'}` : health?.driver === 'loading' ? 'Loading current market driver…' : 'Leading market driver not established'} freshness={last('Driver assessment', driver?.asOf)} onAsk={() => ask('intelligence')} onOpen={() => open('intelligence')}>
+        {/* 5. Market Intelligence — driver explanation + cross-market graph */}
+        <DashboardCard cardId="intelligence" title="Market Intelligence" icon={BarChart3} status={health?.driver} summary={currentLeader ? `Leading: ${titleCase(currentLeader)} \u00b7 ${driver?.marketPosture || 'posture unavailable'} \u00b7 confidence ${driver?.confidence != null ? pct(num(driver.confidence) * 100) : 'unavailable'}` : health?.driver === 'loading' ? 'Loading driver\u2026' : 'Leading driver not established'} freshness={last('Driver assessment', driver?.asOf)} onAsk={() => ask('intelligence')} onOpen={() => open('intelligence')}>
           {focusableChart('market', 'normalized BTC and ETH', <MarketChart btc={outlook} eth={eth} />)}
-          <p className="truncate text-[11px] text-slate-300">{returns} · shared daily closes · breadth {phase?.inputs?.altsWithReturns > 0 ? `${phase.inputs.altsBeatingBtc}/${phase.inputs.altsWithReturns}` : 'unavailable'} · BTC dominance {d?.dominance?.dominance != null ? pct(d.dominance.dominance) : 'unavailable'}</p>
-          <p className="truncate text-[11px] text-slate-400">Next: {next?.actor ? `${titleCase(next.actor)} (${next.probabilityBand || 'likelihood unavailable'}) if ${next.condition || 'condition not established'}` : 'Not established'} · time not confirmed</p>
+          <p className="truncate text-[11px] text-slate-300">{returns} \u00b7 breadth {phase?.inputs?.altsWithReturns > 0 ? `${phase.inputs.altsBeatingBtc}/${phase.inputs.altsWithReturns}` : 'unavailable'} \u00b7 dominance {d?.dominance?.dominance != null ? pct(d.dominance.dominance) : 'unavailable'}</p>
+          <p className="truncate text-[11px] text-slate-400">Next: {next?.actor ? `${titleCase(next.actor)} (${next.probabilityBand || 'unrated'}) if ${next.condition || 'not established'}` : 'Not established'}</p>
         </DashboardCard>
-        <DashboardCard cardId="news" title="News, Macro & Policy" icon={Newspaper} status={newsState} summary={newsState === 'loading' ? 'Loading ranked reporting…' : story?.title || 'No sourced current development is available.'} freshness={last(story?.source || 'Ranked news feed', story?.published)} onAsk={() => ask('news')} onOpen={() => open('news')}>
-          {paperNews.slice(0, 2).map((item, i) => <p key={item.id || i} className="mt-0.5 line-clamp-1" title={item.title}><b>{i + 1}.</b> {item.title} · {item.source || 'source unavailable'} · {when(item.published)}</p>)}
-          <p className="mt-1 line-clamp-2 text-slate-300">{story?.ai?.why_it_matters || (story ? newsMechanism : 'BTC/portfolio transmission not established without sourced reporting.')}</p>
-          <p className="mt-1 truncate text-slate-400">Next: {nextEvent?.title ? `${nextEvent.title} · ${nextEventTime ? when(nextEventTime) : 'release time not confirmed'}` : 'event/review time not confirmed · see calendar'}</p>
+        {/* 6. News, Macro & Policy — actual news analysis */}
+        <DashboardCard cardId="news" title="News, Macro & Policy" icon={Newspaper} status={newsState} summary={newsState === 'loading' ? 'Loading\u2026' : story?.title || 'No sourced development.'} freshness={last(story?.source || 'News feed', story?.published)} onAsk={() => ask('news')} onOpen={() => open('news')}>
+          {paperNews.slice(0, 2).map((item, i) => <p key={item.id || i} className="mt-0.5 line-clamp-1"><b>{i + 1}.</b> {item.title} \u00b7 {item.source || 'source unavailable'} \u00b7 {when(item.published)}</p>)}
+          <p className="mt-1 line-clamp-2 text-slate-300">{story?.ai?.why_it_matters || story?.ai?.summary || 'Analysis unavailable.'}</p>
+          <p className="mt-1 truncate text-slate-400">Next: {nextEvent?.title ? `${nextEvent.title} \u00b7 ${nextEventTime ? when(nextEventTime) : 'time unconfirmed'}` : 'see calendar'}</p>
         </DashboardCard>
-        <DashboardCard cardId="evidence" title="Evidence & Engines" icon={Database} status={paper?.ledgerIntegrity?.status === 'MISMATCH' ? 'error' : [paperState, briefState, health?.outlook].includes('error') ? 'error' : [paperState, briefState, health?.outlook].includes('stale') ? 'stale' : paperState} summary={`Paper ledger: ${accountResolved ? paper?.ledgerIntegrity?.status || 'UNAVAILABLE' : pnlState} · scenario: ${valText}`} freshness={last('Ledger reconciliation', paper?.ledgerIntegrity?.checkedAt)} onAsk={() => ask('evidence')} onOpen={() => open('evidence')}>
-          <p className="line-clamp-1">Services: state {briefState} · wallet {paperState} · scenario {health?.outlook || 'unavailable'}</p>
-          <p className="mt-1 line-clamp-2 text-amber-200">Check: {paper?.ledgerIntegrity?.status === 'MISMATCH' ? 'Reconciliation mismatch — inspect Paper Engine before trusting totals.' : !accountResolved ? 'Wallet read unavailable — retry owner account data.' : !val?.predictiveValidation || !val?.evaluation?.evaluationPoints || isOld(val?.evaluation?.lastEvaluatedAt, 240) ? 'Predictive validation missing or expired — inspect Scenario Evaluation.' : sop?.dataQuality?.issues?.[0]?.detail || 'Review the latest data audit.'}</p>
-          <p className="mt-1 text-slate-400">Next: check after next ledger read / evaluation · time not confirmed</p>
+        {/* 7. Evidence & Engines — forecast accuracy from prediction ledger + paper perf */}
+        <DashboardCard cardId="evidence" title="Evidence & Engines" icon={Database} status={health?.sop} summary={`Forecast: ${valText} \u00b7 Paper: ${health?.paper || 'unavailable'} \u00b7 Data: ${titleCase(sop?.dataQuality?.status || 'unavailable')}`} freshness={last('Evaluation', val?.evaluation?.lastEvaluatedAt || sop?.generatedAt)} onAsk={() => ask('evidence')} onOpen={() => open('evidence')}>
+          <p className="line-clamp-1">Prediction Ledger: {d?.prediction_ledger?.overall?.accuracy != null ? `${num(d.prediction_ledger.overall.accuracy).toFixed(0)}% accuracy, ${d.prediction_ledger.overall.n} graded` : 'unavailable'}</p>
+          <p className="mt-1 line-clamp-1">Paper engine: {totals ? `${totals.closedTrades ?? 0} trades, win rate ${totals.winRatePct != null ? pct(totals.winRatePct) : 'unavailable'}` : 'unavailable'}</p>
+          <p className="mt-1 line-clamp-2 text-amber-200">{sop?.dataQuality?.issues?.[0]?.detail || 'Review the latest data audit.'}</p>
         </DashboardCard>
-        <DashboardCard cardId="flows" title="On-Chain & Flows" icon={Waves} status={flowState} summary={whale ? `Whale ${whale.name || 'tracked wallet'}: ${whale.change_7d != null ? `${signed(whale.change_7d, ' BTC / 7d')} · ${whale.signal || 'direction unknown'}` : 'change unavailable'}` : `Whales: ${health?.whales === 'loading' ? 'loading' : 'unavailable'}`} freshness={last(whales?.source || 'Whale feed', whales?.as_of)} onAsk={() => ask('flows')} onOpen={() => open('flows')}>
-          <p className="line-clamp-1">ETF: {etf?.net_1d != null ? `${signed(etf.net_1d, 'm USD')} · session ${etf.latest_date || 'date unavailable'}` : 'reported session unavailable'} · issuer lag applies</p>
-          <p className="mt-1 line-clamp-2">Network: {network?.hashrate_ehs != null ? `${network.hashrate_ehs} EH/s (${network?.as_of ? when(network.as_of) : 'source time unavailable'})` : 'unavailable'} · sentiment: {sentiment?.value != null ? `${sentiment.value}/100 ${sentiment.label || ''} (${when(sentiment.ts)})` : 'unavailable'}</p>
-          <p className="mt-1 line-clamp-1 text-slate-400">Cross-check: {whale?.signal && etf?.net_1d != null ? `${whale.signal} whale label vs ${Number(etf.net_1d) >= 0 ? 'positive' : 'negative'} last ETF session (different windows)` : 'Whale/ETF comparison unavailable'} · next provider time not confirmed</p>
+        {/* 8. On-Chain & Flows — display each source independently */}
+        <DashboardCard cardId="flows" title="On-Chain & Flows" icon={Waves} status={health?.etf || health?.whales} summary={whale ? `Whale ${whale.name || 'tracked wallet'}: ${whale.change_7d != null ? `${signed(whale.change_7d, ' BTC / 7d')} \u00b7 ${whale.signal || 'direction unknown'}` : 'change unavailable'}` : `Whales: ${health?.whales === 'loading' ? 'loading' : 'unavailable'}`} freshness={last(whales?.source || 'Whale feed', whales?.as_of)} onAsk={() => ask('flows')} onOpen={() => open('flows')}>
+          <p className="line-clamp-1">ETF: {etf?.net_1d != null ? `${signed(etf.net_1d, 'm USD')} \u00b7 session ${etf.latest_date || 'date unavailable'}` : 'session unavailable'}</p>
+          <p className="mt-1 line-clamp-2">Network: {network?.hashrate_ehs != null ? `${network.hashrate_ehs} EH/s` : 'unavailable'} \u00b7 sentiment: {sentiment?.value != null ? `${sentiment.value}/100 ${sentiment.label || ''}` : 'unavailable'}</p>
+          <p className="mt-1 line-clamp-1 text-slate-400">Cross-check: {whale?.signal && etf?.net_1d != null ? `${whale.signal} whale vs ${Number(etf.net_1d) >= 0 ? 'positive' : 'negative'} ETF` : 'Whale/ETF comparison unavailable'}</p>
         </DashboardCard>
-        <DashboardCard cardId="radar" title="Opportunity Radar" icon={Radar} status={health?.streams === 'stale' || (health?.streams === 'error' && research) ? 'stale' : health?.streams === 'loading' && !research ? 'loading' : health?.streams === 'error' && !research ? 'error' : findings.length ? 'WAIT' : research ? 'unavailable' : 'loading'} summary={findings[0]?.title || (research ? 'No qualified setups; no trade proposed.' : 'Research findings loading or unavailable.')} freshness={last('Research evaluation', research?.asOf || streams?.generatedAt)} onAsk={() => ask('radar')} onOpen={() => open('radar')}>
-          {findings.length ? findings.map((f, i) => <p key={f.findingId || i} className="mt-0.5 line-clamp-1" title={`${f.confirmIf} / ${f.invalidateIf}`}>{f.asset || f.symbol || 'Market (asset not specified)'} · {f.priorityLabel || titleCase(f.priority)} · trigger {f.confirmIf} · cancel {f.invalidateIf}</p>) : <p className="text-slate-400">{research ? 'No research with both measurable confirmation and invalidation.' : 'Awaiting sourced research.'}</p>}
-          <p className="mt-1 line-clamp-1 text-amber-200">WAIT · portfolio/mandate fit and coin execution support must be checked in Studio. No trade proposed by this research.</p>
-          <p className="mt-1 line-clamp-1 text-slate-400">Next: {findings[0]?.resolveBy ? `review by ${when(findings[0].resolveBy)}` : 'next market-stream observation · time not confirmed'}{paperState === 'ready' && paper?.pendingApprovals?.length ? ` · ${paper.pendingApprovals.length} separate owner proposal(s)` : ''}</p>
+        {/* 9. Opportunity Radar — show findings with actual priority/status */}
+        <DashboardCard cardId="radar" title="Opportunity Radar" icon={Radar} status={findings.length ? findings[0].priority || 'WAIT' : health?.streams} summary={findings[0]?.title || (research ? 'No qualified setups.' : 'Research loading\u2026')} freshness={last('Research', research?.asOf || streams?.generatedAt)} onAsk={() => ask('radar')} onOpen={() => open('radar')}>
+          {findings.length ? findings.map((f, i) => <p key={f.findingId || i} className="mt-0.5 line-clamp-1">{f.asset || f.symbol || 'Market'} \u00b7 {f.priorityLabel || titleCase(f.priority)} \u00b7 {f.title}</p>) : <p className="text-slate-400">{research ? 'No open setups.' : 'Awaiting research.'}</p>}
+          {findings[0] && <p className="mt-1 line-clamp-1 text-slate-300">Confirm: {findings[0].confirmIf || 'not specified'} \u00b7 Invalidate: {findings[0].invalidateIf || 'not specified'}</p>}
+          <p className="mt-1 line-clamp-1 text-slate-400">Next: {findings[0]?.resolveBy ? `by ${when(findings[0].resolveBy)}` : 'next observation'}{paper?.pendingApprovals?.length ? ` \u00b7 ${paper.pendingApprovals.length} proposal(s)` : ''}</p>
         </DashboardCard>
       </div>
       <DashboardAskPanel selected={selected} onNav={onNav} onEvidence={setEvidenceId} stateId={sop?.stateId} />
     </div>
-    {chart && <ExpandedChart type={chart} outlook={outlook} eth={eth} levels={availableLevels} runAsOf={isOld(d?.created_at, 72) ? `${d?.as_of || when(d?.created_at)} (stale; level lines withheld)` : d?.as_of} onClose={() => setChart(null)} onNav={(id) => onNav(id === 'scenarios' ? 'dashboard-btc' : id === 'crossmarket' ? 'dashboard-intelligence' : id)} onEvidence={(sid) => { setChart(null); setEvidenceId(sid); }} />}
+    {chart && <ExpandedChart type={chart} outlook={outlook} eth={eth} levels={availableLevels} runAsOf={d?.as_of || when(d?.created_at)} onClose={() => setChart(null)} onNav={(id) => onNav(id === 'scenarios' ? 'dashboard-btc' : id === 'crossmarket' ? 'dashboard-intelligence' : id)} onEvidence={(sid) => { setChart(null); setEvidenceId(sid); }} />}
     {evidenceId && <EvidenceDrawer snapshotId={evidenceId} onClose={() => setEvidenceId(null)} onAsk={(sid) => { setEvidenceId(null); setSelected({ title: 'Evidence record', snapshotId: sid }); }} />}
   </>;
 };

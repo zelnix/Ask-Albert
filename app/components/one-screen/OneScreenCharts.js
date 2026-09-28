@@ -10,28 +10,32 @@ const usd = (v) => `$${Number(v).toLocaleString(undefined, { maximumFractionDigi
 const tooltipStyle = { background: '#0f172a', border: '1px solid #475569', borderRadius: 8, color: '#f8fafc', fontSize: 12 };
 
 const BTCChart = ({ outlook, levels, height = 92, expanded = false }) => {
-  const { rows, boundary, support, ceiling } = useMemo(() => {
+  const { rows, boundary, support, ceiling, hasBull, hasBear } = useMemo(() => {
     const history = (outlook?.history || []).filter((p) => valid(p.close)).slice(-(expanded ? 60 : 18));
     if (history.length < 2) return { rows: [] };
     const base = history.map((p) => ({ date: dateKey(p.time), observed: Number(p.close) }));
     const boundaryDate = dateKey(history[history.length - 1].time);
-    const bull = outlook?.band?.available ? (outlook?.scenarios || []).find((s) => s.side === 'BULLISH')?.points || [] : [];
-    const bear = outlook?.band?.available ? (outlook?.scenarios || []).find((s) => s.side === 'BEARISH')?.points || [] : [];
-    if (bull.length && bear.length) {
-      const anchor = Number(history[history.length - 1].close);
-      base[base.length - 1].bull = anchor;
-      base[base.length - 1].bear = anchor;
-      for (let i = 0; i < Math.min(bull.length, bear.length); i += 1) {
-        if (valid(bull[i].price) && valid(bear[i].price)) base.push({ date: dateKey(bull[i].time), bull: Number(bull[i].price), bear: Number(bear[i].price) });
+    // Draw each returned series by its own dates — no requirement that both exist.
+    const bull = (outlook?.scenarios || []).find((s) => s.side === 'BULLISH')?.points || [];
+    const bear = (outlook?.scenarios || []).find((s) => s.side === 'BEARISH')?.points || [];
+    const anchor = Number(history[history.length - 1].close);
+    if (bull.length || bear.length) {
+      if (bull.length) base[base.length - 1].bull = anchor;
+      if (bear.length) base[base.length - 1].bear = anchor;
+      const maxLen = Math.max(bull.length, bear.length);
+      for (let i = 0; i < maxLen; i += 1) {
+        const row = { date: dateKey((bull[i] || bear[i])?.time) };
+        if (i < bull.length && valid(bull[i].price)) row.bull = Number(bull[i].price);
+        if (i < bear.length && valid(bear[i].price)) row.bear = Number(bear[i].price);
+        base.push(row);
       }
     }
-    const anchor = Number(history[history.length - 1].close);
     const below = (levels || []).filter((l) => l.type === 'support' && valid(l.price) && Number(l.price) < anchor).sort((a, b) => Number(b.price) - Number(a.price));
     const above = (levels || []).filter((l) => l.type === 'resistance' && valid(l.price) && Number(l.price) > anchor).sort((a, b) => Number(a.price) - Number(b.price));
-    return { rows: base, boundary: boundaryDate, support: below[0]?.price, ceiling: above[0]?.price };
+    return { rows: base, boundary: boundaryDate, support: below[0]?.price, ceiling: above[0]?.price, hasBull: bull.length > 0, hasBear: bear.length > 0 };
   }, [outlook, levels, expanded]);
   if (!rows?.length) return <p className="flex h-full min-h-20 items-center text-xs text-slate-400">Observed BTC history is unavailable; no path is drawn.</p>;
-  return <div className="w-full" style={{ height }} role="img" aria-label={`BTC observed daily closes to ${boundary}. ${outlook?.band?.available ? 'Conditional historical bull and bear paths follow Now; not a forecast.' : 'Historical scenario paths unavailable.'}`}>
+  return <div className="w-full" style={{ height }} role="img" aria-label={`BTC observed daily closes to ${boundary}. ${hasBull || hasBear ? 'Conditional historical paths follow Now; not a forecast.' : 'Historical scenario paths unavailable.'}`}>
     <ResponsiveContainer width="100%" height="100%">
       <ComposedChart data={rows} margin={expanded ? { top: 14, right: 24, left: 8, bottom: 8 } : { top: 5, right: 4, left: 0, bottom: 0 }}>
         {expanded && <CartesianGrid stroke="#334155" strokeDasharray="3 3" vertical={false} />}
@@ -43,8 +47,8 @@ const BTCChart = ({ outlook, levels, height = 92, expanded = false }) => {
         {valid(support) && <ReferenceLine y={Number(support)} stroke="#34d399" strokeDasharray="3 5" label={expanded ? { value: `Support area ${usd(support)}`, fill: '#86efac', position: 'insideBottomLeft', fontSize: 11 } : undefined} />}
         {valid(ceiling) && <ReferenceLine y={Number(ceiling)} stroke="#fda4af" strokeDasharray="3 5" label={expanded ? { value: `Ceiling area ${usd(ceiling)}`, fill: '#fda4af', position: 'insideTopLeft', fontSize: 11 } : undefined} />}
         <Line type="linear" dataKey="observed" stroke="#f8fafc" strokeWidth={expanded ? 2.5 : 1.8} dot={false} connectNulls={false} isAnimationActive={false} />
-        {outlook?.band?.available && <Line type="linear" dataKey="bull" stroke="#38bdf8" strokeWidth={expanded ? 2.5 : 1.8} strokeDasharray="5 3" dot={false} connectNulls={false} isAnimationActive={false} />}
-        {outlook?.band?.available && <Line type="linear" dataKey="bear" stroke="#f472b6" strokeWidth={expanded ? 2.5 : 1.8} strokeDasharray="5 3" dot={false} connectNulls={false} isAnimationActive={false} />}
+        {hasBull && <Line type="linear" dataKey="bull" stroke="#38bdf8" strokeWidth={expanded ? 2.5 : 1.8} strokeDasharray="5 3" dot={false} connectNulls={false} isAnimationActive={false} />}
+        {hasBear && <Line type="linear" dataKey="bear" stroke="#f472b6" strokeWidth={expanded ? 2.5 : 1.8} strokeDasharray="5 3" dot={false} connectNulls={false} isAnimationActive={false} />}
       </ComposedChart>
     </ResponsiveContainer>
   </div>;
@@ -60,8 +64,6 @@ const matchedMarketSeries = (btc, eth) => {
   if (shared.length < 2) return [];
   const start = shared[0];
   const b0 = btcDays.get(start); const e0 = ethDays.get(start);
-  // Retain observed dates present in only one feed as nulls on the other line;
-  // connectNulls=false below makes missing candles a visible gap, not a return.
   return dates.filter((d) => d >= start).map((date) => ({ date,
     BTC: btcDays.has(date) ? Number((btcDays.get(date) / b0 * 100).toFixed(2)) : null,
     ETH: ethDays.has(date) ? Number((ethDays.get(date) / e0 * 100).toFixed(2)) : null,
@@ -97,16 +99,16 @@ const ExpandedChart = ({ type, outlook, eth, levels, runAsOf, onClose, onNav, on
   return <ModalShell title={btc ? 'BTC · observed history & historical scenarios' : 'Cross-market · observed BTC vs ETH'} onClose={onClose} placement="full">
     <div className="space-y-4">
       <p className="text-sm leading-relaxed text-slate-300">{btc
-        ? 'White is observed BTC daily closes through Now. Dashed blue and pink paths describe bull and bear outcomes from comparable past conditions only when their historical range passed the evaluation gate. Outcomes can fall outside this range.'
+        ? 'White is observed BTC daily closes through Now. Dashed blue and pink paths describe bull and bear outcomes from comparable past conditions. Outcomes can fall outside any displayed range.'
         : 'BTC and ETH are rebased to 100 on their first shared closed-candle date. Each point uses an actual observation; when one feed misses a date, its line has a gap rather than an estimated point.'}</p>
       <div className="rounded-lg border border-slate-700 bg-slate-950/70 p-2 sm:p-4">
         {btc ? <BTCChart outlook={outlook} levels={levels} height={Math.max(320, (typeof window !== 'undefined' ? window.innerHeight : 700) - 220)} expanded />
           : <MarketChart btc={outlook} eth={eth} height={Math.max(320, (typeof window !== 'undefined' ? window.innerHeight : 700) - 220)} expanded />}
       </div>
       <div className="grid gap-2 text-xs text-slate-300 sm:grid-cols-2">
-        <p><strong className="text-white">What:</strong> {btc ? (band?.available ? `20th–80th percentile of ${band.matchedDays ?? 'the'} matched historical days, ${band.horizonDays} days ahead; ${band.lowerPct}% to ${band.upperPct}%.` : `No evaluated scenario: ${band?.reasonText || 'evaluation unavailable'}`) : (lastShared ? `BTC ${lastShared.BTC - 100 >= 0 ? '+' : ''}${(lastShared.BTC - 100).toFixed(1)}%, ETH ${lastShared.ETH - 100 >= 0 ? '+' : ''}${(lastShared.ETH - 100).toFixed(1)}% across shared days.` : 'A comparable series is not available.')}</p>
+        <p><strong className="text-white">What:</strong> {btc ? (band?.lowerPct != null ? `20th–80th percentile of ${band.matchedDays ?? 'the'} matched historical days, ${band.horizonDays} days ahead; ${band.lowerPct}% to ${band.upperPct}%.` : `No evaluated scenario: ${band?.reasonText || 'evaluation unavailable'}`) : (lastShared ? `BTC ${lastShared.BTC - 100 >= 0 ? '+' : ''}${(lastShared.BTC - 100).toFixed(1)}%, ETH ${lastShared.ETH - 100 >= 0 ? '+' : ''}${(lastShared.ETH - 100).toFixed(1)}% across shared days.` : 'A comparable series is not available.')}</p>
         <p><strong className="text-white">Why:</strong> {btc ? 'These are historical possibilities, not price targets or a guarantee of support.' : 'Relative changes help assess whether ETH is leading or lagging BTC; they do not establish causation.'}</p>
-        <p><strong className="text-white">How:</strong> {btc ? `Closed daily candles and a ${band?.available ? 'walk-forward checked' : 'withheld'} matched-history scenario. ${valid((levels || []).find((l) => l.type === 'support')?.price) ? 'Support and ceiling come from clustered daily swing reactions, not hard limits.' : 'Price levels are shown only when the chart engine reports them.'}` : 'Both closes divided by their first matched close and multiplied by 100; no forward points or interpolated dates.'}</p>
+        <p><strong className="text-white">How:</strong> {btc ? `Closed daily candles and a matched-history scenario. ${valid((levels || []).find((l) => l.type === 'support')?.price) ? 'Support and ceiling come from clustered daily swing reactions, not hard limits.' : 'Price levels are shown only when the chart engine reports them.'}` : 'Both closes divided by their first matched close and multiplied by 100; no forward points or interpolated dates.'}</p>
         <p><strong className="text-white">When:</strong> {btc ? `Observed candle ${dateKey(outlook?.baseline?.observedAt) || 'unavailable'}; level study ${runAsOf || 'unavailable'}. Recheck after the next closed daily candle; exact time not confirmed.` : `Last matched close ${lastShared?.date || 'unavailable'}. Recheck after the next closed daily candle; exact time not confirmed.`}</p>
       </div>
       {btc && <p className="text-xs text-slate-400">Level method: clustered swing closes (daily chart). Level study as of {runAsOf || 'unavailable'}; past reaction areas, not guaranteed bounds. Source: {outlook?.meta?.sourceId || 'scenario-outlooks/preview'} · {outlook?.modelVersion || 'version unavailable'}.</p>}

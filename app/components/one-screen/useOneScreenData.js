@@ -40,13 +40,20 @@ const useOneScreenData = (enabled, focus = 'home', ownerId = null) => {
       if (!response.ok) throw new Error(String(response.status));
       const body = await response.json();
       if (!mounted.current || generation.current !== requestGeneration) return;
-      if (body.status && !['ready', 'partial'].includes(body.status)) {
-        setHealth((h) => ({ ...h, [key]: ['computing', 'preparing'].includes(body.status)
-          ? (dataRef.current[key] ? 'stale' : 'loading') : (dataRef.current[key] ? 'stale' : 'unavailable') }));
-        return;
+      // Store returned data regardless of status — display any returned fields.
+      // Retain previous results when the new response has no usable payload.
+      const hasPayload = Object.keys(body).some((k) => k !== 'status' && k !== 'error' && body[k] != null);
+      if (hasPayload) {
+        setData((old) => ({ ...old, [key]: body }));
+      } else if (!dataRef.current[key]) {
+        setData((old) => ({ ...old, [key]: body }));
       }
-      setData((old) => ({ ...old, [key]: body }));
-      setHealth((h) => ({ ...h, [key]: body.status === 'partial' ? 'stale' : 'ready' }));
+      // Track request status separately from data.
+      if (body.status && !['ready', 'partial'].includes(body.status)) {
+        setHealth((h) => ({ ...h, [key]: (hasPayload || dataRef.current[key]) ? 'stale' : ['computing', 'preparing'].includes(body.status) ? 'loading' : 'unavailable' }));
+      } else {
+        setHealth((h) => ({ ...h, [key]: body.status === 'partial' ? 'stale' : 'ready' }));
+      }
     } catch (error) {
       if (mounted.current && generation.current === requestGeneration) {
         setHealth((h) => ({ ...h, [key]: dataRef.current[key] ? 'stale' : 'error' }));

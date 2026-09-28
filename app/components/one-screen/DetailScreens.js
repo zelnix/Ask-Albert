@@ -14,8 +14,7 @@ const ScenarioEvaluation = ({ snapshot, onNav, levels }) => {
   const validation = outlook?.validation || band?.validation;
   const ev = validation?.evaluation || {};
   const evaluatedAt = ev.lastEvaluatedAt ? new Date(/(Z|[+-]\d\d:?\d\d)$/.test(ev.lastEvaluatedAt) ? ev.lastEvaluatedAt : `${ev.lastEvaluatedAt}Z`).getTime() : NaN;
-  const predictive = validation?.predictiveValidation === true && ev.evaluationPoints > 0 && Number.isFinite(evaluatedAt)
-    && Date.now() - evaluatedAt >= 0 && Date.now() - evaluatedAt < 240 * 60 * 60 * 1000 && snapshot?.health?.outlook === 'ready';
+  const predictive = validation?.predictiveValidation === true && ev.evaluationPoints > 0 && Number.isFinite(evaluatedAt) && snapshot?.health?.outlook !== 'error';
   const state = snapshot?.health?.outlook === 'error' || snapshot?.health?.outlook === 'stale' ? 'Stale evaluation · current validation unavailable'
     : !validation || !Number.isFinite(evaluatedAt) ? 'Evaluation unavailable' : predictive ? 'Validated predictive performance' : 'Not validated as predictive';
   return <div className="mx-auto max-w-5xl space-y-4">

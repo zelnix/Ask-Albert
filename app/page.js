@@ -3622,7 +3622,7 @@ export default function DashboardPage() {
       key={`${active}-${symbol}`} kind={active.slice('dashboard-'.length)} dashboard={data} dashboardStatus={status} news={news} newsStatus={newsStatus} snapshot={oneScreen}
       symbol={symbol} onNav={navigate} onBack={() => navigate('home')} />;
     if (active === 'scenarios') return <AlbertHome onNav={navigate} />;
-    if (active === 'scenario-evaluation') return <ScenarioEvaluation snapshot={oneScreen} levels={d?.created_at && (Date.now() - new Date(d.created_at).getTime() < 72 * 3600000) ? d?.chart?.sr_levels : []} onNav={navigate} />;
+    if (active === 'scenario-evaluation') return <ScenarioEvaluation snapshot={oneScreen} levels={Array.isArray(d?.chart?.sr_levels) ? d.chart.sr_levels : []} onNav={navigate} />;
     if (active === 'opportunities') return <OpportunityResearch snapshot={oneScreen} onNav={navigate} />;
     if (active === 'briefing') return <ExecutiveSummary d={d} ticker={ticker} news={news} onNav={setActive} homeParams={homeParams} setHomeParams={setHomeParams} />;
     if (active === 'overview') return <OverviewSection d={d} ticker={ticker} />;
