@@ -46,6 +46,8 @@ export default function AlbertReplyMeta({ msg, onNav, sessionId }) {
             assets: j.basket_draft.legs.map((l) => l.symbol),
           },
         }));
+        // Close the floating chat so Studio is visible.
+        try { window.dispatchEvent(new CustomEvent('albert:close-chat')); } catch (x) { /* noop */ }
       } else {
         setPrepError(j.error || 'Could not extract a structured strategy from this conversation. Try asking Albert to be more specific about assets, allocations and rules.');
       }
@@ -81,6 +83,7 @@ export default function AlbertReplyMeta({ msg, onNav, sessionId }) {
               assets: msg.basket_draft.legs.map((l) => l.symbol),
             },
           }));
+          try { window.dispatchEvent(new CustomEvent('albert:close-chat')); } catch (x) { /* noop */ }
         }} className="h-7 gap-1.5 border-violet-500/40 text-[12px] text-violet-300 hover:bg-violet-500/10">
           <ArrowRight className="h-3.5 w-3.5" />Review &amp; save strategy
         </Button>

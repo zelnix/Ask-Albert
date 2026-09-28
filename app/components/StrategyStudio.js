@@ -188,14 +188,20 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
         const r = await post('/v1/albert/studio/validate', { draft });
         const j = await r.json();
         if (active) setReview(r.ok ? { contract: j.contract, hash: j.contractHash,
-          summary: j.summary, errors: j.validationErrors || [], capabilities: j.assetCapabilities || [], for: JSON.stringify(draft) } : null);
+          summary: j.summary,
+          saveErrors: j.saveErrors || [], startErrors: j.startErrors || [],
+          errors: j.validationErrors || [],
+          capabilities: j.assetCapabilities || [], for: JSON.stringify(draft) } : null);
       } catch (e) { if (active) { setReview(null); setErr('Validation unavailable; nothing can be saved.'); } }
     }, 300);
     return () => { active = false; clearTimeout(t); };
   }, [draft]);
 
   const updateDraft = (next) => { setReview(null); setErr(''); setDraft(next); };
-  const readyToSave = !!review && review.for === JSON.stringify(draft) && !(review.errors || []).length;
+  // Save is allowed when there are no save_errors. start_errors allow saving as "Needs changes — not trading."
+  const hasSaveErrors = !!review && (review.saveErrors || []).length > 0;
+  const hasStartErrors = !!review && (review.startErrors || []).length > 0;
+  const readyToSave = !!review && review.for === JSON.stringify(draft) && !hasSaveErrors;
 
   const runDraft = async () => {
     if (!goal.trim()) return;
@@ -211,6 +217,7 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
       }
       setDraft(j.draft);
       setReview({ contract: j.contract, hash: j.contractHash, summary: j.summary,
+        saveErrors: j.saveErrors || [], startErrors: j.startErrors || [],
         errors: j.validationErrors || [], capabilities: j.assetCapabilities || [], for: JSON.stringify(j.draft) });
     } catch (e) { setErr('Could not draft — try again. No strategy was saved.'); }
     finally { setDrafting(false); }
@@ -233,7 +240,7 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
   const [inflight, setInflight] = useState(false);
 
   const save = async () => {
-    if (!readyToSave || inflight) { setErr('Needs changes — wait for a valid review before saving.'); return; }
+    if (!readyToSave || inflight) { setErr(hasSaveErrors ? 'Cannot save: fix the errors above first.' : 'Needs changes — wait for a valid review before saving.'); return; }
     setInflight(true);
     setBusy(true); setErr('');
     try {
@@ -278,6 +285,10 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
               <input type="number" min="10" step="0.01" max="1000000000" value={draft.startingCash ?? ''} disabled={!!revisionId} onChange={(e) => setField('startingCash', e.target.value)} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-sm text-white outline-none focus:border-sky-500 disabled:opacity-60" /></label>
             <label className="text-[12px] text-slate-400">Protected cash reserve (%)
               <input type="number" min="0" max="100" value={draft.reservePct ?? 0} onChange={(e) => setField('reservePct', Number(e.target.value))} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-sm text-white outline-none focus:border-sky-500" /></label>
+            <label className="text-[12px] text-slate-400">Horizon (days)
+              <input type="number" min="1" max="3650" value={draft.horizonDays ?? ''} onChange={(e) => setField('horizonDays', e.target.value ? Number(e.target.value) : undefined)} placeholder="Optional" className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-sm text-white outline-none focus:border-sky-500" /></label>
+            <label className="text-[12px] text-slate-400">Objective
+              <input value={draft.objective || ''} onChange={(e) => setField('objective', e.target.value)} placeholder="Optional thesis or goal" className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-sm text-white outline-none focus:border-sky-500" /></label>
           </div>
           <div>
             <p className="mb-1 text-[12px] font-semibold text-slate-400">Assets &amp; weights</p>
@@ -309,18 +320,24 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
                   <option value="BUY">BUY</option><option value="SELL">SELL</option>
                 </select>
                 <select aria-label={`Rule ${i + 1} kind`} value={rule.kind || 'PRICE'}
-                  onChange={(e) => setRule(i, { kind: e.target.value, side: ['STOP_LOSS_PCT', 'TAKE_PROFIT_PCT', 'TRAILING_STOP_PCT'].includes(e.target.value) ? 'SELL' : rule.side,
-                    operator: ['STOP_LOSS_PCT', 'TAKE_PROFIT_PCT', 'TRAILING_STOP_PCT'].includes(e.target.value) ? '' : (rule.operator || 'BELOW'), indicator: e.target.value === 'INDICATOR' ? 'RSI_14' : '' })}
+                  onChange={(e) => setRule(i, { kind: e.target.value, side: ['STOP_LOSS_PCT', 'TAKE_PROFIT_PCT', 'TRAILING_STOP_PCT', 'PARTIAL_TAKE_PROFIT_PCT', 'TIME_EXIT'].includes(e.target.value) ? 'SELL' : rule.side,
+                    operator: ['STOP_LOSS_PCT', 'TAKE_PROFIT_PCT', 'TRAILING_STOP_PCT', 'PARTIAL_TAKE_PROFIT_PCT', 'TIME_EXIT'].includes(e.target.value) ? '' : (rule.operator || 'BELOW'), indicator: e.target.value === 'INDICATOR' ? 'RSI_14' : '' })}
                   className="rounded-md bg-slate-800 p-1 text-white">
                   <option value="PRICE">Price (USD)</option><option value="CHANGE_PCT_24H">Rolling 24h change (%)</option>
                   <option value="INDICATOR">Indicator (closed daily)</option><option value="STOP_LOSS_PCT">Stop-loss from entry (%)</option>
                   <option value="TRAILING_STOP_PCT">Trailing stop from observed peak (%)</option><option value="TAKE_PROFIT_PCT">Take-profit from entry (%)</option>
+                  <option value="PARTIAL_TAKE_PROFIT_PCT">Partial take-profit (%)</option><option value="TIME_EXIT">Time-based exit</option>
                 </select>
                 {rule.kind === 'INDICATOR' && <select aria-label={`Rule ${i + 1} indicator`} value={rule.indicator || 'RSI_14'} onChange={(e) => setRule(i, { indicator: e.target.value })} className="rounded-md bg-slate-800 p-1 text-white">
                   <option value="RSI_14">RSI 14</option><option value="SMA_20">SMA 20</option><option value="EMA_20">EMA 20</option><option value="MACD_HIST">MACD histogram</option>
                 </select>}
                 {['PRICE', 'CHANGE_PCT_24H', 'INDICATOR'].includes(rule.kind) && <select aria-label={`Rule ${i + 1} comparison`} value={rule.operator || 'BELOW'} onChange={(e) => setRule(i, { operator: e.target.value })} className="rounded-md bg-slate-800 p-1 text-white"><option value="BELOW">Below</option><option value="ABOVE">Above</option></select>}
-                <input type="number" aria-label={`Rule ${i + 1} threshold`} value={rule.value ?? ''} onChange={(e) => setRule(i, { value: e.target.value })} placeholder="threshold" className="w-24 rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-white" />
+                {rule.kind !== 'TIME_EXIT' && <input type="number" aria-label={`Rule ${i + 1} threshold`} value={rule.value ?? ''} onChange={(e) => setRule(i, { value: e.target.value })} placeholder="threshold" className="w-24 rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-white" />}
+                {rule.kind === 'PARTIAL_TAKE_PROFIT_PCT' && <>
+                  <input type="number" aria-label={`Rule ${i + 1} portion %`} min="1" max="100" value={rule.portionPct ?? ''} onChange={(e) => setRule(i, { portionPct: e.target.value })} placeholder="sell %" className="w-20 rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-white" />
+                  <select aria-label={`Rule ${i + 1} portion of`} value={rule.portionOf || 'original'} onChange={(e) => setRule(i, { portionOf: e.target.value })} className="rounded-md bg-slate-800 p-1 text-white"><option value="original">of original</option><option value="remaining">of remaining</option></select>
+                </>}
+                {rule.kind === 'TIME_EXIT' && <input type="datetime-local" aria-label={`Rule ${i + 1} deadline`} value={(rule.deadline || '').slice(0, 16)} onChange={(e) => setRule(i, { deadline: e.target.value ? new Date(e.target.value).toISOString() : '' })} className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-white" />}
                 <button type="button" onClick={() => updateDraft({ ...draft, rules: draft.rules.filter((_, ix) => ix !== i) })} aria-label={`Remove rule ${i + 1}`} className="rounded p-1 text-rose-300"><X className="h-4 w-4" /></button>
               </div>)}
               <button type="button" onClick={addRule} className="inline-flex items-center gap-1 font-semibold text-sky-300"><Plus className="h-3.5 w-3.5" />Add executable rule</button>
@@ -332,22 +349,33 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
           <button type="button" onClick={() => { setGoal(draft.requestedPlan || goal); setDraft(null); setReview(null); setErr(''); }} className="text-[12px] font-semibold text-sky-400 hover:text-sky-300">Edit request &amp; redraft</button>
           {review && (
             <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
-              <p className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400"><ShieldCheck className="h-3.5 w-3.5" />{(review.errors || []).length ? 'Needs changes' : 'Reviewed'} · hash {review.hash}</p>
+              <p className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400"><ShieldCheck className="h-3.5 w-3.5" />{hasSaveErrors ? 'Cannot save' : hasStartErrors ? 'Reviewed · needs changes before trading' : 'Reviewed'} · hash {review.hash}</p>
               <p className="text-[13px] text-slate-200">{review.summary}</p>
               {(review.capabilities || []).length > 0 && <div className="mt-2 flex flex-wrap gap-1.5">{review.capabilities.map((cap) => <CoinCapability key={cap.symbol} item={cap} />)}</div>}
-              {(review.errors || []).length > 0 && (
-                <ul className="mt-2 space-y-0.5 text-[12px] text-red-400">
-                  {review.errors.map((e, i) => <li key={i} className="flex items-start gap-1.5"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />{e}</li>)}
-                </ul>
+              {(review.saveErrors || []).length > 0 && (
+                <div className="mt-2 rounded-lg border border-red-500/30 bg-red-500/10 p-2">
+                  <p className="mb-1 text-[11px] font-bold text-red-300">Cannot save — fix these first:</p>
+                  <ul className="space-y-0.5 text-[12px] text-red-400">
+                    {review.saveErrors.map((e, i) => <li key={i} className="flex items-start gap-1.5"><XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />{e}</li>)}
+                  </ul>
+                </div>
+              )}
+              {(review.startErrors || []).length > 0 && (
+                <div className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2">
+                  <p className="mb-1 text-[11px] font-bold text-amber-300">Needs changes before trading (save is allowed):</p>
+                  <ul className="space-y-0.5 text-[12px] text-amber-200">
+                    {review.startErrors.map((e, i) => <li key={i} className="flex items-start gap-1.5"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />{e}</li>)}
+                  </ul>
+                </div>
               )}
             </div>
           )}
           {!review && <p role="status" className="text-[12px] text-amber-300">Checking this draft — Save is disabled until validation completes.</p>}
           {err && <p role="alert" className="text-[12px] font-medium text-red-400">{err}</p>}
           <div className="flex items-center gap-2">
-            <ConfirmBtn label="Save strategy" icon={CheckCircle2} tone="emerald" busy={busy} disabled={!readyToSave}
+            <ConfirmBtn label={hasStartErrors ? 'Save (needs changes — not trading)' : 'Save strategy'} icon={CheckCircle2} tone={hasStartErrors ? 'amber' : 'emerald'} busy={busy} disabled={!readyToSave}
               onConfirm={save} />
-            <span className="text-[11px] text-slate-500">Saves the exact plan you reviewed. Saving never starts trading &mdash; you choose that next.</span>
+            <span className="text-[11px] text-slate-500">{hasStartErrors ? 'Saves the plan with unresolved start blockers. Trading is disabled until they are resolved.' : 'Saves the exact plan you reviewed. Saving never starts trading \u2014 you choose that next.'}</span>
           </div>
         </div>
       )}
@@ -575,7 +603,17 @@ function PaperPanel({ sid, name, onChange }) {
         {p.modeBlockers?.[choice] && <p role="status" className="mt-1 text-[11px] text-amber-300">{p.modeBlockers[choice]}</p>}
       </div>
 
-      {(p.entryBlockers || []).length > 0 && (
+      {(p.saveErrors || []).length > 0 && (
+        <div role="status" className="rounded-lg border border-red-500/30 bg-red-500/10 p-2 text-[12px] text-red-200">
+          <strong>Structural issues — strategy invalid</strong>: {(p.saveErrors || []).join(' ')}
+        </div>
+      )}
+      {(p.startErrors || []).length > 0 && !(p.saveErrors || []).length && (
+        <div role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-[12px] text-amber-200">
+          <strong>Needs changes — not trading</strong>: {(p.startErrors || []).join(' ')} Existing positions and valid exits are preserved.
+        </div>
+      )}
+      {(p.entryBlockers || []).length > 0 && !(p.saveErrors || []).length && !(p.startErrors || []).length && (
         <div role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-[12px] text-amber-200">
           <strong>{p.paperStatus === 'UNAVAILABLE' ? 'Paper worker unavailable' : live ? 'New entries blocked' : 'Needs changes'}</strong>: {(p.entryBlockers || []).join(' ')} Existing positions and valid exits are preserved.
         </div>
@@ -772,6 +810,14 @@ function Detail({ sid, onChange, onRevise }) {
         {(s.assetCapabilities || []).map((cap) => <CoinCapability key={cap.symbol} item={cap} />)}
       </div>
       <p className="mt-2 text-[12px] text-slate-400">Wallet: <span className="font-semibold text-slate-200">{s.walletName || 'Not started'}</span> · Starting virtual balance: {usd(s.startingCash || s.contract?.startingCash)}. Revisions keep the same wallet, holdings and history.</p>
+      {s.readiness === 'needs_changes' && (s.startErrors || []).length > 0 && (
+        <div className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2">
+          <p className="mb-1 text-[11px] font-bold text-amber-300">Needs changes — not trading</p>
+          <ul className="space-y-0.5 text-[12px] text-amber-200">
+            {s.startErrors.map((e, i) => <li key={i} className="flex items-start gap-1.5"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />{e}</li>)}
+          </ul>
+        </div>
+      )}
 
       <div className="mt-3 overflow-hidden rounded-lg border border-slate-800">
         <table className="w-full text-[13px]">
@@ -874,7 +920,7 @@ export default function StrategyStudio({ chatGoal = '', chatDraftKey = null, cha
     setRevision({ id: s.strategyId, version: s.version, goal: s.contract?.requestedPlan || '',
       draft: { ...(s.contract || {}), name: s.name, rules: s.contract?.rules || [],
         walletName: s.walletName || `${s.name} wallet`,
-        startingCash: s.startingCash || '100000.00' } });
+        startingCash: s.startingCash || s.contract?.startingCash || '' } });
     setSel(null); setBuilding(true); onChatDismiss?.();
   };
   const liveCount = list.filter((s) => s.isLive).length;

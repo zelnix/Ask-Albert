@@ -11,7 +11,8 @@ import re
 from decimal import Decimal, InvalidOperation
 
 SUPPORTED_KINDS = {'PRICE', 'CHANGE_PCT_24H', 'INDICATOR', 'STOP_LOSS_PCT',
-                   'TRAILING_STOP_PCT', 'TAKE_PROFIT_PCT'}
+                   'TRAILING_STOP_PCT', 'TAKE_PROFIT_PCT',
+                   'PARTIAL_TAKE_PROFIT_PCT', 'TIME_EXIT'}
 INDICATORS = {'RSI_14', 'SMA_20', 'EMA_20', 'MACD_HIST'}
 COMPARISONS = {'ABOVE', 'BELOW'}
 MAX_RULES = 24
@@ -51,6 +52,23 @@ def normalize(raw, symbols):
                 errors.append(f'{label}: Needs changes: a {kind} must be a SELL percentage between 0 and 100.'); continue
             if op or indicator:
                 errors.append(f'{label}: Needs changes: {kind} does not accept an operator or indicator.'); continue
+        elif kind == 'PARTIAL_TAKE_PROFIT_PCT':
+            if side != 'SELL' or value is None or not 0 < value < 100:
+                errors.append(f'{label}: Needs changes: PARTIAL_TAKE_PROFIT_PCT must be a SELL percentage between 0 and 100.'); continue
+            portion_pct = decimal(row.get('portionPct'))
+            portion_of = str(row.get('portionOf') or 'original').lower()
+            if portion_pct is None or not 0 < portion_pct <= 100:
+                errors.append(f'{label}: Needs changes: portionPct (how much of the position to sell) is required, 1–100.'); continue
+            if portion_of not in ('original', 'remaining'):
+                errors.append(f'{label}: Needs changes: portionOf must be "original" or "remaining".'); continue
+        elif kind == 'TIME_EXIT':
+            if side != 'SELL':
+                errors.append(f'{label}: Needs changes: TIME_EXIT must be a SELL rule.'); continue
+            deadline = str(row.get('deadline') or '').strip()
+            try:
+                datetime.datetime.fromisoformat(deadline.replace('Z', '+00:00'))
+            except (ValueError, TypeError):
+                errors.append(f'{label}: Needs changes: TIME_EXIT requires a valid ISO datetime deadline.'); continue
         elif kind in ('PRICE', 'CHANGE_PCT_24H', 'INDICATOR'):
             if op not in COMPARISONS or value is None or abs(value) > Decimal('1e12') or (kind == 'PRICE' and value <= 0):
                 errors.append(f'{label}: Needs changes: enter an ABOVE/BELOW comparator and a finite threshold within $1 trillion.'); continue
@@ -62,7 +80,14 @@ def normalize(raw, symbols):
             elif indicator:
                 errors.append(f'{label}: Needs changes: indicator only applies to INDICATOR rules.'); continue
         rule = {'kind': kind, 'side': side, 'symbol': symbol, 'operator': op if kind in ('PRICE', 'CHANGE_PCT_24H', 'INDICATOR') else None,
-                'indicator': indicator if kind == 'INDICATOR' else None, 'value': str(value.normalize())}
+                'indicator': indicator if kind == 'INDICATOR' else None,
+                'value': str(value.normalize()) if value is not None else None}
+        if kind == 'PARTIAL_TAKE_PROFIT_PCT':
+            rule['portionPct'] = str(decimal(row.get('portionPct')).normalize())
+            rule['portionOf'] = str(row.get('portionOf') or 'original').lower()
+        if kind == 'TIME_EXIT':
+            rule['deadline'] = str(row.get('deadline') or '').strip()
+            rule['value'] = None  # time exits have no price value
         sig = json.dumps(rule, sort_keys=True)
         if sig in seen:
             errors.append(f'{label}: Needs changes: duplicate trigger.'); continue
@@ -191,17 +216,22 @@ def _indicator(name, prices):
     return None
 
 
-def evaluate(rules, side, symbol, mark, *, history=None, lot=None, peak=None, change_pct_24h=None):
+def evaluate(rules, side, symbol, mark, *, history=None, lot=None, peak=None, change_pct_24h=None, completed_targets=None):
     """Return matching/wait reason with per-rule evidence; never manufacture a fill.
     BUY: all explicit conditions must pass. SELL: any one exit condition may pass.
+
+    completed_targets: set of ruleIds that have already been executed (partial or full).
+                       These are skipped to prevent re-execution on every cycle.
     """
-    selected = [r for r in rules if r['symbol'] == symbol and r['side'] == side]
+    completed_targets = completed_targets or set()
+    selected = [r for r in rules if r['symbol'] == symbol and r['side'] == side and r['ruleId'] not in completed_targets]
     if not selected:
         return {'ready': side == 'BUY', 'reason': 'Waiting for a reviewed exit rule.' if side == 'SELL' else None,
-                'results': [], 'matchedRuleId': None}
+                'results': [], 'matchedRuleId': None, 'partial': None}
     px = decimal(mark)
     if px is None or px <= 0:
-        return {'ready': False, 'reason': f'WAIT: a current verified {symbol} price is unavailable.', 'results': [], 'matchedRuleId': None}
+        return {'ready': False, 'reason': f'WAIT: a current verified {symbol} price is unavailable.',
+                'results': [], 'matchedRuleId': None, 'partial': None}
     closes = []
     if history:
         try:
@@ -219,6 +249,19 @@ def evaluate(rules, side, symbol, mark, *, history=None, lot=None, peak=None, ch
     results = []
     for r in selected:
         kind = r['kind']; threshold = decimal(r['value']); observed = None
+        # ── TIME_EXIT: compare current time against saved deadline ──
+        if kind == 'TIME_EXIT':
+            try:
+                deadline = datetime.datetime.fromisoformat(r['deadline'].replace('Z', '+00:00'))
+                now = datetime.datetime.now(datetime.timezone.utc)
+                meets = now >= deadline
+                results.append({'ruleId': r['ruleId'], 'kind': kind, 'state': 'MET' if meets else 'WAIT',
+                                'observed': now.isoformat(), 'threshold': r['deadline'],
+                                'reason': None if meets else f'WAIT: time exit at {r["deadline"]}, current {now.isoformat()[:16]}.'})
+            except (ValueError, TypeError):
+                results.append({'ruleId': r['ruleId'], 'kind': kind, 'state': 'WAIT',
+                                'reason': f'WAIT: invalid deadline {r.get("deadline")}'})
+            continue
         if kind == 'PRICE':
             observed = px
         elif kind == 'CHANGE_PCT_24H':
@@ -227,6 +270,11 @@ def evaluate(rules, side, symbol, mark, *, history=None, lot=None, peak=None, ch
                 observed = None
         elif kind == 'INDICATOR':
             observed = _indicator(r['indicator'], closes) if closes and all(x is not None and x > 0 for x in closes) else None
+        elif kind == 'PARTIAL_TAKE_PROFIT_PCT':
+            # Partial take profit: same as TAKE_PROFIT_PCT but affects only a portion.
+            if lot and decimal(lot.get('avgEntry')):
+                entry = decimal(lot['avgEntry'])
+                observed = (px - entry) / entry * 100
         elif lot and decimal(lot.get('avgEntry')):
             entry = decimal(lot['avgEntry'])
             if kind == 'STOP_LOSS_PCT': observed = (entry - px) / entry * 100
@@ -241,11 +289,20 @@ def evaluate(rules, side, symbol, mark, *, history=None, lot=None, peak=None, ch
                             'reason': f'WAIT: {symbol} {kind} needs {data_need}; no signal was substituted.'})
             continue
         meets = (observed > threshold if r['operator'] == 'ABOVE' else observed < threshold) if r.get('operator') else observed >= threshold
-        results.append({'ruleId': r['ruleId'], 'kind': kind, 'state': 'MET' if meets else 'WAIT',
-                        'observed': str(observed.quantize(Decimal('0.0001'))), 'threshold': str(threshold),
-                        'reason': None if meets else f'WAIT: {symbol} {kind} is {observed:.4f}; waiting for {r.get("operator") or "at least"} {threshold}.'})
+        result_row = {'ruleId': r['ruleId'], 'kind': kind, 'state': 'MET' if meets else 'WAIT',
+                      'observed': str(observed.quantize(Decimal('0.0001'))), 'threshold': str(threshold) if threshold is not None else None,
+                      'reason': None if meets else f'WAIT: {symbol} {kind} is {observed:.4f}; waiting for {r.get("operator") or "at least"} {threshold}.'}
+        # Attach partial info so the caller knows how much to sell.
+        if kind == 'PARTIAL_TAKE_PROFIT_PCT' and meets:
+            result_row['portionPct'] = r.get('portionPct')
+            result_row['portionOf'] = r.get('portionOf', 'original')
+        results.append(result_row)
     matching = next((r for r in results if r['state'] == 'MET'), None)
     missing = next((r for r in results if r['state'] != 'MET'), None)
     ready = bool(matching) if side == 'SELL' else missing is None
+    partial = None
+    if ready and matching and matching['kind'] == 'PARTIAL_TAKE_PROFIT_PCT':
+        partial = {'portionPct': matching.get('portionPct'), 'portionOf': matching.get('portionOf', 'original')}
     return {'ready': ready, 'reason': None if ready else (missing or results[0])['reason'],
-            'results': results, 'matchedRuleId': matching['ruleId'] if ready and matching else None}
+            'results': results, 'matchedRuleId': matching['ruleId'] if ready and matching else None,
+            'partial': partial}

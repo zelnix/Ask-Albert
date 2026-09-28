@@ -7905,8 +7905,11 @@ def _studio_rule_check(strat, sym, side, px, acct, obs=None):
     lot = next((l for l in (acct.get('lots') or []) if l.get('asset') == sym
                 and (_paper_core.D(l.get('qty')) or Decimal('0')) > 0), None)
     peak = (acct.get('strategyRulePeaks') or {}).get((lot or {}).get('lotId'))
+    # Partial/time targets that already triggered a fill are skipped.
+    completed_targets = set((lot or {}).get('completedTargets') or [])
     result = _strategy_rules.evaluate(rules, side, sym, px, history=history, lot=lot, peak=peak,
-                                      change_pct_24h=(obs or {}).get('changePct24h'))
+                                      change_pct_24h=(obs or {}).get('changePct24h'),
+                                      completed_targets=completed_targets)
     result['dataSource'] = {'price': (obs or {}).get('source') or (obs or {}).get('provider') or 'market-adapter',
                             'changePct24h': (obs or {}).get('obsId') if (obs or {}).get('changePct24h') is not None else None,
                             'indicator': history.get('assetId') if history else None,
@@ -8166,6 +8169,8 @@ def _autopilot_process_account_multi(acct):
 
     # Native reviewed percentage/price/indicator exits. SELL is reduce-only and
     # never needs a fabricated canonical SELL; Review proposes rather than fills.
+    # Partial targets sell only the specified portion; the matched ruleId is marked
+    # completed on the lot so it does not re-fire on the next cycle.
     if _strat and PAPER_EXECUTION_ENABLED:
         for lot in list(acct.get('lots') or []):
             sym = (lot.get('asset') or '').upper()
@@ -8177,9 +8182,22 @@ def _autopilot_process_account_multi(acct):
             if not verdict['ready']:
                 continue
             rule_id = verdict['matchedRuleId']
+            # Determine sell quantity: partial take-profit sells only a portion.
+            sell_qty = qty
+            is_partial = verdict.get('partial') is not None
+            if is_partial:
+                portion_pct = _paper_core.D(verdict['partial'].get('portionPct'))
+                portion_of = verdict['partial'].get('portionOf', 'original')
+                if portion_pct and Decimal('0') < portion_pct <= Decimal('100'):
+                    if portion_of == 'original':
+                        orig_qty = _paper_core.D(lot.get('originalQty') or lot.get('qty')) or qty
+                        sell_qty = (orig_qty * portion_pct / Decimal('100')).quantize(Decimal('1e-8'))
+                    else:
+                        sell_qty = (qty * portion_pct / Decimal('100')).quantize(Decimal('1e-8'))
+                    sell_qty = min(sell_qty, qty)  # never sell more than held
             prof = _paper_profiles.asset_profile(sym, (dec_by_sym.get(sym) or {}).get('rank'),
                                                   market=(mark_obs.get(sym) or {}).get('execution'))
-            sizing = _paper_core.size_sell(sym, qty, px, profile=prof, price_q=prof['priceQ'])
+            sizing = _paper_core.size_sell(sym, sell_qty, px, profile=prof, price_q=prof['priceQ'])
             if sizing.get('reject'):
                 continue
             rule_can = _studio_rule_envelope(_strat, sym, mark_obs[sym], rule_id)
@@ -8191,11 +8209,15 @@ def _autopilot_process_account_multi(acct):
                                        sizing, [], 'PROPOSED', rule_results=verdict['results'])
                 proposal = _paper_make_proposal_multi(acct_id, pid, 'SELL', rule_can, sizing, sym, strat=_strat,
                                                       sds_id=sds, rule_id=rule_id,
-                                                      rule_reason=f'Reviewed {sym} {rule_id} exit condition met; approve this simulated SELL.',
+                                                      rule_reason=f'Reviewed {sym} {rule_id} exit condition met{" (partial)" if is_partial else ""}; approve this simulated SELL.',
                                                       rule_results=verdict['results'])
                 if proposal:
+                    # Record partial info on the proposal so the approval path can mark it completed.
+                    if is_partial:
+                        paper_proposals_col.update_one({'proposalId': proposal.get('proposalId')},
+                                                      {'$set': {'isPartialTarget': True, 'partialRuleId': rule_id}})
                     _autopilot_notify(pid, acct_id, 'Paper exit needs your approval',
-                                      f'{sym} met a reviewed exit rule. Open Review to approve. Paper only.')
+                                      f'{sym} met a reviewed exit rule{" (partial target)" if is_partial else ""}. Open Review to approve. Paper only.')
             elif acct.get('mode') == 'PAPER_AUTOPILOT' and PAPER_AUTOPILOT_ENABLED:
                 current_acct = paper_accounts_col.find_one({'paperAccountId': acct_id, 'ownerId': pid,
                                                              'strategyVersion': _strat['version']})
@@ -8210,6 +8232,11 @@ def _autopilot_process_account_multi(acct):
                     _materialize_sds(acct, _strat, rule_can, mark_obs[sym], 'SELL', sym,
                                      sizing, [], 'EXECUTED', rule_results=verdict['results'])
                     _autopilot_set_vis(acct_id, lastTradeAt=now_iso)
+                    # Mark the target as completed on the lot so it doesn't re-fire.
+                    if is_partial or rule_id:
+                        paper_accounts_col.update_one(
+                            {'paperAccountId': acct_id, 'lots.lotId': lot.get('lotId')},
+                            {'$addToSet': {'lots.$.completedTargets': rule_id}})
                     acct = paper_accounts_col.find_one({'paperAccountId': acct_id, 'ownerId': pid}) or acct
         equity_info = _paper_portfolio.compute_portfolio_equity(acct, marks)
 
@@ -8923,7 +8950,7 @@ def paper_set_mode(acct_id: str, payload: dict = Body(...), user: dict = Depends
         bound = _strategy_for_account(a)
         if not bound:
             raise HTTPException(status_code=409, detail='Start the bound strategy before enabling Autopilot.')
-        _c, _h, errors = _studio_validate(bound.get('contract') or {}, pid, account=a)
+        _c, _h, _sv_err, _st_err = _studio_validate(bound.get('contract') or {}, pid, account=a); errors = _sv_err + _st_err
         if errors or _h != bound.get('contractHash'):
             raise HTTPException(status_code=422, detail='Autopilot cannot add exposure: '
                                 + '; '.join(errors or ['contract hash mismatch']))
@@ -9049,7 +9076,7 @@ def paper_proposal_action(proposal_id: str, cmd: str, payload: dict = Body(defau
                 'contractHash': prop.get('strategyContractHash')})
             if not bound:
                 raise HTTPException(status_code=409, detail='The driving strategy changed; no paper trade placed.')
-            _c, current_hash, errors = _studio_validate(bound.get('contract') or {}, pid, account=a)
+            _c, current_hash, _sv_err, _st_err = _studio_validate(bound.get('contract') or {}, pid, account=a); errors = _sv_err + _st_err
             if current_hash != bound.get('contractHash') or errors or asset not in _strategy_syms(bound):
                 raise HTTPException(status_code=409, detail='The strategy cannot add this asset: '
                                     + '; '.join(errors or ['contract or strategy universe changed']))
@@ -9177,6 +9204,17 @@ def paper_proposal_action(proposal_id: str, cmd: str, payload: dict = Body(defau
             required_mode='APPROVAL_REQUIRED' if rule_proposal else None)
     if err:
         raise HTTPException(status_code=code, detail='Could not execute: %s.' % err)
+    # Mark partial/time targets as completed on the lot after a successful fill.
+    if rule_proposal and not err:
+        _rule_id = prop.get('strategyRuleId')
+        _is_partial = prop.get('isPartialTarget', False)
+        if _rule_id and (_is_partial or _rule_id != 'invalidation'):
+            lot = next((l for l in (a.get('lots') or []) if l.get('asset') == asset
+                        and (_paper_core.D(l.get('qty')) or Decimal('0')) > 0), None)
+            if lot:
+                paper_accounts_col.update_one(
+                    {'paperAccountId': a['paperAccountId'], 'lots.lotId': lot.get('lotId')},
+                    {'$addToSet': {'lots.$.completedTargets': _rule_id}})
     # Mirror proposal status (non-authoritative; the account doc is the source of truth).
     paper_proposals_col.update_one({'proposalId': proposal_id, 'status': 'CREATED'},
                                    {'$set': {'status': 'APPROVED', 'approvedAt': datetime.datetime.utcnow().isoformat()},
@@ -12287,52 +12325,67 @@ def _studio_canonical(draft):
 def _studio_validate(draft, pid, account=None):
     """Pure capability/contract checks before any wallet or strategy write.
 
+    Returns (canonical, hash, saveErrors, startErrors).
+    saveErrors  – structural problems that prevent persisting the plan at all.
+    startErrors – missing execution instructions that prevent paper-trading,
+                  but do NOT prevent saving ("Needs changes — not trading").
+
     Transient provider outages do not invalidate a saved plan: they force WAIT in
     the engine and block entry at proposal/approval/execution, not Start.
     """
     draft = draft if isinstance(draft, dict) else {}
     c = _studio_canonical(draft)
     m = _get_mandate(pid)
-    errors = _asset_caps.validate_assets(draft, c['assets'], m)
+    save_errors = []
+    start_errors = []
+    cap_errors = _asset_caps.validate_assets(draft, c['assets'], m)
+    for e in cap_errors:
+        if 'not a recognized' in e.lower() or 'no assets' in e.lower():
+            save_errors.append(e)
+        else:
+            start_errors.append(e)
     rules, rule_errors = _strategy_rules.normalize(draft.get('rules'), [a['symbol'] for a in c['assets']])
-    errors.extend(rule_errors)
+    for e in rule_errors:
+        if 'malformed' in e.lower() or 'invalid' in e.lower():
+            save_errors.append(e)
+        else:
+            start_errors.append(e)
     if c['requestedPlan']:
-        errors.extend(_asset_caps.explicit_request_errors(c['requestedPlan'], c))
+        start_errors.extend(_asset_caps.explicit_request_errors(c['requestedPlan'], c))
     for field, supported in STUDIO_RULES.items():
         if c[field] != supported:
-            errors.append(f'{field}: Needs changes. Only {supported} is executable as a canonical gate; use typed rules for additional triggers.')
+            start_errors.append(f'{field}: Needs changes. Only {supported} is executable as a canonical gate; use typed rules for additional triggers.')
     if c['timeframe'] != 'paper cycle':
-        errors.append('Needs changes. A custom trade timeframe is not executable; Studio runs on the normal paper cycle.')
-    errors.extend(_studio_plan_unsupported(c['requestedPlan'], c['assets'], rules))
+        start_errors.append('Needs changes. A custom trade timeframe is not executable; Studio runs on the normal paper cycle.')
+    start_errors.extend(_studio_plan_unsupported(c['requestedPlan'], c['assets'], rules))
     if draft.get('unsupportedInstructions'):
-        errors.append('Needs changes. Albert identified instructions this paper engine cannot execute: '
-                      + ', '.join(str(x)[:100] for x in draft['unsupportedInstructions'][:5]))
+        for ui in (draft['unsupportedInstructions'] or [])[:5]:
+            start_errors.append('Unresolved instruction: ' + str(ui)[:100])
     if len(str(draft.get('requestedPlan') or '')) > 4000:
-        errors.append('The original plan is too long to review without truncation; shorten and redraft.')
+        save_errors.append('The original plan is too long to review without truncation; shorten and redraft.')
     if c['maxDrawdownPct'] is not None or c['riskLimits']['stopLossPct'] is not None or c['riskLimits']['maxTradeRiskPct'] is not None:
-        errors.append('Needs changes: use a typed STOP_LOSS_PCT exit; custom drawdown or per-trade risk is not implemented. Mandate risk gates still apply.')
+        start_errors.append('Needs changes: use a typed STOP_LOSS_PCT exit; custom drawdown or per-trade risk is not implemented. Mandate risk gates still apply.')
     if 'startingCash' in c:
         cash = _strategy_rules.decimal(c['startingCash'])
         if cash is None or cash < _paper_core.MIN_NOTIONAL or cash > Decimal('1000000000') or cash.as_tuple().exponent < -2:
-            errors.append('Needs changes: virtual starting cash must be $10–$1,000,000,000 with at most two decimals.')
+            save_errors.append('Needs changes: virtual starting cash must be $10–$1,000,000,000 with at most two decimals.')
         if account and cash != _paper_core.D(account.get('startingCash')):
-            errors.append('Needs changes: a revision must retain its existing wallet balance and holdings; starting cash cannot be reset.')
+            save_errors.append('Needs changes: a revision must retain its existing wallet balance and holdings; starting cash cannot be reset.')
     if 'walletName' in c and not c['walletName']:
-        errors.append('Needs changes: name this independent paper wallet.')
+        save_errors.append('Needs changes: name this independent paper wallet.')
     if account and 'walletName' in c and c['walletName'] != account.get('name'):
-        errors.append('Needs changes: this running strategy remains tied to its named wallet; wallet name cannot change in a revision.')
+        save_errors.append('Needs changes: this running strategy remains tied to its named wallet; wallet name cannot change in a revision.')
     requested_cash, requested_wallet = _studio_requested_wallet(c['requestedPlan'])
     if requested_cash and _strategy_rules.decimal(requested_cash) != _strategy_rules.decimal(c.get('startingCash')):
-        errors.append('Needs changes: the virtual starting amount in your request must match the reviewed wallet amount.')
+        start_errors.append('Needs changes: the virtual starting amount in your request must match the reviewed wallet amount.')
     if requested_wallet and requested_wallet != c.get('walletName'):
-        errors.append('Needs changes: the named wallet in your request must match the reviewed wallet name.')
+        start_errors.append('Needs changes: the named wallet in your request must match the reviewed wallet name.')
     if c['riskLimits']['maxPositions'] > STUDIO_MAX_LEGS or c['riskLimits']['maxPositions'] < 1:
-        errors.append('maxPositions must be between 1 and the portfolio limit.')
+        save_errors.append('maxPositions must be between 1 and the portfolio limit.')
     if c['reservePct'] is not None and (c['reservePct'] < 0 or c['reservePct'] > 100):
-        errors.append('reservePct must be between 0 and 100.')
-    # The account is owner-scoped by the caller; its live mandate is the same
-    # owner's mandate. Both old assign and new Start use exactly these checks.
-    return c, _studio_short_hash(c), errors
+        save_errors.append('reservePct must be between 0 and 100.')
+    # Legacy compatibility: callers that expect a flat errors list get all combined.
+    return c, _studio_short_hash(c), save_errors, start_errors
 
 
 def _studio_summary(c):
@@ -12352,7 +12405,7 @@ def _studio_summary(c):
 def _studio_public(doc):
     return {k: doc.get(k) for k in ('strategyId', 'name', 'version', 'contract',
             'contractHash', 'summary', 'createdAt', 'updatedAt', 'assignedPaperAccountId',
-            'backtestRunId', 'backtestVersion')} | {'lifecycleState': doc.get('status'), 'paperOnly': True}
+            'backtestRunId', 'backtestVersion', 'readiness', 'startErrors')} | {'lifecycleState': doc.get('status'), 'paperOnly': True}
 
 
 def _studio_idem(pid, key, result=None, expected_hash=None):
@@ -12624,7 +12677,7 @@ def studio_draft(payload: dict = Body(...), user: dict = Depends(get_current_use
             candidate['rules'] = parsed_rules
             candidate['walletName'] = requested_wallet or str(candidate.get('walletName') or (candidate.get('name') or 'New strategy') + ' wallet')[:60]
             candidate['startingCash'] = requested_cash or candidate.get('startingCash') or '100000.00'
-            c, chash, errors = _studio_validate(candidate, pid)
+            c, chash, _sv_err, _st_err = _studio_validate(candidate, pid); errors = _sv_err + _st_err
             draft = candidate
             errors += parse_errors
             if not errors:
@@ -12646,10 +12699,13 @@ def studio_draft(payload: dict = Body(...), user: dict = Depends(get_current_use
 
 @app.post('/api/v1/albert/studio/validate')
 def studio_validate_endpoint(payload: dict = Body(...), user: dict = Depends(get_current_user)):
-    """Validate an exact draft and return the canonical contract + hash for the review card."""
-    c, chash, errors = _studio_validate((payload or {}).get('draft') or payload, owner_pid(user))
+    """Validate an exact draft and return the canonical contract + hash for the review card.
+    Returns saveErrors (block save) and startErrors (allow save, block start) separately."""
+    c, chash, _sv_err, _st_err = _studio_validate((payload or {}).get('draft') or payload, owner_pid(user))
     return {'status': 'ready', 'contract': c, 'contractHash': chash,
-            'summary': _studio_summary(c), 'validationErrors': errors, 'valid': not errors,
+            'summary': _studio_summary(c),
+            'saveErrors': _sv_err, 'startErrors': _st_err,
+            'validationErrors': _sv_err + _st_err, 'valid': not _sv_err,
             'assetCapabilities': [_studio_capability_row(a['symbol'], _get_mandate(owner_pid(user))) for a in c['assets']]}
 
 
@@ -12670,9 +12726,12 @@ def studio_save(payload: dict = Body(...), user: dict = Depends(get_current_user
             raise HTTPException(status_code=409, detail=prior['detail'])
         return prior
     draft = body.get('draft') or body.get('contract') or {}
-    c, chash, errors = _studio_validate(draft, pid)
-    if errors:
-        raise HTTPException(status_code=422, detail='Validation failed: ' + '; '.join(errors))
+    c, chash, _sv_err, _st_err = _studio_validate(draft, pid)
+    # Save-blocking errors prevent persisting. Start-blocking errors are recorded
+    # but the plan can still be saved as "Needs changes — not trading."
+    if _sv_err:
+        raise HTTPException(status_code=422, detail='Cannot save: ' + '; '.join(_sv_err))
+    readiness = 'ready' if not _st_err else 'needs_changes'
     if not body.get('expectedHash') or body['expectedHash'] != chash:
         raise HTTPException(status_code=409, detail='This review is missing or stale — reload and try again.')
     now = datetime.datetime.utcnow().isoformat()
@@ -12687,7 +12746,7 @@ def studio_save(payload: dict = Body(...), user: dict = Depends(get_current_user
             {'ownerId': pid, 'strategyId': sid, 'dedicatedToStrategy': True}, sort=[('createdAt', 1)])
         if parent.get('assignedPaperAccountId') and not acct:
             raise HTTPException(status_code=409, detail='The existing strategy wallet is unavailable; no replacement or reset is allowed.')
-        _checked, _checked_hash, wallet_errors = _studio_validate(draft, pid, account=acct)
+        _checked, _checked_hash, _sv_err, _st_err = _studio_validate(draft, pid, account=acct); wallet_errors = _sv_err + _st_err
         if wallet_errors or _checked_hash != chash:
             raise HTTPException(status_code=422, detail='Needs changes: ' + '; '.join(wallet_errors or ['wallet review changed']))
         if acct and (acct.get('strategyId') != sid or not acct.get('dedicatedToStrategy')):
@@ -12718,9 +12777,12 @@ def studio_save(payload: dict = Body(...), user: dict = Depends(get_current_user
     # Every version is immutable; only one reviewed version drives this wallet.
     doc = {'_id': f'{sid}:v{version}', 'strategyId': sid, 'ownerId': pid,
            'name': str(body.get('name') or draft.get('name') or 'Untitled')[:80],
-           'status': 'REVIEWED', 'version': version, 'contract': c, 'contractHash': chash,
+           'status': 'REVIEWED', 'readiness': readiness,
+           'startErrors': _st_err if _st_err else [],
+           'version': version, 'contract': c, 'contractHash': chash,
            'summary': _studio_summary(c), 'createdAt': now, 'updatedAt': now,
            'assignedPaperAccountId': (acct or {}).get('paperAccountId'),
+           'proposalId': str(body.get('proposalId') or draft.get('proposalId') or '')[:40],
            'backtestRunId': None, 'backtestVersion': None, 'latest': True}
     try:
         strategy_contracts_col.insert_one(dict(doc))
@@ -12864,7 +12926,8 @@ def _strategy_paper_public(doc, pid, acct=None):
     """The paper-trading facts that belong ON the strategy card."""
     acct = _strategy_acct(doc, pid) if acct is None else acct
     status = _strategy_paper_status(doc, acct)
-    _contract, current_hash, blockers = _studio_validate(doc.get('contract') or {}, pid, account=acct)
+    _contract, current_hash, _sv_err, _st_err = _studio_validate(doc.get('contract') or {}, pid, account=acct)
+    blockers = _sv_err + _st_err
     if current_hash != doc.get('contractHash'):
         blockers.append('Saved contract hash mismatch; no new entries permitted.')
     if doc.get('assignedPaperAccountId') and not acct:
@@ -12885,9 +12948,13 @@ def _strategy_paper_public(doc, pid, acct=None):
     if assessment and (assessment.get('strategyVersion') != doc.get('version') or
                        assessment.get('contractHash') != doc.get('contractHash')):
         assessment = None
+    # Expose the recorded start_errors from the saved document for the UI to distinguish
+    # "Needs changes — not trading" from structural save_errors.
+    recorded_start_errors = doc.get('startErrors') or []
     return {'paperStatus': status, 'paperStatusLabel': PAPER_STATUS_LABEL.get(status, status),
             'canStart': not blockers and modes_ready and status != 'ARCHIVED',
-            'entryBlockers': blockers, 'workerUnavailable': not modes_ready,
+            'entryBlockers': blockers, 'startErrors': _st_err, 'saveErrors': _sv_err,
+            'workerUnavailable': not modes_ready,
             'modeBlockers': modes, 'assessment': assessment, 'assetCapabilities': capabilities,
             'approvalMode': ACCT_MODE_TO_APPROVAL.get((acct or {}).get('mode')) if acct else None,
             'walletName': (acct or {}).get('name') or (doc.get('contract') or {}).get('walletName'),
@@ -12899,9 +12966,14 @@ def _strategy_paper_public(doc, pid, acct=None):
 
 
 def _paper_new_wallet_for_strategy(pid, doc, acct_mode):
-    """Open exactly one named, independent virtual wallet with reviewed starting cash."""
+    """Open exactly one named, independent virtual wallet with reviewed starting cash.
+    No automatic 100k fallback — the user's stated amount is preserved as agreed."""
     contract = doc.get('contract') or {}
-    start = _paper_core.D(contract.get('startingCash')) if contract.get('startingCash') is not None else STRATEGY_PAPER_START_CASH
+    raw_cash = contract.get('startingCash')
+    if raw_cash is None:
+        raise HTTPException(status_code=422,
+                            detail='No virtual starting amount was agreed. Please specify the starting capital in the strategy review before starting paper trading.')
+    start = _paper_core.D(raw_cash)
     name = contract.get('walletName') or (doc.get('name') or 'Strategy')[:60]
     if start is None or not _paper_core.MIN_NOTIONAL <= start <= Decimal('1000000000'):
         raise HTTPException(status_code=422, detail='Needs changes: invalid reviewed virtual starting amount.')
@@ -12974,7 +13046,7 @@ def studio_start_paper(sid: str, payload: dict = Body(default={}),
         raise HTTPException(status_code=409, detail='One running strategy per virtual wallet. This wallet is already assigned.')
     # Validate the current mandate AND exact immutable contract before creating a
     # wallet, resuming runtime state, or emitting an ACCOUNT_OPENED/RESUME event.
-    _c, _h, errs = _studio_validate(doc['contract'], pid, account=acct)
+    _c, _h, _sv_err, _st_err = _studio_validate(doc['contract'], pid, account=acct); errs = _sv_err + _st_err
     if _h != doc['contractHash']:
         raise HTTPException(status_code=409, detail='Contract hash mismatch — reload the strategy.')
     if errs:
@@ -13115,7 +13187,7 @@ def studio_set_approval_mode(sid: str, payload: dict = Body(default={}),
     if not acct:
         raise HTTPException(status_code=409,
                             detail='Start paper trading first — then you can change trade approval.')
-    _c, _h, errors = _studio_validate(doc.get('contract') or {}, pid, account=acct)
+    _c, _h, _sv_err, _st_err = _studio_validate(doc.get('contract') or {}, pid, account=acct); errors = _sv_err + _st_err
     if errors or _h != doc.get('contractHash'):
         raise HTTPException(status_code=422, detail='This plan cannot be executed as reviewed: '
                             + '; '.join(errors or ['contract hash mismatch']))
@@ -13394,8 +13466,8 @@ def studio_lifecycle(sid: str, cmd: str, payload: dict = Body(default={}), user:
         if other:
             raise HTTPException(status_code=409,
                                 detail='This account already has a strategy assigned — unassign it first.')
-        _c, _h, errs = _studio_validate({'assets': doc['contract']['assets'],
-                                         **doc['contract']}, pid, account=acct)
+        _c, _h, _sv_err, _st_err = _studio_validate({'assets': doc['contract']['assets'],
+                                         **doc['contract']}, pid, account=acct); errs = _sv_err + _st_err
         if _h != doc['contractHash']:
             raise HTTPException(status_code=409, detail='Contract hash mismatch on assignment.')
         if errs:
@@ -13409,7 +13481,7 @@ def studio_lifecycle(sid: str, cmd: str, payload: dict = Body(default={}), user:
         acct = _strategy_acct(doc, pid)
         if not acct:
             raise HTTPException(status_code=409, detail='Assigned paper account is unavailable.')
-        _c, _h, errs = _studio_validate(doc.get('contract') or {}, pid, account=acct)
+        _c, _h, _sv_err, _st_err = _studio_validate(doc.get('contract') or {}, pid, account=acct); errs = _sv_err + _st_err
         if _h != doc.get('contractHash') or errs:
             raise HTTPException(status_code=422, detail='Cannot activate: '
                                 + '; '.join(errs or ['contract hash mismatch']))
@@ -15071,26 +15143,60 @@ def albert_chat_delete(payload: dict = Body(...), user: dict = Depends(get_curre
 @app.post('/api/v1/chat/prepare-proposal')
 def chat_prepare_proposal(payload: dict = Body(...), user: dict = Depends(get_current_user)):
     """Extract a structured strategy proposal from the current chat conversation.
-    Used when the user wants to review/save a strategy discussed in prose."""
+
+    Accepts two flows:
+      1. An explicit structured proposal (from the chat UI's parsed reply) — returned
+         as-is after validation (deterministic, no Gemini call).
+      2. No explicit proposal — uses the FULL relevant conversation thread to build one.
+         Earlier capital, horizon and risk instructions remain applicable.
+    """
     pid = owner_pid(user)
     session_id = (str(payload.get('session_id') or '')).strip()[:80]
     if not pid:
         return JSONResponse(status_code=401, content={'error': 'Not authenticated'})
-    # Load recent conversation messages to build context.
+
+    # ── Flow 1: explicit structured proposal passed from the chat card ──
+    proposal = payload.get('proposal')
+    if proposal and isinstance(proposal, dict) and (proposal.get('legs') or proposal.get('assets')):
+        if not proposal.get('proposalId'):
+            proposal['proposalId'] = f'prop_{uuid.uuid4().hex[:12]}'
+        if not proposal.get('revision'):
+            proposal['revision'] = 1
+        # Persist the proposal linkage so it survives reloads.
+        try:
+            from config import paper_proposals_col
+            paper_proposals_col.update_one(
+                {'proposalId': proposal['proposalId'], 'ownerId': pid},
+                {'$set': {'proposalId': proposal['proposalId'], 'ownerId': pid,
+                          'sessionId': session_id, 'proposal': proposal,
+                          'updatedAt': datetime.datetime.utcnow().isoformat()}},
+                upsert=True)
+        except Exception:
+            pass
+        return {'basket_draft': proposal, 'error': None}
+
+    # ── Flow 2: build from the full conversation thread ──
     try:
         from config import albert_chat_col
-        thread = albert_chat_col.find_one({'pid': pid}, sort=[('updatedAt', -1)])
+        query = {'pid': pid}
+        if session_id:
+            query['session_id'] = session_id
+        thread = albert_chat_col.find_one(query, sort=[('updatedAt', -1)])
         messages = (thread or {}).get('messages', []) if thread else []
     except Exception:
         messages = []
-    # Build a strategy goal from the last few user messages.
-    user_msgs = [m.get('text', '') for m in messages[-10:] if m.get('role') == 'user' and m.get('text')]
-    goal = '\n'.join(user_msgs[-3:]) if user_msgs else ''
-    if not goal.strip():
+    # Use ALL user messages from the thread (not an arbitrary last-3 window).
+    user_msgs = [m.get('text', '') for m in messages if m.get('role') == 'user' and m.get('text')]
+    if not user_msgs:
         return {'error': 'No conversation found to extract a strategy from.', 'basket_draft': None}
+    goal = '\n'.join(user_msgs)
     draft = _build_basket_draft(goal)
     if draft.get('error'):
         return {'error': draft['error'], 'basket_draft': None}
+    # Tag the generated proposal with an identity.
+    if not draft.get('proposalId'):
+        draft['proposalId'] = f'prop_{uuid.uuid4().hex[:12]}'
+    draft['revision'] = 1
     return {'basket_draft': draft, 'error': None}
 
 

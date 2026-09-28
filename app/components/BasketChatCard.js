@@ -23,6 +23,8 @@ export default function BasketChatCard({ draft, onBuild }) {
         assets,
       },
     }));
+    // Close the floating chat so Studio is visible.
+    try { window.dispatchEvent(new CustomEvent('albert:close-chat')); } catch (x) { /* noop */ }
     onBuild?.();
   };
 

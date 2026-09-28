@@ -2,8 +2,8 @@
 
 import React, { useEffect, useState } from 'react';
 import {
-  Sparkles, Wallet, ShieldAlert, GitBranch, BarChart3, Newspaper, Database,
-  Waves, Radar, ArrowUpRight, Maximize2, RefreshCw, ShieldCheck,
+  Sparkles, Wallet, ShieldAlert, GitBranch, BarChart3, Newspaper,
+  Waves, ArrowUpRight, Maximize2, RefreshCw, ShieldCheck,
 } from 'lucide-react';
 import ModalShell from './ModalShell';
 import DashboardAskPanel from './DashboardAskPanel';
@@ -189,12 +189,48 @@ const OneScreenHome = ({ d, dashboardStatus = 'loading', ticker, news, newsStatu
     </div>
     <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,1fr)_280px] lg:items-start xl:grid-cols-[minmax(0,1fr)_320px] xl:items-stretch 2xl:grid-cols-[minmax(0,1fr)_350px]">
       <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 xl:grid-rows-3">
-        {/* 1. Albert's Brief */}
-        <DashboardCard cardId="brief" title="Albert’s Brief" icon={Sparkles} status={health?.sop} summary={directionClaim?.text || 'Unavailable'} freshness={last('Regime', claimTime)} onAsk={() => ask('brief')} onOpen={() => open('brief')}>
-          <p className="line-clamp-1"><b>Drivers:</b> {leadershipClaim?.text || 'Unavailable'}</p>
-          <p className="mt-1 line-clamp-1"><b>Since last visit:</b> {briefChanges[0]?.detail || 'No change'}</p>
-          <p className="mt-1 line-clamp-1"><b>Position:</b> {portfolioClaim?.text || (totals ? `${money(totals.value, 2)}` : 'Unavailable')}</p>
-        </DashboardCard>
+        {/* 1. Albert’s Brief — spans three rows on the left */}
+        <article onClick={(e) => { if (!e.target.closest('button, a')) open('brief'); }}
+          className="flex min-w-0 cursor-pointer flex-col rounded-lg border border-slate-700/80 bg-slate-900/80 p-3 shadow-sm shadow-black/20 xl:row-span-3">
+          <div className="flex min-h-5 items-center gap-1.5">
+            <Sparkles className="h-4 w-4 shrink-0 text-sky-300" />
+            <h2 className="min-w-0 truncate text-[13px] font-bold text-white"><button id="home-card-brief" type="button" onClick={() => open('brief')} className="max-w-full truncate text-left hover:text-sky-200 focus-visible:rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400">Albert’s Brief</button></h2>
+            {health?.sop && <span className={`ml-auto shrink-0 rounded-sm px-1.5 py-0.5 text-[10px] font-bold ${['stale', 'error', 'unavailable'].includes(String(health.sop).toLowerCase()) ? 'bg-amber-500/15 text-amber-200' : 'bg-sky-500/10 text-sky-200'}`}>{titleCase(health.sop)}</span>}
+          </div>
+          <p className="mt-1 text-xs leading-snug text-slate-300">{directionClaim?.text || 'Unavailable'}</p>
+          <div className="mt-2 flex-1 space-y-2 text-xs leading-snug text-slate-200">
+            {/* Direction & Drivers */}
+            <div>
+              <p className="line-clamp-2"><b>Drivers:</b> {leadershipClaim?.text || 'Unavailable'}</p>
+              {secondReason?.text && <p className="mt-0.5 line-clamp-2"><b>Context:</b> {secondReason.text}</p>}
+              <p className="mt-0.5 line-clamp-1"><b>Since last visit:</b> {briefChanges[0]?.detail || 'No change'}</p>
+            </div>
+            {/* Portfolio snapshot */}
+            <div className="border-t border-slate-800 pt-1.5">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Portfolio</p>
+              <p className="mt-0.5 line-clamp-1">{portfolioClaim?.text || (totals ? `Value: ${money(totals.value, 2)}` : 'Unavailable')}</p>
+              <p className="mt-0.5 line-clamp-1">{totals ? `P&L: ${pnlLabel}${pnlVal != null ? ` ${money(Math.abs(pnlVal), 2)} (${signed(totals.pnlPct)})` : ''}` : ''}</p>
+            </div>
+            {/* Evidence & Engines (absorbed) */}
+            <div className="border-t border-slate-800 pt-1.5">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Evidence & Engines</p>
+              <p className="mt-0.5 line-clamp-1"><b>Forecast:</b> {valText} · <b>Data:</b> {titleCase(sop?.dataQuality?.status || 'unavailable')}</p>
+              <p className="mt-0.5 line-clamp-1"><b>Ledger:</b> {d?.prediction_ledger?.overall?.accuracy != null ? `${num(d.prediction_ledger.overall.accuracy).toFixed(0)}% accuracy, ${d.prediction_ledger.overall.n} graded` : 'unavailable'}</p>
+              <p className="mt-0.5 line-clamp-1"><b>Paper:</b> {totals ? `${totals.closedTrades ?? 0} trades, win ${totals.winRatePct != null ? pct(totals.winRatePct) : '?'}` : 'unavailable'}</p>
+            </div>
+            {/* Opportunity Radar (absorbed) */}
+            <div className="border-t border-slate-800 pt-1.5">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Opportunity Radar</p>
+              {findings.length ? findings.map((f, i) => <p key={f.findingId || i} className="mt-0.5 line-clamp-1">{f.asset || 'Market'} · {titleCase(f.priority)} · {f.title}</p>) : <p className="text-slate-400">No open setups</p>}
+              {findings[0]?.confirmIf && <p className="mt-0.5 line-clamp-1 text-slate-300">Confirm: {findings[0].confirmIf}</p>}
+            </div>
+          </div>
+          <div className="mt-1 flex shrink-0 items-center gap-2 border-t border-slate-800 pt-1.5 text-xs">
+            <span className="min-w-0 flex-1 truncate text-[11px] text-slate-400">{last('Regime', claimTime)}</span>
+            <button type="button" onClick={() => ask('brief')} className="shrink-0 rounded-sm p-0.5 text-sky-300 hover:text-sky-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"><Sparkles className="h-3.5 w-3.5" /></button>
+            <button type="button" onClick={() => open('brief')} className="inline-flex shrink-0 items-center gap-0.5 font-semibold text-sky-300 hover:text-sky-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400">Open details<ArrowUpRight className="h-3.5 w-3.5" /></button>
+          </div>
+        </article>
         {/* 2. Paper Trading */}
         <DashboardCard cardId="paper" title="Paper Trading" icon={Wallet} status={health?.paper} summary={totals?.value != null ? `${money(totals.value, 2)} · ${pnlLabel}${pnlVal != null ? ` ${money(Math.abs(pnlVal), 2)} (${signed(totals.pnlPct)})` : ''}` : 'Unavailable'} freshness={last('Ledger', paper?.asOf)} onAsk={() => ask('paper')} onOpen={() => open('paper')}>
           <p className="line-clamp-1"><b>Start:</b> {money(totals?.startingCash, 2)} · <b>Cash:</b> {paper?.cashAvailable ? money(paper.cashTotal, 2) : 'unavailable'} · <b>Holdings:</b> {positions.length ? money(positions.reduce((s, p) => s + (num(p.currentPrice) || 0) * (num(p.netQuantity) || 0), 0), 2) : 'none'}</p>
@@ -223,20 +259,10 @@ const OneScreenHome = ({ d, dashboardStatus = 'loading', ticker, news, newsStatu
           <p className="mt-1 line-clamp-2 text-slate-300">{story?.ai?.why_it_matters || story?.ai?.summary || ''}</p>
           {nextEvent?.title && <p className="mt-1 truncate text-slate-400">Next: {nextEvent.title}</p>}
         </DashboardCard>
-        {/* 7. Evidence & Engines */}
-        <DashboardCard cardId="evidence" title="Evidence & Engines" icon={Database} status={health?.sop} summary={`Forecast: ${valText} · Data: ${titleCase(sop?.dataQuality?.status || 'unavailable')}`} freshness={last('Eval', val?.evaluation?.lastEvaluatedAt || sop?.generatedAt)} onAsk={() => ask('evidence')} onOpen={() => open('evidence')}>
-          <p className="line-clamp-1">Ledger: {d?.prediction_ledger?.overall?.accuracy != null ? `${num(d.prediction_ledger.overall.accuracy).toFixed(0)}% accuracy, ${d.prediction_ledger.overall.n} graded` : 'unavailable'}</p>
-          <p className="mt-1 line-clamp-1">Paper: {totals ? `${totals.closedTrades ?? 0} trades, win ${totals.winRatePct != null ? pct(totals.winRatePct) : '?'}` : 'unavailable'}</p>
-        </DashboardCard>
-        {/* 8. On-Chain & Flows */}
+        {/* 7. On-Chain & Flows */}
         <DashboardCard cardId="flows" title="On-Chain & Flows" icon={Waves} status={health?.etf} summary={whale ? `${whale.name || 'Whale'}: ${whale.change_7d != null ? `${signed(whale.change_7d, ' BTC')} · ${whale.signal || ''}` : ''}` : 'Unavailable'} freshness={last(whales?.source || 'Whale', whales?.as_of)} onAsk={() => ask('flows')} onOpen={() => open('flows')}>
           <p className="line-clamp-1">ETF: {etf?.net_1d != null ? `${signed(etf.net_1d, 'm USD')} · ${etf.latest_date || ''}` : 'unavailable'}</p>
           <p className="mt-1 line-clamp-1">Network: {network?.hashrate_ehs != null ? `${network.hashrate_ehs} EH/s` : '?'} · sentiment: {sentiment?.value != null ? `${sentiment.value}/100` : '?'}</p>
-        </DashboardCard>
-        {/* 9. Opportunity Radar */}
-        <DashboardCard cardId="radar" title="Opportunity Radar" icon={Radar} status={health?.streams} summary={findings[0]?.title || 'No setups'} freshness={last('Research', research?.asOf || streams?.generatedAt)} onAsk={() => ask('radar')} onOpen={() => open('radar')}>
-          {findings.length ? findings.map((f, i) => <p key={f.findingId || i} className="mt-0.5 line-clamp-1">{f.asset || 'Market'} · {titleCase(f.priority)} · {f.title}</p>) : <p className="text-slate-400">No open setups</p>}
-          {findings[0] && <p className="mt-1 line-clamp-1 text-slate-300">Confirm: {findings[0].confirmIf || '?'}</p>}
         </DashboardCard>
       </div>
       <DashboardAskPanel selected={selected} onNav={onNav} onEvidence={setEvidenceId} stateId={sop?.stateId} />
