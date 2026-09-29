@@ -68,7 +68,7 @@ function Leadership({ ph, direction, onEvidence }) {
       ) : null}
       <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
         Leadership is an observation, not a control: there is no season lens to set here, and
-        nothing about it changes a strategy, a trade-approval mode or execution eligibility.
+        nothing about it changes a strategy or execution eligibility.
       </p>
       <button type="button" onClick={() => setOpen((o) => !o)}
         className="mt-2 inline-flex items-center gap-1 text-[11px] font-semibold text-slate-400 hover:text-slate-200">

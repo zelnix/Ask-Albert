@@ -370,7 +370,6 @@ const OneScreenHome = ({ d, dashboardStatus = 'loading', ticker, news, newsStatu
         <DashboardCard cardId="paper" title="Paper Trading" icon={Wallet} status={health?.paper} summary={paperCommentary} freshness={last('Ledger', paper?.asOf)} onAsk={() => ask('paper', 'Paper Trading', paperCommentary, 'Paper ledger', paper?.asOf)} onOpen={() => open('paper')}>
           <p className="line-clamp-1"><b>Value:</b> {money(totals?.value, 2)} · <b>P&L:</b> {pnlVal != null ? `${money(Math.abs(pnlVal), 2)} (${signed(totals?.pnlPct)})` : 'unavailable'}</p>
           {entries.length ? entries.map((e, i) => <p key={e.ledgerEventId || i} className="mt-0.5 truncate">{e.side === 'BUY' ? 'Bought' : 'Sold'} {e.qty} {e.asset} @ {money(e.fillPx, 2)}</p>) : <p className="mt-1 text-slate-400">No completed trades</p>}
-          {(paper?.pendingApprovals?.length || 0) > 0 && <p className="mt-1 text-amber-200">{paper.pendingApprovals.length} pending proposal(s)</p>}
         </DashboardCard>
         {/* 3. Portfolio & Risk */}
         <DashboardCard cardId="portfolio" title="Portfolio & Risk" icon={ShieldAlert} status={health?.paper} summary={portfolioCommentary} freshness={last('Ledger', paper?.asOf)} onAsk={() => ask('portfolio', 'Portfolio & Risk', portfolioCommentary, 'Paper ledger', paper?.asOf)} onOpen={() => open('portfolio')}>

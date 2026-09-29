@@ -114,6 +114,10 @@ def requested_triggers(text, assets):
         clause = clause.strip()
         if not clause:
             continue
+        # Portfolio-level goals (profit target, equity floor, drawdown) are not
+        # per-coin rules — skip them here. They're extracted by extract_portfolio_goals().
+        if is_portfolio_goal_clause(clause):
+            continue
         named = [s for s in symbols if re.search(r'\b' + re.escape(s) + r'\b', clause, re.I)]
         sym = named[0] if len(named) == 1 else (symbols[0] if len(symbols) == 1 else None)
         raw = []
@@ -153,10 +157,10 @@ def requested_triggers(text, assets):
             add('PRICE', 'SELL' if has_sell and not has_buy else 'BUY',
                 str(price), 'ABOVE' if match.group(1).lower() in ('above', 'over', '>', '>=') else 'BELOW',
                 span=match.span())
-        for match in re.finditer(r'\b(?:rises?|gains?|up|increases?|drops?|falls?|down|decreases?)\s*(?:by\s*)?' + numeric + r'\s*%\s*(?:in\s*(?:24\s*h(?:ours?)?|a\s*day))?', clause, re.I):
+        for match in re.finditer(r'(?:\b(?:24\s*h(?:ours?)?|daily?)\s+)?\b(?:rises?|gains?|up|increases?|drops?|falls?|down|decreases?)\s*(?:by\s*|[><]=?\s*)?' + numeric + r'\s*%\s*(?:in\s*(?:24\s*h(?:ours?)?|a\s*day))?', clause, re.I):
             direction = match.group(0).lower()
             value = match.group(1)
-            falling = bool(re.match(r'(drop|fall|down|decrease)', direction))
+            falling = bool(re.search(r'\b(drop|fall|down|decrease)', direction))
             add('CHANGE_PCT_24H', 'SELL' if has_sell and not has_buy else 'BUY',
                 '-' + value.lstrip('-') if falling else value.lstrip('-'), 'BELOW' if falling else 'ABOVE', span=match.span())
 
@@ -167,8 +171,8 @@ def requested_triggers(text, assets):
         if raw and not sym and len(named) > 1:
             # Only expand generic percentage exits (TP/SL/trailing) that are
             # coin-agnostic — price/indicator rules require an explicit coin.
-            expandable_kinds = {'STOP_LOSS_PCT', 'TAKE_PROFIT_PCT', 'TRAILING_STOP_PCT',
-                                'PARTIAL_TAKE_PROFIT_PCT'}
+            expandable_kinds = {'STOP_LOSS_PCT', 'TAKE_PROFIT_PCT', 'CHANGE_PCT_24H',
+                                'TRAILING_STOP_PCT', 'PARTIAL_TAKE_PROFIT_PCT'}
             if all(r['kind'] in expandable_kinds for r in raw):
                 expanded = []
                 for r in raw:
@@ -184,8 +188,8 @@ def requested_triggers(text, assets):
         if raw and not sym and not named and symbols:
             all_positions = bool(re.search(
                 r'\b(?:all|every|each|per)[\s-]+(?:position|asset|coin)s?\b', clause, re.I))
-            expandable_kinds = {'STOP_LOSS_PCT', 'TAKE_PROFIT_PCT', 'TRAILING_STOP_PCT',
-                                'PARTIAL_TAKE_PROFIT_PCT'}
+            expandable_kinds = {'STOP_LOSS_PCT', 'TAKE_PROFIT_PCT', 'CHANGE_PCT_24H',
+                                'TRAILING_STOP_PCT', 'PARTIAL_TAKE_PROFIT_PCT'}
             if all_positions and all(r['kind'] in expandable_kinds for r in raw):
                 expanded = []
                 for r in raw:
@@ -200,15 +204,18 @@ def requested_triggers(text, assets):
         # additional instructions, expand it to all strategy symbols. This handles
         # LLM-fragmented unresolved instructions that are actually valid.
         if raw and not sym and not named and symbols and not expanded_multi:
-            expandable_kinds = {'STOP_LOSS_PCT', 'TAKE_PROFIT_PCT', 'TRAILING_STOP_PCT',
-                                'PARTIAL_TAKE_PROFIT_PCT'}
+            expandable_kinds = {'STOP_LOSS_PCT', 'TAKE_PROFIT_PCT', 'CHANGE_PCT_24H',
+                                'TRAILING_STOP_PCT', 'PARTIAL_TAKE_PROFIT_PCT'}
             residual_check = clause
             for start, end in covered:
                 residual_check = residual_check[:start] + ' ' * (end - start) + residual_check[end:]
             residual_words = re.sub(r'[^A-Za-z]+', ' ', residual_check).strip().split()
             # Only expand when the residual is empty or contains only trivial words
             trivial = {'', 'and', 'or', 'with', 'per', 'position', 'positions', 'target',
-                       'targets', 'strict', 'limit', 'limits', 'the', 'a', 'an', 'of', 'at'}
+                       'targets', 'strict', 'limit', 'limits', 'the', 'a', 'an', 'of', 'at',
+                       '24h', '24', 'hour', 'hours', 'day', 'daily',
+                       'buy', 'sell', 'enter', 'exit', 'close', 'trade',
+                       'if', 'when', 'unless', 'after', 'before', 'for'}
             if (all(r['kind'] in expandable_kinds for r in raw) and
                     all(w.lower() in trivial for w in residual_words)):
                 expanded = []
@@ -400,3 +407,48 @@ def evaluate(rules, side, symbol, mark, *, history=None, lot=None, peak=None, ch
     return {'ready': ready, 'reason': None if ready else (missing or results[0])['reason'],
             'results': results, 'matchedRuleId': matching['ruleId'] if ready and matching else None,
             'partial': partial}
+
+
+# ── Portfolio-level goal extraction ─────────────────────────────────────── #
+
+_PORTFOLIO_GOAL_PATTERNS = [
+    # "portfolio profit target 15%"  /  "profit target of 15% on the portfolio"
+    (r'\b(?:portfolio\s+)?(?:profit\s+target|target\s+profit|target\s+gain)\s*(?:of|at|:)?\s*(\d+(?:\.\d+)?)\s*%',
+     'profitTargetPct'),
+    # "equity floor $8500"  /  "floor of $8,500"  /  "minimum equity $8500"
+    (r'\b(?:equity\s+floor|floor|minimum\s+equity|equity\s+minimum)\s*(?:of|at|:)?\s*\$?\s*([\d,]+(?:\.\d+)?)',
+     'equityFloorUsd'),
+    # "max drawdown 20%"  /  "maximum drawdown of 20%"
+    (r'\b(?:max(?:imum)?\s+)?drawdown\s*(?:of|at|:)?\s*(\d+(?:\.\d+)?)\s*%',
+     'maxDrawdownPct'),
+    # "stop trading if portfolio loses 10%"  /  "loss floor 10%"  /  "loss limit 10%"
+    (r'\b(?:(?:portfolio\s+)?loss\s+(?:floor|limit)|stop\s+(?:trading\s+)?if\s+(?:portfolio\s+)?los(?:es?|s))\s*(?:of|at|:)?\s*(\d+(?:\.\d+)?)\s*%',
+     'lossFloorPct'),
+]
+
+
+def extract_portfolio_goals(text):
+    """Parse portfolio-level goals from free text. Returns a dict of goal
+    fields (profitTargetPct, equityFloorUsd, maxDrawdownPct, lossFloorPct)
+    with Decimal-string values. Unmatched fields are omitted."""
+    goals = {}
+    text = str(text or '')
+    for pattern, field in _PORTFOLIO_GOAL_PATTERNS:
+        m = re.search(pattern, text, re.I)
+        if m:
+            try:
+                val = Decimal(m.group(1).replace(',', ''))
+                goals[field] = str(val)
+            except (InvalidOperation, IndexError):
+                pass
+    return goals
+
+
+def is_portfolio_goal_clause(clause):
+    """Return True if the clause is ONLY a portfolio-level goal (not a per-coin rule).
+    Used to suppress 'unresolved instruction' errors for portfolio goals."""
+    clause = str(clause or '').strip()
+    for pattern, _field in _PORTFOLIO_GOAL_PATTERNS:
+        if re.search(pattern, clause, re.I):
+            return True
+    return False

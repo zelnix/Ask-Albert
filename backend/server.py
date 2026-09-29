@@ -8899,10 +8899,16 @@ def _autopilot_process_account_multi(acct):
                 continue  # keep BUY unconsumed; next observation may meet the exact rule
         # M-E: an ACTIVE strategy must ALSO authorise a BUY (both strategy + canonical).
         # Outside the strategy universe -> record + consume, never enter.
-        if _strat_syms is not None and d.get('action') == 'BUY' and sym not in _strat_syms:
-            newly_seen[sym] = sid
-            _paper_ledger_add(acct_id, 'OBSERVED', 'decision', sid, None, None,
-                              'Observed %s BUY outside the active strategy universe — skipped.' % sym)
+        if _strat_syms is not None and sym not in _strat_syms:
+            # Any decision (BUY or SELL) outside the strategy universe is skipped.
+            # Protective exits for unexpectedly held lots are handled by Phase 2
+            # (invalidation/rule checks) before we reach canonical decisions.
+            if d.get('action') == 'BUY':
+                newly_seen[sym] = sid
+                _paper_ledger_add(acct_id, 'OBSERVED', 'decision', sid, None, None,
+                                  'Observed %s BUY outside the active strategy universe — skipped.' % sym)
+            else:
+                newly_seen[sym] = sid  # consume without logging
             continue
         # eligibility: only canonical + profile-eligible assets can ever trade
         elig, _reason = _paper_profiles.eligible_for_trading(
@@ -12776,6 +12782,10 @@ def _studio_validate(draft, pid, account=None):
                 continue  # server parser resolved this — not unresolved
         except Exception:
             pass
+        # Portfolio-level goals (profit target, equity floor, drawdown) are not
+        # per-coin rules — resolve them as portfolio goals, not unresolved text.
+        if _strategy_rules.is_portfolio_goal_clause(ui_str):
+            continue
         unresolved.append(ui_str)
     for ui in unresolved[:5]:
         start_errors.append('Unresolved instruction: ' + str(ui)[:100])
@@ -12786,8 +12796,9 @@ def _studio_validate(draft, pid, account=None):
         del c['unresolvedInstructions']
     if len(str(draft.get('requestedPlan') or '')) > 4000:
         save_errors.append('The original plan is too long to review without truncation; shorten and redraft.')
-    if c['maxDrawdownPct'] is not None or c['riskLimits']['stopLossPct'] is not None or c['riskLimits']['maxTradeRiskPct'] is not None:
-        start_errors.append('Needs changes: use a typed STOP_LOSS_PCT exit; custom drawdown or per-trade risk is not implemented. Mandate risk gates still apply.')
+    # maxDrawdownPct is handled as a portfolio goal; only block per-trade risk fields.
+    if c['riskLimits']['stopLossPct'] is not None or c['riskLimits']['maxTradeRiskPct'] is not None:
+        start_errors.append('Needs changes: use a typed STOP_LOSS_PCT exit; per-trade risk limits are not implemented. Mandate risk gates still apply.')
     if 'startingCash' in c:
         cash = _strategy_rules.decimal(c['startingCash'])
         if cash is None or cash < _paper_core.MIN_NOTIONAL or cash > Decimal('1000000000') or cash.as_tuple().exponent < -2:
@@ -12822,7 +12833,7 @@ def _studio_summary(c):
             f"At most {c['riskLimits']['maxPositions']} positions, each capped at its reviewed weight; "
             f"protected reserve {c['reservePct']:g}%. Canonical BUY and risk gates still apply. "
             f"Executable additional conditions: {terms or 'none'}. SELL triggers reduce the held position; "
-            f"Review requires approval for each proposed trade.{wallet} Macro and tokenomics are advisory context only.")
+            f"Autopilot executes paper trades after the reviewed rules and risk gates pass.{wallet} Macro and tokenomics are advisory context only.")
 
 
 def _studio_public(doc):
@@ -12987,12 +12998,15 @@ STUDIO_DRAFT_SYSTEM = (
     "exitRules='CANONICAL_SELL_OR_INVALIDATION', profitTaking='CANONICAL_SELL_ONLY', "
     "invalidation='CANONICAL_INVALIDATION_ONLY', sizing='MAX_REVIEWED_ASSET_WEIGHT', "
     "reservePct, riskLimits {maxPositions,maxTradeRiskPct:null,stopLossPct:null}, maxDrawdownPct:null, "
+    "portfolioGoals {profitTargetPct,equityFloorUsd,lossFloorPct,maxDrawdownPct} (all optional; "
+    "extract from any portfolio-level profit target, equity floor, loss floor or drawdown instructions), "
     "walletName, startingCash, unsupportedInstructions:[]. "
     "Do not invent, substitute or omit requested coins, weights, wallet amounts or instructions. "
     "The server parses literal price/rolling-24-hour-change/RSI14/SMA20/EMA20/MACD histogram and percentage-exit "
     "rules into a separate typed contract. Do NOT rewrite them into canonical presets. "
     "Anything not exactly expressible as a supported rule belongs in unsupportedInstructions. "
-    "Macro/tokenomics may inform assessment, never an executable trade trigger. "
+    "Portfolio-level goals belong in portfolioGoals, NOT in unsupportedInstructions. "
+    "Autopilot executes paper trades after reviewed rules pass; no approval step exists. "
     "A saved plan trades no real assets; drafting never saves, starts or trades."
 )
 
@@ -13131,6 +13145,10 @@ def studio_draft(payload: dict = Body(...), user: dict = Depends(get_current_use
             parsed_rules, parse_errors = _strategy_rules.requested_triggers(goal, requested)
             requested_cash, requested_wallet = _studio_requested_wallet(goal)
             candidate['rules'] = parsed_rules
+            # Extract portfolio-level goals (profit target, equity floor, drawdown).
+            portfolio_goals = _strategy_rules.extract_portfolio_goals(goal)
+            if portfolio_goals:
+                candidate.setdefault('portfolioGoals', {}).update(portfolio_goals)
             # Explicitly supplied wallet name takes precedence; LLM default only when absent.
             candidate['walletName'] = requested_wallet or str(candidate.get('walletName') or (candidate.get('name') or 'New strategy') + ' wallet')[:60]
             candidate['startingCash'] = requested_cash or candidate.get('startingCash') or '100000.00'
@@ -13151,7 +13169,7 @@ def studio_draft(payload: dict = Body(...), user: dict = Depends(get_current_use
             'validationErrors': errors, 'valid': not errors,
             'assetCapabilities': [_studio_capability_row(a['symbol'], mandate) for a in c['assets']],
             'note': ('Draft only; a WAIT decision does not prevent a supported strategy from starting. '
-                     'Starting evaluates the reviewed conditions immediately; Review never fills before approval.')}
+                     'Starting evaluates the reviewed conditions immediately; Autopilot executes after all gates pass.')}
 
 
 @app.post('/api/v1/albert/studio/validate')
@@ -13737,25 +13755,30 @@ def _filter_strategy_activity(activity, strat):
     strat_syms = _strategy_syms(strat) or set()
     if not strat_syms:
         return activity  # no filter needed
+    strat_syms_upper = {s.upper() for s in strat_syms}
     strat_syms_lower = {s.lower() for s in strat_syms}
     filtered = []
     # Entity types that are always relevant (account-level, not coin-specific).
     always_keep = {'ACCOUNT_OPENED', 'MODE_CHANGED', 'AUTO_DISABLED', 'RISK_BREAKER',
                    'PROPOSAL_CREATED', 'PROPOSAL_SUPERSEDED', 'PROPOSAL_CANCELLED',
-                   'PROPOSAL_REVALIDATION_FAILED'}
+                   'PROPOSAL_REVALIDATION_FAILED', 'GOAL_HALT_ENTRIES', 'GOAL_HALT_CLOSED'}
     for entry in activity:
         et = entry.get('eventType', '')
         if et in always_keep:
             filtered.append(entry)
             continue
-        # For OBSERVED/decision entries, check if the note mentions a strategy coin.
-        note = str(entry.get('note') or '').lower()
-        entity_id = str(entry.get('entityId') or '').lower()
-        if any(s in note or s in entity_id for s in strat_syms_lower):
+        # For fill-type events, check the asset field directly.
+        asset = (entry.get('asset') or '').upper()
+        if asset and asset in strat_syms_upper:
             filtered.append(entry)
             continue
-        # If the entity_id doesn't match any strategy coin, skip it.
-        # But keep entries with no entity_id (generic events).
+        # For OBSERVED/decision entries, check if the note mentions a strategy coin
+        # using word-boundary matching (not substring) to avoid false positives.
+        note = str(entry.get('note') or '')
+        if any(re.search(r'\b' + re.escape(s) + r'\b', note, re.I) for s in strat_syms):
+            filtered.append(entry)
+            continue
+        # Keep entries with no entity_id (generic events).
         if not entry.get('entityId'):
             filtered.append(entry)
     return filtered
@@ -13794,7 +13817,7 @@ def studio_strategy_paper(sid: str, user: dict = Depends(get_current_user)):
                             'drawdownPct': eq.get('drawdownPct'),
                             'valueAvailable': eq.get('available')},
             'positions': d.get('positions') or [],
-            'pendingApprovals': d.get('pendingProposals') or [],
+            'pendingApprovals': [],
             'proposalHistory': proposal_history,
             'activity': _filter_strategy_activity(d.get('recentActivity') or [], doc),
             'integrity': d.get('integrity') or {},
@@ -13840,7 +13863,7 @@ def paper_overview(user: dict = Depends(get_current_user)):
                                   'status': 'MATCH' if check['ok'] else 'MISMATCH'})
         except Exception:  # A failed read must not be reported as a matching ledger.
             ledger_checks.append({'paperAccountId': a.get('paperAccountId'), 'status': 'UNAVAILABLE'})
-    strategies, positions, approvals, activity, recent_fills = [], [], [], [], []
+    strategies, positions, activity, recent_fills = [], [], [], []
     tot_value = Decimal('0'); tot_start = Decimal('0')
     tot_cash = Decimal('0'); tot_risk = Decimal('0'); tot_risk_limit = Decimal('0')
     tot_protected = Decimal('0'); tot_deployable = Decimal('0')
@@ -13913,7 +13936,6 @@ def paper_overview(user: dict = Depends(get_current_user)):
             last = (d.get('recentActivity') or [{}])[0] or {}
             tag = {'paperAccountId': paid, 'strategyName': strategy_by_account.get(paid, (None, None, {}))[2].get('name') or a_doc.get('name') or 'Paper wallet'}
             positions += [{**p, **tag} for p in (d.get('positions') or [])]
-            approvals += [{**p, **tag} for p in (d.get('pendingProposals') or [])]
             activity += [{**e, **tag} for e in (d.get('recentActivity') or [])]
             recent_fills += [{**e, **tag} for e in (acct.get('ledger') or [])
                              if e.get('eventType') == 'FILL' and e.get('side') in ('BUY', 'SELL')
@@ -13939,7 +13961,7 @@ def paper_overview(user: dict = Depends(get_current_user)):
               'wins': wins,
               'winRatePct': round(wins / closed_trades * 100, 1) if closed_trades else None,
               'openPositions': len(positions),
-              'pendingApprovals': len(approvals),
+              'pendingApprovals': 0,
               'autopilotStrategies': len([s for s in live if s.get('approvalMode') == 'AUTOPILOT'])}
     combined_usable = bool(wallets and value_known and tot_value > 0)
     cash_usable = bool(wallets and cash_known)
@@ -13968,7 +13990,7 @@ def paper_overview(user: dict = Depends(get_current_user)):
             'openRiskPct': _paper_core.dstr(tot_risk / tot_value * Decimal('100'), _paper_core.PCT_Q) if risk_usable else None,
             'openRiskLimitPct': _paper_core.dstr(tot_risk_limit / tot_value * Decimal('100'), _paper_core.PCT_Q) if risk_usable else None,
             'openRiskLimitSource': 'paper_profile_weighted' if risk_usable else None,
-            'pendingApprovals': approvals, 'activity': activity[:25],
+            'pendingApprovals': [], 'activity': activity[:25],
             'recentFills': _paper_jsonify(recent_fills[:2])}
 
 

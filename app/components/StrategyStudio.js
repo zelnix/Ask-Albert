@@ -311,7 +311,7 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
       {revisionId && <p className="mb-3 text-[12px] text-amber-200">Saving a reviewed version stops new entries under the old version. It keeps this strategy’s existing wallet, cash, holdings, exits and history; select a mode and Start the new version when ready.</p>}
       {!draft && (
         <div>
-          <p className="mb-2 text-[13px] text-slate-400">Describe the exact simulated plan: coins, weights, wallet name and starting cash, optional price or 24-hour percentage conditions, RSI/SMA/EMA/MACD indicators, and stop-loss, trailing-stop or take-profit percentages. Albert checks each rule before Save. Macro and tokenomics inform assessment, never automatic trade triggers.</p>
+          <p className="mb-2 text-[13px] text-slate-400">Describe the exact simulated plan: coins, weights, wallet name and starting cash, optional price or 24-hour percentage conditions, RSI/SMA/EMA/MACD indicators, and stop-loss or take-profit percentages, portfolio profit targets and equity floors. Albert checks each rule before Save. Macro and tokenomics inform assessment, never automatic trade triggers.</p>
           <textarea rows={4} value={goal} onChange={(e) => setGoal(e.target.value)} placeholder="e.g. BTC 60%, ETH 40%; Buy BTC if price below $80000 and RSI(14) below 30; Take-profit 12% for BTC; Start with $5000; Consider macro and supply in my review."
             className="w-full resize-none rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-slate-100 outline-none focus:border-violet-500" />
           <Button onClick={runDraft} disabled={drafting || !goal.trim()} className="mt-3 gap-1.5 bg-violet-600 hover:bg-violet-500">
@@ -367,13 +367,13 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
                   <option value="BUY">BUY</option><option value="SELL">SELL</option>
                 </select>
                 <select aria-label={`Rule ${i + 1} kind`} value={rule.kind || 'PRICE'}
-                  onChange={(e) => setRule(i, { kind: e.target.value, side: ['STOP_LOSS_PCT', 'TAKE_PROFIT_PCT', 'TRAILING_STOP_PCT', 'PARTIAL_TAKE_PROFIT_PCT', 'TIME_EXIT'].includes(e.target.value) ? 'SELL' : rule.side,
-                    operator: ['STOP_LOSS_PCT', 'TAKE_PROFIT_PCT', 'TRAILING_STOP_PCT', 'PARTIAL_TAKE_PROFIT_PCT', 'TIME_EXIT'].includes(e.target.value) ? '' : (rule.operator || 'BELOW'), indicator: e.target.value === 'INDICATOR' ? 'RSI_14' : '' })}
+                  onChange={(e) => setRule(i, { kind: e.target.value, side: ['STOP_LOSS_PCT', 'TAKE_PROFIT_PCT', 'TIME_EXIT'].includes(e.target.value) ? 'SELL' : rule.side,
+                    operator: ['STOP_LOSS_PCT', 'TAKE_PROFIT_PCT', 'TIME_EXIT'].includes(e.target.value) ? '' : (rule.operator || 'BELOW'), indicator: e.target.value === 'INDICATOR' ? 'RSI_14' : '' })}
                   className="rounded-md bg-slate-800 p-1 text-white">
                   <option value="PRICE">Price (USD)</option><option value="CHANGE_PCT_24H">Rolling 24h change (%)</option>
                   <option value="INDICATOR">Indicator (closed daily)</option><option value="STOP_LOSS_PCT">Stop-loss from entry (%)</option>
-                  <option value="TRAILING_STOP_PCT">Trailing stop from observed peak (%)</option><option value="TAKE_PROFIT_PCT">Take-profit from entry (%)</option>
-                  <option value="PARTIAL_TAKE_PROFIT_PCT">Partial take-profit (%)</option><option value="TIME_EXIT">Time-based exit</option>
+                  <option value="TAKE_PROFIT_PCT">Take-profit from entry (%)</option>
+                  <option value="TIME_EXIT">Time-based exit</option>
                 </select>
                 {rule.kind === 'INDICATOR' && <select aria-label={`Rule ${i + 1} indicator`} value={rule.indicator || 'RSI_14'} onChange={(e) => setRule(i, { indicator: e.target.value })} className="rounded-md bg-slate-800 p-1 text-white">
                   <option value="RSI_14">RSI 14</option><option value="SMA_20">SMA 20</option><option value="EMA_20">EMA 20</option><option value="MACD_HIST">MACD histogram</option>

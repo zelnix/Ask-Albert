@@ -237,11 +237,6 @@ export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboar
       ['Completed fills', val(paper.recentFills?.length)],
       ['Closed trades', val(totals.closedTrades)],
     ], items: (paper.recentFills || []).filter((x) => x.eventType === 'FILL').slice(0, 5).map((fill) => `${fill.side === 'BUY' ? 'Bought' : 'Sold'} ${fill.qty || ''} ${fill.asset || ''} @ ${amount(fill.fillPx) || 'price unavailable'} · fee ${amount(fill.fee) || 'unavailable'} · ${when(fill.effectiveAt || fill.recordedAt)}`) });
-    if ((paper.pendingApprovals || []).length > 0) {
-      area('Pending Proposals', 'paper', { state: healthOf('paper'), source: paperTime, facts: [
-        ['Pending proposals', val(paper.pendingApprovals?.length)],
-      ], items: (paper.pendingApprovals || []).slice(0, 5).map((x) => `${x.side || 'Side'} ${x.asset || 'asset'} · ${x.strategyName || x.paperAccountId || 'wallet'} · ${when(x.recordedAt || x.createdAt)}`) });
-    }
   }
   if (kind === 'portfolio') {
     const positions = paper.positions || [];
@@ -520,9 +515,6 @@ export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboar
       ['Saved strategies', val(paper.strategies?.length)],
       ['Running', val(totals.liveStrategies)],
     ], items: (paper.strategies || []).slice(0, 3).map((x) => `${x.name || x.strategyId} · ${x.paperStatusLabel || x.paperStatus || 'unavailable'} · ${x.assets?.join(', ') || 'assets unavailable'}`) });
-    area('Paper Trade Proposals', 'paper', { state: healthOf('paper'), source: paperTime, facts: [
-      ['Pending approvals', val(paper.pendingApprovals?.length)],
-    ], items: (paper.pendingApprovals || []).slice(0, 5).map((x) => `${x.side || 'Side'} ${x.asset || 'asset'} · ${x.strategyName || x.paperAccountId || 'wallet'} · ${when(x.recordedAt || x.createdAt)}`) });
   }
 
   const ask = () => {

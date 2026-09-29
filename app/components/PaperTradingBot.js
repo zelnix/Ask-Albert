@@ -11,7 +11,7 @@ import React from 'react';
 import { API_BASE } from '../lib/api';
 import {
   Loader2, FlaskConical, Crosshair, ShieldCheck, TrendingUp, Info, ArrowRight,
-  HandCoins, Bot, AlertTriangle, Wallet,
+  Bot, AlertTriangle, Wallet,
 } from 'lucide-react';
 
 const usd = (v) => (v == null ? '\u2014' : '$' + Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 }));
@@ -30,7 +30,7 @@ const STATUS = {
   ARCHIVED: { label: 'Archived', color: 'text-slate-500', dot: 'bg-slate-600' },
 };
 const st = (s) => STATUS[s] || STATUS.SAVED;
-const approvalLabel = (m) => (m === 'AUTOPILOT' ? 'Autopilot' : m === 'REVIEW' ? 'Review and approve' : '—');
+const approvalLabel = (m) => (m === 'AUTOPILOT' ? 'Autopilot' : m === 'OBSERVE' ? 'Observe' : '—');
 
 function PaperBadge() {
   return <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-300"><FlaskConical className="h-3 w-3" />Paper only</span>;
@@ -156,7 +156,6 @@ export default function PaperTradingBot({ onNav }) {
   const live = rows.filter((r) => r.isLive);
   const activity = d.activity || [];
   const positions = d.positions || [];
-  const needsApproval = d.pendingApprovals || [];
 
   // An empty strategy list is NOT proof that no owner wallet exists.
   if (accountsResolved && accounts.length === 0 && !traded.length) {
@@ -194,9 +193,6 @@ export default function PaperTradingBot({ onNav }) {
         t.closedTrades
           ? `${t.closedTrades} ${t.closedTrades === 1 ? 'trade has' : 'trades have'} closed${t.winRatePct != null ? ` with a ${t.winRatePct}% win rate` : ''}, and ${positions.length} ${positions.length === 1 ? 'position is' : 'positions are'} open.`
           : `${positions.length} ${positions.length === 1 ? 'position is' : 'positions are'} open and nothing has closed yet.`,
-        needsApproval.length
-          ? `${needsApproval.length} ${needsApproval.length === 1 ? 'trade needs' : 'trades need'} your approval.`
-          : 'Nothing is waiting on you.',
       ].join(' ');
 
   return (
@@ -233,7 +229,7 @@ export default function PaperTradingBot({ onNav }) {
             ['Win rate', t.winRatePct != null ? `${t.winRatePct}%` : '\u2014'],
             ['Booked profit', signed(t.realizedPnl)],
             ['Costs paid', usd(t.fees)],
-            ['Awaiting you', String(needsApproval.length)]].map(([k, v]) => (
+            ['Awaiting you', '\u2014']].map(([k, v]) => (
             <div key={k} className="min-w-0 rounded-lg border border-slate-800 bg-slate-950/60 p-2">
               <p className="text-[10px] uppercase tracking-wide text-slate-500">{k}</p>
               <p className="truncate font-semibold text-slate-200" title={String(v)}>{v}</p>
@@ -286,25 +282,6 @@ export default function PaperTradingBot({ onNav }) {
         </div>}
       </section>}
 
-      {/* ---- Anything waiting on you (approved on the strategy, not here) ---- */}
-      {needsApproval.length > 0 && (
-        <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-sky-500/30 bg-sky-500/[0.06] p-4">
-          <HandCoins className="h-5 w-5 shrink-0 text-sky-300" />
-          <div className="min-w-0 flex-1">
-            <p className="text-[13px] font-bold text-white">
-              {needsApproval.length} paper {needsApproval.length === 1 ? 'trade needs' : 'trades need'} your approval
-            </p>
-            <p className="truncate text-[11.5px] text-slate-400">
-              {needsApproval.slice(0, 3).map((p) => `${p.side} ${p.asset} on “${p.strategyName}”`).join(' · ')}
-              {needsApproval.length > 3 ? ` +${needsApproval.length - 3} more` : ''}
-            </p>
-          </div>
-          <button onClick={goStrategies} className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-sky-500/20 px-3 py-1.5 text-[12px] font-semibold text-sky-200 hover:bg-sky-500/30">
-            Review on the strategy<ArrowRight className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      )}
-
       {/* ---- Per-strategy breakdown ---- */}
       <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
         <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-400">By strategy</p>
@@ -320,7 +297,7 @@ export default function PaperTradingBot({ onNav }) {
                   <span className={`text-[11px] font-semibold ${m.color}`}>{m.label}</span>
                   {r.approvalMode && (
                     <span className="inline-flex items-center gap-1 rounded bg-slate-800/80 px-1.5 py-0.5 text-[10px] font-semibold text-slate-300">
-                      {r.approvalMode === 'AUTOPILOT' ? <Bot className="h-3 w-3" /> : <HandCoins className="h-3 w-3" />}
+                      <Bot className="h-3 w-3" />
                       {approvalLabel(r.approvalMode)}
                     </span>
                   )}
@@ -333,7 +310,7 @@ export default function PaperTradingBot({ onNav }) {
                     <span><span className="block text-[10px] uppercase tracking-wide text-slate-500">P&amp;L</span>
                       <span className={`font-semibold ${pnlColor(r.pnlUsd)}`}>{signed(r.pnlUsd)}{r.pnlPct != null ? ` · ${r.pnlPct}%` : ''}</span></span>
                     <span><span className="block text-[10px] uppercase tracking-wide text-slate-500">Open</span>
-                      <span className="font-semibold text-slate-200">{r.openPositions ?? 0}{r.pendingApprovals ? ` · ${r.pendingApprovals} to approve` : ''}</span></span>
+                      <span className="font-semibold text-slate-200">{r.openPositions ?? 0}</span></span>
                     <span className="min-w-0"><span className="block text-[10px] uppercase tracking-wide text-slate-500">Last action</span>
                       <span className="block truncate font-semibold text-slate-300" title={r.lastActivity || ''}>{r.lastActivity ? timeAgo(r.lastActivityAt) || '—' : 'nothing yet'}</span></span>
                   </div>
