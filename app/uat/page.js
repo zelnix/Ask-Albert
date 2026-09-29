@@ -5,9 +5,10 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { ShieldCheck, AlertTriangle, Loader2, CheckCircle2, XCircle } from 'lucide-react';
 
-const API_BASE = process.env.NEXT_PUBLIC_BASE_URL
-  ? `${process.env.NEXT_PUBLIC_BASE_URL}/api`
-  : '/api';
+// Always use relative /api so the request goes through the same-origin
+// Next.js proxy. Using the full NEXT_PUBLIC_BASE_URL would create cross-origin
+// requests that fail with credentials: 'include'.
+const API_BASE = '/api';
 
 /**
  * UAT Entry Page — /uat?t=<token>
