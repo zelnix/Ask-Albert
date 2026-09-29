@@ -10,6 +10,10 @@ Real BTC/USD daily data (ccxt: Kraken primary, Coinbase fallback)
 
 Exposed under /api/v1/* and proxied by the Next.js /api layer.
 """
+# Load .env BEFORE any os.environ reads so feature flags are available.
+from dotenv import load_dotenv as _load_dotenv
+_load_dotenv('/app/.env', override=False)
+
 import os
 import re
 import time
@@ -282,7 +286,7 @@ def fetch_ohlcv():
     errors = []
     for name, sym in [('kraken', 'BTC/USD'), ('coinbase', 'BTC/USD')]:
         try:
-            ex = getattr(ccxt, name)({'enableRateLimit': True})
+            ex = getattr(ccxt, name)({'enableRateLimit': True, 'timeout': 15000})
             bars = ex.fetch_ohlcv(sym, timeframe='1d', limit=720)
             if bars and len(bars) > 250:
                 df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -6160,7 +6164,7 @@ def ticker(symbol: str = 'BTC'):
     # Legacy read-only research tickers; never used as evidence for paper fills.
     for name in ['kraken', 'coinbase']:
         try:
-            ex = getattr(ccxt, name)({'enableRateLimit': True})
+            ex = getattr(ccxt, name)({'enableRateLimit': True, 'timeout': 15000})
             t = ex.fetch_ticker(pair)
             last = float(t['last'])
             pct = t.get('percentage')
@@ -9089,6 +9093,7 @@ def _paper_make_proposal_multi(acct_id, pid, side, canonical, sizing, asset, str
 def _paper_autopilot_worker():
     """Durable background job: process every non-archived paper account once,
     under a per-account DB lease. Independent of any frontend activity."""
+    import threading as _threading
     _AUTOPILOT['state'] = 'running'
     _AUTOPILOT['lastRunAt'] = datetime.datetime.utcnow().isoformat()
     had_error = False
@@ -9102,23 +9107,32 @@ def _paper_autopilot_worker():
                 continue  # another worker holds the lease
             try:
                 fresh_acct = paper_accounts_col.find_one({'paperAccountId': acct_id}) or acct
-                if PAPER_MULTI_ASSET_ENABLED:
-                    _autopilot_process_account_multi(fresh_acct)
-                else:
-                    _autopilot_process_account(fresh_acct)
+                fn = _autopilot_process_account_multi if PAPER_MULTI_ASSET_ENABLED else _autopilot_process_account
+                # Run in a daemon thread with a timeout so a single stuck account
+                # does not block the entire worker indefinitely.
+                _acct_exc = [None]
+                def _run():
+                    try: fn(fresh_acct)
+                    except Exception as _e: _acct_exc[0] = _e
+                t = _threading.Thread(target=_run, daemon=True)
+                t.start()
+                t.join(timeout=90)  # 90 seconds per account
+                if t.is_alive():
+                    had_error = True
+                    print(f'WARNING: paper autopilot timed out processing {acct_id} (90s)')
+                elif _acct_exc[0]:
+                    raise _acct_exc[0]
             except Exception:  # noqa
                 had_error = True
                 traceback.print_exc()
             finally:
                 _autopilot_release_lease(acct_id, token)
     except Exception:  # noqa
-        _AUTOPILOT['state'] = 'delayed'
+        had_error = True
         traceback.print_exc()
-    else:
-        if had_error:
-            _AUTOPILOT['state'] = 'delayed'
-        else:
-            _AUTOPILOT['lastCompletedAt'] = datetime.datetime.utcnow().isoformat()
+    finally:
+        _AUTOPILOT['lastCompletedAt'] = datetime.datetime.utcnow().isoformat()
+        _AUTOPILOT['state'] = 'delayed' if had_error else 'running'
 
 
 def _paper_make_proposal(acct_id, pid, side, canonical, sizing):
@@ -12845,14 +12859,31 @@ def _studio_validate(draft, pid, account=None):
         start_errors.append('Needs changes. A custom trade timeframe is not executable; Studio runs on the normal paper cycle.')
     start_errors.extend(_studio_plan_unsupported(c['requestedPlan'], c['assets'], rules))
     # Check both field names for unresolved instructions (frontend may send either).
-    unresolved = draft.get('unresolvedInstructions') or draft.get('unsupportedInstructions') or []
-    if isinstance(unresolved, str):
-        unresolved = [unresolved]
+    # Re-evaluate each LLM-flagged unresolved instruction against the server parser.
+    # If our parser can resolve it into typed rules for the strategy's assets, drop it.
+    raw_unresolved = draft.get('unresolvedInstructions') or draft.get('unsupportedInstructions') or []
+    if isinstance(raw_unresolved, str):
+        raw_unresolved = [raw_unresolved]
+    asset_syms = [a['symbol'] for a in c.get('assets') or []]
+    unresolved = []
+    for ui in raw_unresolved[:10]:
+        ui_str = str(ui).strip()
+        if not ui_str:
+            continue
+        try:
+            ui_rules, ui_errors = _strategy_rules.requested_triggers(ui_str, asset_syms)
+            if ui_rules and not ui_errors:
+                continue  # server parser resolved this — not unresolved
+        except Exception:
+            pass
+        unresolved.append(ui_str)
     for ui in unresolved[:5]:
         start_errors.append('Unresolved instruction: ' + str(ui)[:100])
-    # Preserve unresolved instructions in the contract so revalidation retains them.
+    # Preserve only genuinely unresolved instructions in the contract.
     if unresolved:
         c['unresolvedInstructions'] = [str(u)[:200] for u in unresolved[:10]]
+    elif 'unresolvedInstructions' in c:
+        del c['unresolvedInstructions']
     if len(str(draft.get('requestedPlan') or '')) > 4000:
         save_errors.append('The original plan is too long to review without truncation; shorten and redraft.')
     if c['maxDrawdownPct'] is not None or c['riskLimits']['stopLossPct'] is not None or c['riskLimits']['maxTradeRiskPct'] is not None:
@@ -13425,9 +13456,29 @@ def _studio_mode_blocker(approval):
         if not _scheduler or not _scheduler.running or not _scheduler.get_job('paper_autopilot'):
             return 'The paper worker is not running.'
         last = _AUTOPILOT.get('lastCompletedAt')
-        if (_AUTOPILOT.get('state') != 'running' or not last or
-                (datetime.datetime.utcnow() - datetime.datetime.fromisoformat(last)).total_seconds() > 180):
-            return 'The paper worker has not completed a recent cycle. Please try again later.'
+        last_run = _AUTOPILOT.get('lastRunAt')
+        state = _AUTOPILOT.get('state')
+        # If the worker completed recently, all good.
+        if last:
+            age = (datetime.datetime.utcnow() - datetime.datetime.fromisoformat(last)).total_seconds()
+            if state == 'running' and age <= 180:
+                return None  # healthy
+            if age <= 180:
+                return None  # completed recently, even if delayed
+        # If the worker started but never completed, it may be stuck on a slow
+        # network call. Allow starting after a grace period so the user isn't
+        # permanently blocked by a hung worker thread.
+        if last_run:
+            running_for = (datetime.datetime.utcnow() - datetime.datetime.fromisoformat(last_run)).total_seconds()
+            if running_for > 120 and state == 'running':
+                # Worker has been running for >2 minutes without completing —
+                # allow the user to proceed rather than block indefinitely.
+                return None
+        if state in ('starting', None) and last_run:
+            return None  # first cycle still in progress
+        if not last and not last_run:
+            return 'The paper worker has not started yet. Please wait a moment.'
+        return 'The paper worker has not completed a recent cycle. Please try again shortly.'
     except (TypeError, ValueError, RuntimeError):
         return 'The paper worker is not ready.'
     return None
@@ -18443,7 +18494,7 @@ def _daily_ohlcv(symbol, limit=720):
             pass
     for name, pair in ALERT_COIN_PAIRS.get(sym, []):
         try:
-            ex = getattr(ccxt, name)({'enableRateLimit': True})
+            ex = getattr(ccxt, name)({'enableRateLimit': True, 'timeout': 15000})
             bars = ex.fetch_ohlcv(pair, timeframe='1d', limit=limit + 1)
             if bars and len(bars) > 80:
                 df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -19312,7 +19363,7 @@ def _fetch_ohlcv_pairs(pairs):
     errors = []
     for name, sym in pairs:
         try:
-            ex = getattr(ccxt, name)({'enableRateLimit': True})
+            ex = getattr(ccxt, name)({'enableRateLimit': True, 'timeout': 15000})
             bars = ex.fetch_ohlcv(sym, timeframe='1d', limit=720)
             if bars and len(bars) > 250:
                 df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])

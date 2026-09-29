@@ -9,18 +9,20 @@ import { Briefcase, ArrowRight } from 'lucide-react';
  * Passes the structured proposal to Strategy Studio for review & save.
  * Does NOT convert to prose or re-generate via Gemini.
  */
-export default function BasketChatCard({ draft, onBuild }) {
+export default function BasketChatCard({ draft, onBuild, userMessage }) {
   if (!draft || !Array.isArray(draft.legs) || draft.legs.length === 0) return null;
   const assets = draft.legs.map((l) => l.symbol).filter(Boolean);
 
   const handleReview = () => {
     // Dispatch structured proposal — Studio receives it directly.
+    // Include the user's original message so Studio can preserve it as requestedPlan.
     window.dispatchEvent(new CustomEvent('albert:build-strategy', {
       detail: {
         proposal: draft,
         proposalId: draft.proposalId || null,
         revision: draft.revision || 1,
         assets,
+        goal: userMessage || '',
       },
     }));
     // Close the floating chat so Studio is visible.

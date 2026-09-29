@@ -960,7 +960,11 @@ export default function StrategyStudio({ chatGoal = '', chatDraftKey = null, cha
   useEffect(() => {
     if (chatDraftKey && chatProposal && Array.isArray(chatProposal.legs) && chatProposal.legs.length > 0) {
       const draft = proposalToDraft(chatProposal);
-      setRevision({ id: null, version: null, goal: chatProposal.thesis || chatGoal || '', draft, fromProposal: true });
+      // chatGoal = user's original message; chatProposal.thesis = Albert's generated description.
+      // requestedPlan is the user's original request; objective is Albert's interpretation.
+      const userGoal = chatGoal || '';
+      if (userGoal) draft.requestedPlan = userGoal;
+      setRevision({ id: null, version: null, goal: userGoal || chatProposal.thesis || '', draft, fromProposal: true });
       setSel(null);
       setBuilding(true);
     } else if (chatDraftKey) {
