@@ -153,7 +153,18 @@ def allocate(*, acct, equity_info, candidates, regime, marks,
     diag = {'ranked': [], 'skipped': [], 'regimeBand': None, 'blocked': None}
 
     # SELLs first (risk management outranks new risk) — always allowed.
-    held_map = {p['symbol']: p for p in equity_info.get('positions', [])}
+    # TICKET MODEL: aggregate positions by symbol so allocator sees combined exposure.
+    held_map = {}
+    for p in equity_info.get('positions', []):
+        sym = p.get('symbol') or p.get('asset', '')
+        if sym in held_map:
+            held_map[sym] = {**held_map[sym],
+                             'qty': held_map[sym]['qty'] + p['qty'],
+                             'value': (held_map[sym].get('value') or Decimal('0')) + (p.get('value') or p.get('mktVal') or Decimal('0')),
+                             'costBasis': (held_map[sym].get('costBasis') or Decimal('0')) + (p.get('costBasis') or Decimal('0')),
+                             'ticketCount': held_map[sym].get('ticketCount', 1) + 1}
+        else:
+            held_map[sym] = {**p, 'ticketCount': 1}
     for c in candidates:
         if c.get('action') != 'SELL':
             continue
@@ -204,7 +215,7 @@ def allocate(*, acct, equity_info, candidates, regime, marks,
     cur_deployed = equity_info.get('positionValueTotal') or Decimal('0')
     cur_alt = equity_info.get('altcoinValueTotal') or Decimal('0')
     cur_open_risk = equity_info.get('openRiskUsd') or Decimal('0')
-    open_count = equity_info.get('openPositionsCount') or 0
+    open_count = equity_info.get('positionCount') or equity_info.get('openPositionsCount') or 0
 
     ranked = rank_opportunities([c for c in candidates if c.get('action') == 'BUY'])
     unfunded_strong = []   # strong BUYs blocked purely by slot/exposure limits (rotation inputs)

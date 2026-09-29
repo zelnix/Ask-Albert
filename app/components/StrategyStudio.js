@@ -151,6 +151,8 @@ const PAPER_STATUS = {
   LIVE: { label: 'Paper trading', color: 'text-emerald-300', dot: 'bg-emerald-400' },
   WAIT: { label: 'WAIT · awaiting conditions', color: 'text-amber-300', dot: 'bg-amber-400' },
   UNAVAILABLE: { label: 'Paper worker unavailable', color: 'text-amber-300', dot: 'bg-amber-400' },
+  HALTED_GOAL_CLOSED: { label: 'Goal reached — all closed', color: 'text-emerald-300', dot: 'bg-emerald-400' },
+  HALTED_GOAL_ENTRIES: { label: 'Goal reached — managing exits', color: 'text-teal-300', dot: 'bg-teal-400' },
   RESTRICTED_IN_WALLET: { label: 'Restricted in this wallet · exits preserved', color: 'text-amber-300', dot: 'bg-amber-400' },
   NEEDS_CHANGES: { label: 'Needs changes · exits only', color: 'text-amber-300', dot: 'bg-amber-400' },
   HALTED_RISK: { label: 'Halted — drawdown limit', color: 'text-rose-300', dot: 'bg-rose-400' },
@@ -702,7 +704,7 @@ function PaperPanel({ sid, name, onChange }) {
         <p role="status" className="flex items-center gap-1.5 text-[11px] text-amber-300"><AlertTriangle className="h-3.5 w-3.5" />Waiting for a price. Your holdings stay as they are; Albert will try again on the next normal paper-trading cycle.</p>
       )}
 
-      {/* ---- Wallet Summary (cash, P&L, worker) ---- */}
+      {/* ---- Wallet Summary (cash, P&L, worker, goals) ---- */}
       {p.paperAccountId && p.isLive && (
         <div className="rounded-lg border border-slate-700 bg-slate-950/60 p-3 text-[12px]">
           <div className="flex items-center justify-between">
@@ -719,6 +721,21 @@ function PaperPanel({ sid, name, onChange }) {
             <div><p className="text-[10px] text-slate-500">Realized P&L</p><p className={`font-semibold ${parseFloat(p.realizedPnl || 0) >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>{p.realizedPnl ? signed(parseFloat(p.realizedPnl)) : '—'}</p></div>
             <div><p className="text-[10px] text-slate-500">Execution</p><p className="font-semibold text-slate-300">{p.executionModel === 'direct_price' ? 'Direct price · 0 fees' : 'Legacy'}</p></div>
           </div>
+          {/* Goal progress */}
+          {p.portfolioGoals && (
+            <div className="mt-2 border-t border-slate-800 pt-2">
+              <p className="text-[10px] font-bold text-slate-500 uppercase">Portfolio Goals</p>
+              <div className="mt-1 grid grid-cols-2 gap-1.5 text-[11px]">
+                {p.portfolioGoals.profitTargetPct && <span className="text-slate-400">Target: +{p.portfolioGoals.profitTargetPct}%</span>}
+                {p.portfolioGoals.equityFloorUsd && <span className="text-slate-400">Floor: ${p.portfolioGoals.equityFloorUsd}</span>}
+                {p.portfolioGoals.maxTrades && <span className="text-slate-400">Max trades: {p.goalStatus?.tradeCount || 0}/{p.portfolioGoals.maxTrades}</span>}
+                {p.portfolioGoals.deadline && <span className="text-slate-400">Deadline: {p.portfolioGoals.deadline}</span>}
+              </div>
+              {p.goalStatus?.halted && (
+                <p className="mt-1 text-[11px] font-semibold text-emerald-300">✓ {p.goalStatus.haltReason}</p>
+              )}
+            </div>
+          )}
         </div>
       )}
 

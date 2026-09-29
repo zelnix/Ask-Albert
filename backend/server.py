@@ -8384,10 +8384,23 @@ def _studio_entry_budget(strat, symbol, desired, acct, equity_info):
     return budget if budget >= _paper_core.MIN_NOTIONAL else None
 
 
-def _studio_rule_check(strat, sym, side, px, acct, obs=None):
-    """Evaluate typed rules against ID-bound observations; data outage = WAIT."""
-    rules = ((strat or {}).get('contract') or {}).get('rules') or []
-    selected = [r for r in rules if r.get('symbol') == sym and r.get('side') == side]
+def _studio_rule_check(strat, sym, side, px, acct, obs=None, ticket=None):
+    """Evaluate typed rules against ID-bound observations; data outage = WAIT.
+
+    TICKET-CENTRIC: when `ticket` is provided, uses that ticket's own entry,
+    peak, completed targets, and entry-time rules. When ticket has saved 'rules',
+    those take precedence over the current contract's rules (existing tickets
+    retain their entry-time rules even after strategy edits)."""
+    # Use the ticket's saved rules if available; otherwise fall back to current contract.
+    if ticket and ticket.get('rules'):
+        rules = ticket['rules']
+    else:
+        rules = ((strat or {}).get('contract') or {}).get('rules') or []
+    selected = [r for r in rules if (r.get('symbol') or r.get('asset', '')).upper() == sym.upper()
+                and r.get('side') == side]
+    # Also include rules with no specific symbol (apply to all assets).
+    selected += [r for r in rules if not r.get('symbol') and not r.get('asset')
+                 and r.get('side') == side and r not in selected]
     history = None
     if any(r.get('kind') == 'INDICATOR' for r in selected):
         try:
@@ -8396,10 +8409,11 @@ def _studio_rule_check(strat, sym, side, px, acct, obs=None):
             history = None
     if obs is None and any(r.get('kind') == 'CHANGE_PCT_24H' for r in selected):
         _, _, obs = _paper_mark(sym)
-    lot = next((l for l in (acct.get('lots') or []) if l.get('asset') == sym
-                and (_paper_core.D(l.get('qty')) or Decimal('0')) > 0), None)
+    # Use the specific ticket if provided; otherwise find first matching lot.
+    lot = ticket if ticket else next(
+        (l for l in (acct.get('lots') or []) if (l.get('asset') or '').upper() == sym.upper()
+         and (_paper_core.D(l.get('qty')) or Decimal('0')) > 0), None)
     peak = (acct.get('strategyRulePeaks') or {}).get((lot or {}).get('lotId'))
-    # Partial/time targets that already triggered a fill are skipped.
     completed_targets = set((lot or {}).get('completedTargets') or [])
     result = _strategy_rules.evaluate(rules, side, sym, px, history=history, lot=lot, peak=peak,
                                       change_pct_24h=(obs or {}).get('changePct24h'),
@@ -8453,6 +8467,111 @@ def _studio_assessment_context(strat, observations):
     if not out['impact']:
         out['impact'] = ['Existing macro/tokenomics evidence is unavailable or not current; no narrative affected a trade.']
     return out
+
+
+# ======================== Portfolio Goals ======================== #
+
+def _check_portfolio_goals(acct, equity_info, marks, mark_obs):
+    """Check if any portfolio goal has been met. Returns (triggered, reason) or (None, None).
+
+    Goals are stored on the paper account as 'portfolioGoals'. Each goal is
+    checked after every SELL and before every BUY. When triggered, the account
+    is halted according to the chosen end action.
+    """
+    goals = acct.get('portfolioGoals')
+    if not goals:
+        return None, None
+    acct_id = acct['paperAccountId']
+    pid = acct['ownerId']
+    equity = equity_info.get('totalEquity') or equity_info.get('equity')
+    starting = _paper_core.D(acct.get('startingCash')) or Decimal('0')
+    if equity is None or starting <= 0:
+        return None, None
+
+    # Already halted?
+    gs = acct.get('goalStatus') or {}
+    if gs.get('halted'):
+        return 'ALREADY_HALTED', gs.get('haltReason')
+
+    # 1. Profit target (% return on starting capital).
+    pt = _paper_core.D(goals.get('profitTargetPct'))
+    if pt is not None and pt > 0:
+        ret_pct = ((equity - starting) / starting) * Decimal('100')
+        if ret_pct >= pt:
+            return 'PROFIT_TARGET', 'Portfolio return %.2f%% reached target %.2f%%' % (ret_pct, pt)
+
+    # 2. Equity floor (absolute $ minimum).
+    ef = _paper_core.D(goals.get('equityFloorUsd'))
+    if ef is not None and equity <= ef:
+        return 'EQUITY_FLOOR', 'Portfolio equity $%s fell to/below floor $%s' % (
+            _paper_core.dstr(equity), _paper_core.dstr(ef))
+
+    # 3. Deadline.
+    dl = goals.get('deadline')
+    if dl:
+        try:
+            deadline_dt = datetime.datetime.fromisoformat(str(dl).replace('Z', '+00:00'))
+            if datetime.datetime.utcnow() >= deadline_dt.replace(tzinfo=None):
+                return 'DEADLINE', 'Strategy reached its deadline %s' % dl
+        except Exception:
+            pass
+
+    # 4. Max trade count.
+    mt = goals.get('maxTrades')
+    tc = (gs.get('tradeCount') or 0)
+    if mt is not None and tc >= int(mt):
+        return 'MAX_TRADES', 'Trade count %d reached limit %d' % (tc, int(mt))
+
+    return None, None
+
+
+def _execute_goal_action(acct, trigger, reason, equity_info, marks):
+    """Execute the portfolio goal end action: close-all-and-stop or stop-entries."""
+    acct_id = acct['paperAccountId']
+    pid = acct['ownerId']
+    goals = acct.get('portfolioGoals') or {}
+    action = goals.get('endAction', 'STOP_ENTRIES_MANAGE_OPEN')
+    now_iso = datetime.datetime.utcnow().isoformat()
+
+    if action == 'CLOSE_ALL_AND_STOP':
+        # Close ALL open tickets at observed market prices.
+        for lot in list(acct.get('lots') or []):
+            sym = (lot.get('asset') or '').upper()
+            qty = _paper_core.D(lot.get('qty')) or Decimal('0')
+            if qty <= 0:
+                continue
+            px, fresh = marks.get(sym, (None, False))
+            if px is None or not fresh:
+                continue
+            sizing = _paper_core.ticket_sell_sizing(sym, qty, px)
+            if sizing.get('reject'):
+                continue
+            _paper_core.apply_sell_atomic(
+                paper_accounts_col, acct_id, pid, sizing, source='goal_close',
+                idem_key='goal:%s:%s:%s' % (lot.get('lotId'), trigger, now_iso),
+                asset=sym, ticket_id=lot.get('lotId'))
+        new_state = 'HALTED_GOAL_CLOSED'
+    else:
+        # Stop new entries but keep managing open tickets.
+        new_state = 'HALTED_GOAL_ENTRIES'
+
+    paper_accounts_col.update_one({'paperAccountId': acct_id, 'ownerId': pid},
+        {'$set': {
+            'runtimeState': new_state,
+            'goalStatus.halted': True,
+            'goalStatus.haltReason': reason,
+            'goalStatus.haltedAt': now_iso,
+            'goalStatus.trigger': trigger,
+            'goalStatus.endAction': action,
+        }})
+    _paper_ledger_add(acct_id, 'GOAL_HALT', 'account', acct_id, None, None,
+                      'Portfolio goal triggered: %s. Action: %s.' % (reason, action))
+    _autopilot_notify(pid, acct_id, 'Portfolio goal reached',
+                      '%s. %s. Paper only.' % (reason,
+                          'All positions closed and strategy stopped.' if action == 'CLOSE_ALL_AND_STOP'
+                          else 'New entries stopped; open tickets will continue to be managed.'),
+                      'success' if trigger == 'PROFIT_TARGET' else 'warning')
+
 
 
 def _studio_record_assessment(acct, strat, decisions, marks, observations):
@@ -8554,14 +8673,12 @@ def _materialize_sds(acct, strat, canonical, obs, action, asset, sizing, gate_tr
 
 
 def _autopilot_process_account_multi(acct, cancel=None):
-    """M5 Expert Multi-Asset Trader tick for ONE paper account.
+    """Ticket-centric multi-asset trader tick for ONE paper account.
 
-    Reuses the M4 durability guarantees (per-account lease upstream, single-doc
-    atomic + idempotent fills, later-observation rule) but manages a MULTI-ASSET
-    portfolio driven by canonical BUY decisions, reviewed typed entry/exit
-    conditions and the deterministic capital allocator. Typed SELLs are reduce-
-    only and never borrow a canonical signal. Discovery scores alone never trade.
-    Independent of any browser/dashboard.
+    Flow: exits FIRST (protective + rule-based using saved ticket rules), then
+    canonical decisions + entries (only for RUNNING accounts). This ensures
+    held positions are protected even when entries are paused or the strategy
+    is orphaned.
     """
     acct_id = acct['paperAccountId']; pid = acct['ownerId']
     now_iso = datetime.datetime.utcnow().isoformat()
@@ -8573,84 +8690,55 @@ def _autopilot_process_account_multi(acct, cancel=None):
     mandate = _albert_deps.get_mandate(pid) or {}
     excluded = set(mandate.get('excluded_coins') or [])
     approved = set(mandate.get('approved_coins') or [])
+    is_running = acct.get('runtimeState') == 'RUNNING'
 
-    # ── checkpoint: abort before expensive canonical-decision call ──
-    if cancel and cancel.is_set():
-        return
-    # A Studio wallet with no latest active executable version has NO entry
-    # universe. Its existing holdings still receive protective/manual exits.
-    _strat = _strategy_for_account(acct)
+    # Strategy lookup — may be None for orphaned/paused accounts. Exits don't
+    # require an active strategy; each ticket carries its own saved rules.
+    _strat = _strategy_for_account(acct) if is_running else None
     _strat_syms = _strategy_syms(_strat) if _strat else (set() if acct.get('strategyId') else None)
 
-    # If the account is bound to a strategy but the strategy document is gone
-    # (archived, orphaned, version mismatch), skip the expensive canonical-
-    # decision scan entirely — there is nothing actionable.
+    # Check if the account has any held positions that need exit evaluation.
+    held_lots = [l for l in (acct.get('lots') or [])
+                 if (_paper_core.D(l.get('qty')) or Decimal('0')) > 0]
     _orphaned_strategy = bool(acct.get('strategyId') and not _strat)
-    if _orphaned_strategy:
-        held_any = any((_paper_core.D(l.get('qty')) or Decimal('0')) > 0
-                       for l in (acct.get('lots') or []))
-        if not held_any:
-            return  # orphaned strategy account with no positions: nothing to do
 
-    # Canonical decisions for every asset, built from THIS account's portfolio (blocker #2).
-    # For orphaned strategy accounts WITH holdings, scope to held-only so the scoring
-    # engine does not scan 50+ coins on an account that cannot make new entries anyway.
-    if _orphaned_strategy:
-        _held_syms_for_scope = [(l.get('asset') or '').upper() for l in (acct.get('lots') or [])
-                                 if (_paper_core.D(l.get('qty')) or Decimal('0')) > 0]
-        override = _portfolio_summary_from_account(acct)
-        snap = _albert_decision_mod.build_decisions(pid, summary_override=override,
-                                                     strategy_symbols=_held_syms_for_scope)
-        decisions = []
-        try:
-            key = _paper_hist_key(pid, acct)
-            _decision_history_repo.reconcile(key, snap)
-            for d in (snap.get('decisions') or []):
-                env = _decision_history_repo.get_current(key, d.get('symbol'))
-                can = _envelope_to_canonical(env)
-                if can:
-                    decisions.append(can)
-        except Exception:  # noqa
-            traceback.print_exc()
-    else:
-        decisions = _paper_canonical_decisions(pid, account=acct)
-    dec_by_sym = {(d.get('asset') or '').upper(): d for d in decisions}
+    # If no strategy, no positions, and not running: nothing to do.
+    if not _strat and not held_lots and not is_running:
+        return
 
-    # Marks for every held + candidate asset.
-    # ── checkpoint: abort before mark fetches ──
     if cancel and cancel.is_set():
         return
-    held_syms = [(l.get('asset') or '').upper() for l in (acct.get('lots') or [])
-                 if (_paper_core.D(l.get('qty')) or Decimal('0')) > 0]
-    universe = list(dict.fromkeys(held_syms + list(dec_by_sym.keys())))
+
+    # ── PHASE 1: MARKS for held assets (needed for exits) ──
+    held_syms = list(dict.fromkeys([(l.get('asset') or '').upper() for l in held_lots]))
     marks = {}; mark_obs = {}
-    for sym in universe:
+    for sym in held_syms:
         px, fresh, obs = _paper_mark(sym)
         marks[sym] = (px, fresh); mark_obs[sym] = obs or {}
-    if _strat:
+
+    # Peak tracking for rule-based exits.
+    if _strat or held_lots:
         peaks = dict(acct.get('strategyRulePeaks') or {})
-        for lot in acct.get('lots') or []:
+        for lot in held_lots:
             sym = (lot.get('asset') or '').upper()
             px, fresh = marks.get(sym, (None, False))
             lid = lot.get('lotId')
             if lid and fresh and px is not None and px > (_paper_core.D(peaks.get(lid)) or Decimal('0')):
-                paper_accounts_col.update_one({'paperAccountId': acct_id, 'ownerId': pid,
-                                               'strategyVersion': _strat['version']},
+                paper_accounts_col.update_one({'paperAccountId': acct_id, 'ownerId': pid},
                                               {'$max': {'strategyRulePeaks.' + lid: _paper_core.to128(px)}})
                 peaks[lid] = _paper_core.to128(px)
         acct['strategyRulePeaks'] = peaks
-        _studio_record_assessment(acct, _strat, decisions, marks, mark_obs)
 
     equity_info = _paper_portfolio.compute_portfolio_equity(acct, marks)
 
-    # ── checkpoint: abort before protective-exit and trade phases ──
+    # ── PHASE 2: EXITS (protective + rule-based) — run even when paused ──
     if cancel and cancel.is_set():
         return
-    # 1) High-water + portfolio drawdown breaker (verified valuation only).
-    if equity_info['available'] and equity_info['equity'] is not None:
+    # 2a) High-water + portfolio drawdown breaker.
+    if equity_info.get('available') and equity_info.get('equity') is not None:
         _paper_core.update_high_water(paper_accounts_col, acct_id, pid, equity_info['equity'])
         max_dd = _paper_core.D(mandate.get('max_drawdown_pct'))
-        dd = equity_info['drawdownPct']
+        dd = equity_info.get('drawdownPct')
         if (max_dd is not None and dd is not None and dd <= (-max_dd)
                 and acct.get('runtimeState') == 'RUNNING'):
             paper_accounts_col.update_one({'paperAccountId': acct_id},
@@ -8661,10 +8749,9 @@ def _autopilot_process_account_multi(acct, cancel=None):
             _autopilot_notify(pid, acct_id, 'Paper drawdown breaker tripped',
                               'New paper entries are paused; protective exits continue.', 'warning')
             acct = paper_accounts_col.find_one({'paperAccountId': acct_id}) or acct
+            is_running = False  # downgrade: no entries this cycle
 
-    # 2) Protective invalidation exits per held asset (run even when paused).
-    #    TICKET-CENTRIC: each ticket is evaluated independently.
-    #    FLASH-CRASH: fill at observed market price (never substitute stop price).
+    # 2b) Protective invalidation exits per ticket (FLASH-CRASH: fill at observed price).
     if PAPER_EXECUTION_ENABLED:
         for lot in list(acct.get('lots') or []):
             sym = (lot.get('asset') or '').upper()
@@ -8674,12 +8761,10 @@ def _autopilot_process_account_multi(acct, cancel=None):
             if qty <= 0 or inv is None or px is None or not fresh or px >= inv:
                 continue
             lot_id = lot.get('lotId')
-            # Direct-price fill at observed market price (gap below stop → fill at gap, not stop).
             sizing = _paper_core.ticket_sell_sizing(sym, qty, px)
             if sizing.get('reject'):
                 continue
             if acct.get('strategyId') and acct.get('mode') == 'APPROVAL_REQUIRED':
-                # Review NEVER auto-fills a proposed trade, including protection.
                 if _strat and acct.get('runtimeState') in ('RUNNING', 'PAUSED_RISK_BREAKER') and not paper_proposals_col.find_one(
                         {'paperAccountId': acct_id, 'asset': sym, 'status': 'CREATED'}):
                     rule_can = _studio_rule_envelope(_strat, sym, mark_obs[sym], 'invalidation')
@@ -8705,16 +8790,13 @@ def _autopilot_process_account_multi(acct, cancel=None):
         acct = paper_accounts_col.find_one({'paperAccountId': acct_id}) or acct
         equity_info = _paper_portfolio.compute_portfolio_equity(acct, marks)
 
-    # Native reviewed percentage/price/indicator exits. SELL is reduce-only and
-    # never needs a fabricated canonical SELL; Review proposes rather than fills.
-    # TICKET-CENTRIC: each ticket is evaluated individually against its saved
-    # targets and the freshly observed price. Partial targets sell only the
-    # specified portion of THIS ticket. The matched ruleId is marked completed
-    # on the ticket so it does not re-fire on the next cycle.
-    # ── checkpoint: abort before rule-based exits ──
+    # 2c) Rule-based exits per ticket (using saved ticket rules or current strategy rules).
     if cancel and cancel.is_set():
         return
-    if _strat and PAPER_EXECUTION_ENABLED:
+    # For rule exits, we use either _strat (active strategy) or fall back to
+    # each ticket's saved rules. This allows exits even when the strategy is paused.
+    _exit_strat = _strat  # may be None for orphaned/paused
+    if PAPER_EXECUTION_ENABLED and held_lots:
         for lot in list(acct.get('lots') or []):
             sym = (lot.get('asset') or '').upper()
             qty = _paper_core.D(lot.get('qty')) or Decimal('0')
@@ -8722,65 +8804,130 @@ def _autopilot_process_account_multi(acct, cancel=None):
             if qty <= 0 or not fresh or px is None or not (mark_obs.get(sym) or {}).get('obsId'):
                 continue
             lot_id = lot.get('lotId')
-            verdict = _studio_rule_check(_strat, sym, 'SELL', px, acct, mark_obs.get(sym))
-            if not verdict['ready']:
-                continue
-            rule_id = verdict['matchedRuleId']
-            # Determine sell quantity: partial take-profit sells only a portion.
-            sell_qty = qty
-            is_partial = verdict.get('partial') is not None
-            if is_partial:
-                portion_pct = _paper_core.D(verdict['partial'].get('portionPct'))
-                portion_of = verdict['partial'].get('portionOf', 'original')
-                if portion_pct and Decimal('0') < portion_pct <= Decimal('100'):
-                    if portion_of == 'original':
-                        orig_qty = _paper_core.D(lot.get('originalQty') or lot.get('qty')) or qty
-                        sell_qty = (orig_qty * portion_pct / Decimal('100')).quantize(Decimal('1e-8'))
+            # Use ticket's saved rules if available, otherwise fall back to current strategy.
+            if lot.get('rules') or _exit_strat:
+                verdict = _studio_rule_check(_exit_strat, sym, 'SELL', px, acct, mark_obs.get(sym), ticket=lot)
+                if not verdict['ready']:
+                    continue
+                rule_id = verdict['matchedRuleId']
+                sell_qty = qty
+                is_partial = verdict.get('partial') is not None
+                if is_partial:
+                    portion_pct = _paper_core.D(verdict['partial'].get('portionPct'))
+                    portion_of = verdict['partial'].get('portionOf', 'original')
+                    if portion_pct and Decimal('0') < portion_pct <= Decimal('100'):
+                        if portion_of == 'original':
+                            orig_qty = _paper_core.D(lot.get('originalQty') or lot.get('qty')) or qty
+                            sell_qty = (orig_qty * portion_pct / Decimal('100')).quantize(Decimal('1e-8'))
+                        else:
+                            sell_qty = (qty * portion_pct / Decimal('100')).quantize(Decimal('1e-8'))
+                        sell_qty = min(sell_qty, qty)
+                sizing = _paper_core.ticket_sell_sizing(sym, sell_qty, px)
+                if sizing.get('reject'):
+                    continue
+                if _exit_strat:
+                    rule_can = _studio_rule_envelope(_exit_strat, sym, mark_obs[sym], rule_id)
+                else:
+                    rule_can = {'decisionSnapshotId': 'saved_rule', 'decisionId': rule_id,
+                                'decisionInputsHash': '', 'engineVersion': 'ticket_rules',
+                                'mandateVersion': '', 'invalidationPrice': None, 'expiresAt': None}
+                if acct.get('mode') == 'APPROVAL_REQUIRED':
+                    if acct.get('runtimeState') not in ('RUNNING', 'PAUSED_RISK_BREAKER') or paper_proposals_col.find_one(
+                            {'paperAccountId': acct_id, 'asset': sym, 'status': 'CREATED'}):
+                        continue
+                    if _exit_strat:
+                        sds = _materialize_sds(acct, _exit_strat, rule_can, mark_obs[sym], 'SELL', sym,
+                                               sizing, [], 'PROPOSED', rule_results=verdict['results'])
                     else:
-                        sell_qty = (qty * portion_pct / Decimal('100')).quantize(Decimal('1e-8'))
-                    sell_qty = min(sell_qty, qty)  # never sell more than held
-            # Direct-price fill at observed price.
-            sizing = _paper_core.ticket_sell_sizing(sym, sell_qty, px)
-            if sizing.get('reject'):
-                continue
-            rule_can = _studio_rule_envelope(_strat, sym, mark_obs[sym], rule_id)
-            if acct.get('mode') == 'APPROVAL_REQUIRED':
-                if acct.get('runtimeState') not in ('RUNNING', 'PAUSED_RISK_BREAKER') or paper_proposals_col.find_one(
-                        {'paperAccountId': acct_id, 'asset': sym, 'status': 'CREATED'}):
-                    continue
-                sds = _materialize_sds(acct, _strat, rule_can, mark_obs[sym], 'SELL', sym,
-                                       sizing, [], 'PROPOSED', rule_results=verdict['results'])
-                proposal = _paper_make_proposal_multi(acct_id, pid, 'SELL', rule_can, sizing, sym, strat=_strat,
-                                                      sds_id=sds, rule_id=rule_id,
-                                                      rule_reason=f'Reviewed {sym} {rule_id} exit condition met{" (partial)" if is_partial else ""}; approve this simulated SELL.',
-                                                      rule_results=verdict['results'])
-                if proposal:
-                    # Record partial info on the proposal so the approval path can mark it completed.
-                    if is_partial:
-                        paper_proposals_col.update_one({'proposalId': proposal.get('proposalId')},
-                                                      {'$set': {'isPartialTarget': True, 'partialRuleId': rule_id,
-                                                                'sizing': {'qty': str(sell_qty), 'fillPx': str(px)},
-                                                                'ticketId': lot_id}})
-                    _autopilot_notify(pid, acct_id, 'Paper exit needs your approval',
-                                      f'{sym} met a reviewed exit rule{" (partial target)" if is_partial else ""}. Open Review to approve. Paper only.')
-            elif acct.get('mode') == 'PAPER_AUTOPILOT' and PAPER_AUTOPILOT_ENABLED:
-                current_acct = paper_accounts_col.find_one({'paperAccountId': acct_id, 'ownerId': pid,
-                                                             'strategyVersion': _strat['version']})
-                if not current_acct or not _strategy_for_account(current_acct):
-                    continue
-                result, err, _ = _paper_core.apply_sell_atomic(
-                    paper_accounts_col, acct_id, pid, sizing, source='auto_strategy_rule',
-                    idem_key='rule:%s:%s:%s' % (lot_id, rule_id, mark_obs[sym]['obsId']),
-                    asset=sym, strategy_version=_strat['version'],
-                    strategy_hash=_strat['contractHash'], required_mode='PAPER_AUTOPILOT',
-                    completed_rule_id=rule_id if (is_partial or rule_id) else None,
-                    ticket_id=lot_id)
-                if not err:
-                    _materialize_sds(acct, _strat, rule_can, mark_obs[sym], 'SELL', sym,
-                                     sizing, [], 'EXECUTED', rule_results=verdict['results'])
-                    _autopilot_set_vis(acct_id, lastTradeAt=now_iso)
-                    acct = paper_accounts_col.find_one({'paperAccountId': acct_id, 'ownerId': pid}) or acct
+                        sds = None
+                    proposal = _paper_make_proposal_multi(acct_id, pid, 'SELL', rule_can, sizing, sym, strat=_exit_strat,
+                                                          sds_id=sds, rule_id=rule_id,
+                                                          rule_reason=f'Reviewed {sym} {rule_id} exit condition met{" (partial)" if is_partial else ""}; approve this simulated SELL.',
+                                                          rule_results=verdict['results'])
+                    if proposal:
+                        if is_partial:
+                            paper_proposals_col.update_one({'proposalId': proposal.get('proposalId')},
+                                                          {'$set': {'isPartialTarget': True, 'partialRuleId': rule_id,
+                                                                    'sizing': {'qty': str(sell_qty), 'fillPx': str(px)},
+                                                                    'ticketId': lot_id}})
+                        _autopilot_notify(pid, acct_id, 'Paper exit needs your approval',
+                                          f'{sym} met a reviewed exit rule{" (partial target)" if is_partial else ""}. Open Review to approve. Paper only.')
+                elif acct.get('mode') == 'PAPER_AUTOPILOT' and PAPER_AUTOPILOT_ENABLED:
+                    sv = _exit_strat['version'] if _exit_strat else None
+                    sh = _exit_strat['contractHash'] if _exit_strat else None
+                    result, err, _ = _paper_core.apply_sell_atomic(
+                        paper_accounts_col, acct_id, pid, sizing, source='auto_strategy_rule',
+                        idem_key='rule:%s:%s:%s' % (lot_id, rule_id, mark_obs[sym]['obsId']),
+                        asset=sym, strategy_version=sv, strategy_hash=sh,
+                        required_mode='PAPER_AUTOPILOT' if _exit_strat else None,
+                        completed_rule_id=rule_id if (is_partial or rule_id) else None,
+                        ticket_id=lot_id)
+                    if not err:
+                        if _exit_strat:
+                            _materialize_sds(acct, _exit_strat, rule_can, mark_obs[sym], 'SELL', sym,
+                                             sizing, [], 'EXECUTED', rule_results=verdict['results'])
+                        _autopilot_set_vis(acct_id, lastTradeAt=now_iso)
+                        acct = paper_accounts_col.find_one({'paperAccountId': acct_id, 'ownerId': pid}) or acct
         equity_info = _paper_portfolio.compute_portfolio_equity(acct, marks)
+
+    # ── PHASE 3: GOAL CHECK + CANONICAL DECISIONS + ENTRIES ──
+    # After exits, re-compute equity and check portfolio goals.
+    acct = paper_accounts_col.find_one({'paperAccountId': acct_id}) or acct
+    equity_info = _paper_portfolio.compute_portfolio_equity(acct, marks)
+    goal_trigger, goal_reason = _check_portfolio_goals(acct, equity_info, marks, mark_obs)
+    if goal_trigger and goal_trigger != 'ALREADY_HALTED':
+        _execute_goal_action(acct, goal_trigger, goal_reason, equity_info, marks)
+        acct = paper_accounts_col.find_one({'paperAccountId': acct_id}) or acct
+        if _strat:
+            _studio_record_assessment(acct, _strat, [], marks, mark_obs)
+        return
+    if goal_trigger == 'ALREADY_HALTED':
+        # Already halted — HALTED_GOAL_ENTRIES still needs rule-based exit management.
+        if acct.get('runtimeState') == 'HALTED_GOAL_ENTRIES' and _strat:
+            _studio_record_assessment(acct, _strat, [], marks, mark_obs)
+        return
+
+    if not is_running:
+        # Paused / risk-breaker accounts: exits are done, skip entries.
+        if _strat:
+            _studio_record_assessment(acct, _strat, [], marks, mark_obs)
+        return
+
+    if cancel and cancel.is_set():
+        return
+
+    # Canonical decisions — scoped to strategy coins for strategy accounts.
+    if _orphaned_strategy and not held_lots:
+        decisions = []
+    elif _orphaned_strategy:
+        _held_syms_for_scope = [(l.get('asset') or '').upper() for l in held_lots]
+        override = _portfolio_summary_from_account(acct)
+        snap = _albert_decision_mod.build_decisions(pid, summary_override=override,
+                                                     strategy_symbols=_held_syms_for_scope)
+        decisions = []
+        try:
+            key = _paper_hist_key(pid, acct)
+            _decision_history_repo.reconcile(key, snap)
+            for d in (snap.get('decisions') or []):
+                env = _decision_history_repo.get_current(key, d.get('symbol'))
+                can = _envelope_to_canonical(env)
+                if can:
+                    decisions.append(can)
+        except Exception:  # noqa
+            traceback.print_exc()
+    else:
+        decisions = _paper_canonical_decisions(pid, account=acct)
+    dec_by_sym = {(d.get('asset') or '').upper(): d for d in decisions}
+
+    # Fetch marks for any NEW candidate assets (not yet held).
+    for sym in dec_by_sym:
+        if sym not in marks:
+            px, fresh, obs = _paper_mark(sym)
+            marks[sym] = (px, fresh); mark_obs[sym] = obs or {}
+
+    # Record assessment.
+    if _strat:
+        _studio_record_assessment(acct, _strat, decisions, marks, mark_obs)
 
     if not decisions:
         return
@@ -8976,14 +9123,19 @@ def _autopilot_process_account_multi(acct, cancel=None):
                 sizing = _paper_core.ticket_buy_sizing(sym, budget, px)
                 if sizing.get('reject'):
                     continue
-                # Build ticket rules from the strategy for this asset.
+                # Build ticket rules: save the strategy's exit rules for this asset
+                # at entry time so the ticket retains its rules even if the strategy
+                # is later edited (entry-time rules govern existing tickets).
                 _ticket_rules = None
                 if _strat:
-                    _sell_rules = [r for r in (_strat.get('rules') or [])
+                    contract_rules = ((_strat.get('contract') or {}).get('rules') or [])
+                    _sell_rules = [r for r in contract_rules
                                    if r.get('side') == 'SELL' and
-                                   ((r.get('asset') or '').upper() == sym or not r.get('asset'))]
+                                   ((r.get('symbol') or r.get('asset', '')).upper() == sym or
+                                    not r.get('symbol') and not r.get('asset'))]
                     if _sell_rules:
-                        _ticket_rules = _sell_rules
+                        import copy as _copy
+                        _ticket_rules = _copy.deepcopy(_sell_rules)
                 res, err, _ = _paper_core.apply_buy_atomic(
                     paper_accounts_col, acct_id, pid, acct.get('version'), idem, 'auto_%s_%s' % (sym, sid),
                     sizing, can, base_currency=acct.get('baseCurrency', 'USDC'), asset=sym,
@@ -9187,10 +9339,17 @@ def _paper_autopilot_worker():
     n_skipped = 0
     last_other_id = None   # rotating cursor bookmark among non-strategy accounts
     try:
-        # ── 1. Fetch only RUNNING, non-archived accounts ──
+        # ── 1. Fetch eligible accounts: RUNNING for full processing,
+        #    plus paused accounts WITH open tickets (for protective exits only). ──
         all_accts = list(paper_accounts_col.find(
-            {'archivedAt': None, 'runtimeState': 'RUNNING',
-             'mode': {'$in': ['OBSERVE', 'APPROVAL_REQUIRED', 'PAPER_AUTOPILOT']}}))
+            {'archivedAt': None,
+             '$or': [
+                 {'runtimeState': 'RUNNING',
+                  'mode': {'$in': ['OBSERVE', 'APPROVAL_REQUIRED', 'PAPER_AUTOPILOT']}},
+                 {'runtimeState': {'$in': ['PAUSED_BY_USER', 'PAUSED_RISK_BREAKER', 'HALTED_GOAL_ENTRIES']},
+                  'lots.0': {'$exists': True},
+                  'mode': {'$in': ['OBSERVE', 'APPROVAL_REQUIRED', 'PAPER_AUTOPILOT']}}
+             ]}))
 
         # ── 2. Split into strategy-first + others, apply rotation ──
         strat_accts = [a for a in all_accts if a.get('strategyId')]
@@ -9264,6 +9423,8 @@ def _paper_autopilot_worker():
                     _WORKER_TIMEOUT_PENALTIES.pop(acct_id, None)  # clear penalty on success
                     if not has_strategy:
                         last_other_id = acct_id
+                    else:
+                        last_processed_id = acct_id  # advance strategy cursor too
             except Exception:  # noqa
                 had_error = True
                 traceback.print_exc()
@@ -9345,16 +9506,28 @@ def _paper_get(acct_id, pid):
     if not a or a.get('ownerId') != pid:
         return None
     # ── Legacy lot migration: ensure every lot has a lotId (ticket ID) ──
+    # Uses version-checked CAS to avoid overwriting concurrent fills.
     migrated = False
     for lot in (a.get('lots') or []):
         if not lot.get('lotId'):
             lot['lotId'] = 'pp_legacy_' + uuid.uuid4().hex[:8]
             migrated = True
-        if not lot.get('originalQty'):
+        if lot.get('originalQty') is None:
+            # Cautious: current qty is the MINIMUM original (may have been larger
+            # before partial exits we can't reconstruct). Tag it so we know.
             lot['originalQty'] = lot.get('qty')
+            lot['originalQtyInferred'] = True
             migrated = True
     if migrated:
-        paper_accounts_col.update_one({'paperAccountId': acct_id}, {'$set': {'lots': a.get('lots') or []}})
+        ver = a.get('version')
+        result = paper_accounts_col.find_one_and_update(
+            {'paperAccountId': acct_id, 'version': ver},
+            {'$set': {'lots': a.get('lots') or []}})
+        if result is None:
+            # Concurrent modification — re-read and return the fresh version.
+            a = paper_accounts_col.find_one({'paperAccountId': acct_id})
+            if not a or a.get('ownerId') != pid:
+                return None
     return a
 
 
@@ -9847,14 +10020,17 @@ def paper_proposal_action(proposal_id: str, cmd: str, payload: dict = Body(defau
         # Compute sell quantity — partial target proposals sell only a portion.
         sell_qty = _paper_core.D(pos['qty'])
         if prop.get('isPartialTarget'):
-            lot = next((l for l in (a.get('lots') or []) if (l.get('asset') or '').upper() == asset
-                        and (_paper_core.D(l.get('qty')) or Decimal('0')) > 0), None)
+            # Find the specific ticket this proposal targets.
+            _target_tid = prop.get('ticketId')
+            lot = _paper_core._ticket_by_id(a, _target_tid) if _target_tid else next(
+                (l for l in (a.get('lots') or []) if (l.get('asset') or '').upper() == asset
+                 and (_paper_core.D(l.get('qty')) or Decimal('0')) > 0), None)
             if lot and prop.get('sizing') and prop['sizing'].get('qty'):
-                sell_qty = min(_paper_core.D(prop['sizing']['qty']), sell_qty)
+                sell_qty = min(_paper_core.D(prop['sizing']['qty']), _paper_core.D(lot.get('qty')) or sell_qty)
             elif lot:
-                # If the proposal doesn't carry explicit sizing, reject rather than guess.
                 raise HTTPException(status_code=409, detail='Partial target has no explicit quantity; cannot execute.')
-            sell_qty = max(sell_qty, _paper_core.MIN_NOTIONAL / px) if px else sell_qty
+            else:
+                raise HTTPException(status_code=409, detail='Target ticket not found or already closed.')
         # Direct-price fill at observed price.
         sizing = _paper_core.ticket_sell_sizing(asset, sell_qty, px)
         if sizing.get('reject'):
@@ -12983,6 +13159,24 @@ def _studio_canonical(draft):
             pass
     if draft.get('unresolvedInstructions'):
         contract['unresolvedInstructions'] = [str(u).strip()[:500] for u in draft['unresolvedInstructions'][:10]]
+    # Portfolio goals: profit target, equity floor, deadline, max trades, end action.
+    if draft.get('portfolioGoals'):
+        pg = draft['portfolioGoals']
+        goals = {}
+        if pg.get('profitTargetPct') is not None:
+            goals['profitTargetPct'] = float(pg['profitTargetPct'])
+        if pg.get('equityFloorUsd') is not None:
+            goals['equityFloorUsd'] = float(pg['equityFloorUsd'])
+        if pg.get('maxDrawdownPct') is not None:
+            goals['maxDrawdownPct'] = float(pg['maxDrawdownPct'])
+        if pg.get('deadline'):
+            goals['deadline'] = str(pg['deadline'])
+        if pg.get('maxTrades') is not None:
+            goals['maxTrades'] = int(pg['maxTrades'])
+        if pg.get('endAction'):
+            goals['endAction'] = str(pg['endAction'])
+        if goals:
+            contract['portfolioGoals'] = goals
     return contract
 
 
@@ -13605,7 +13799,9 @@ PAPER_STATUS_LABEL = {'SAVED': 'Saved · not trading', 'STOPPED': 'Stopped',
                       'UNAVAILABLE': 'Paper worker unavailable',
                       'NEEDS_CHANGES': 'Needs changes · exits only',
                       'RESTRICTED_IN_WALLET': 'Restricted in this wallet · exits preserved',
-                      'HALTED_RISK': 'Halted — drawdown limit', 'ARCHIVED': 'Archived'}
+                      'HALTED_RISK': 'Halted — drawdown limit', 'ARCHIVED': 'Archived',
+                      'HALTED_GOAL_CLOSED': 'Goal reached — all closed',
+                      'HALTED_GOAL_ENTRIES': 'Goal reached — managing exits'}
 
 
 def _studio_mode_blocker(approval):
@@ -13739,6 +13935,8 @@ def _strategy_paper_public(doc, pid, acct=None):
             'runtimeState': (acct or {}).get('runtimeState'),
             'autopilot': ap,
             'executionModel': 'direct_price',
+            'goalStatus': (acct or {}).get('goalStatus'),
+            'portfolioGoals': (acct or {}).get('portfolioGoals'),
             'paperOnly': True}
 
 
@@ -13774,6 +13972,10 @@ def _paper_new_wallet_for_strategy(pid, doc, acct_mode):
             'version': 0, 'createdAt': datetime.datetime.utcnow().isoformat(), 'archivedAt': None,
             'strategyId': doc['strategyId'], 'strategyVersion': doc['version'],
             'strategyContractHash': doc['contractHash'], 'dedicatedToStrategy': True, **econ}
+    # Persist portfolio goals from the reviewed contract.
+    if contract.get('portfolioGoals'):
+        acct['portfolioGoals'] = contract['portfolioGoals']
+        acct['goalStatus'] = {'halted': False, 'tradeCount': 0}
     paper_accounts_col.insert_one(dict(acct))
     _paper_ledger_add(acct['paperAccountId'], 'ACCOUNT_OPENED', 'account', acct['paperAccountId'],
                       start, acct['baseCurrency'],

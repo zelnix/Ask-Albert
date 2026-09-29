@@ -52,37 +52,60 @@ BPS = Decimal('10000')
 
 
 # ========================= direct-price fill (v2) ============================ #
-def ticket_buy_sizing(asset, notional, mark_px, *, price_q=PRICE_Q):
+def ticket_buy_sizing(asset, notional, mark_px, *, price_q=None):
     """Direct-price BUY sizing. No fee, no slippage — fill at the observed market
-    price. Returns a sizing dict compatible with apply_buy_atomic."""
+    price. `price_q` preserves per-asset precision (e.g. Decimal('0.000001')
+    for small coins); when None the observed price's own scale is kept."""
     mark = D(mark_px)
     notional = q_cash(notional)
     if notional is None or not notional.is_finite() or notional <= 0:
         return {'reject': 'BELOW_MIN_NOTIONAL', 'trace': []}
     if mark is None or not mark.is_finite() or mark <= 0:
         return {'reject': 'NO_VALID_MARK', 'trace': []}
-    fill_px = round_tick(mark, price_q, ROUND_HALF_UP)
-    qty = round_tick(notional / fill_px, QTY_Q) if fill_px and fill_px > 0 else None
+    # Preserve observed precision: if no explicit price_q, infer from mark.
+    pq = price_q or _infer_price_q(mark)
+    fill_px = round_tick(mark, pq, ROUND_HALF_UP) if pq else mark
+    if fill_px is None or fill_px <= 0:
+        return {'reject': 'NO_VALID_MARK', 'trace': []}
+    qty = round_tick(notional / fill_px, QTY_Q) if fill_px > 0 else None
     if qty is None or not qty.is_finite() or qty <= 0:
         return {'reject': 'BELOW_MIN_NOTIONAL', 'trace': []}
-    # Recalculate exact notional from qty × fill so cash debit is exact.
     exact_notional = q_cash(qty * fill_px)
     return {'reject': None, 'trace': [], 'side': 'BUY', 'asset': (asset or '').upper(),
-            'notional': exact_notional, 'fillPx': fill_px, 'fee': Decimal('0'), 'qty': qty}
+            'notional': exact_notional, 'fillPx': fill_px, 'fee': Decimal('0'), 'qty': qty,
+            'priceQ': pq}
 
 
-def ticket_sell_sizing(asset, qty, mark_px, *, price_q=PRICE_Q):
+def ticket_sell_sizing(asset, qty, mark_px, *, price_q=None):
     """Direct-price SELL sizing. No fee, no slippage — fill at observed price.
-    Returns a sizing dict compatible with apply_sell_atomic."""
+    `price_q` preserves per-asset precision; when None the observed price's
+    own scale is kept. Rejects zero/negative fills from over-rounding."""
     mark = D(mark_px)
     if mark is None or not mark.is_finite() or mark <= 0:
         return {'reject': 'INVALID_EXIT_PRICE', 'trace': []}
     qty = round_tick(qty, QTY_Q)
     if qty is None or not qty.is_finite() or qty <= 0:
         return {'reject': 'BELOW_MIN_NOTIONAL', 'trace': []}
-    fill_px = round_tick(mark, price_q, ROUND_HALF_UP)
+    pq = price_q or _infer_price_q(mark)
+    fill_px = round_tick(mark, pq, ROUND_HALF_UP) if pq else mark
+    if fill_px is None or fill_px <= 0:
+        return {'reject': 'ZERO_PRICE_AFTER_ROUNDING', 'trace': [
+            'observed=%s rounded with q=%s => %s' % (mark, pq, fill_px)]}
     return {'reject': None, 'trace': [], 'side': 'SELL', 'asset': (asset or '').upper(),
-            'qty': qty, 'fillPx': fill_px, 'fee': Decimal('0')}
+            'qty': qty, 'fillPx': fill_px, 'fee': Decimal('0'), 'priceQ': pq}
+
+
+def _infer_price_q(px):
+    """Infer the minimum price tick from the observed price's decimal places.
+    E.g. 0.004321 → Decimal('0.000001'), 95432.50 → Decimal('0.01')."""
+    if px is None or px <= 0:
+        return PRICE_Q
+    s = str(px)
+    if '.' in s:
+        decimals = len(s.rstrip('0').split('.')[1]) if s.split('.')[1].rstrip('0') else 0
+        decimals = max(decimals, 2)  # at least 2 decimal places
+        return Decimal('1e-%d' % decimals)
+    return PRICE_Q
 
 
 # ============================ Decimal helpers ================================ #
@@ -396,12 +419,10 @@ def run_entry_gates(*, acct, canonical, mark_px, mark_fresh, mandate, equity_inf
         sized = size_buy('BTC', notional, mark_px, profile=profile, price_q=profile['priceQ'])
         sized['trace'] = trace
         return sized
-    fill_px, fee = sim_fill('BUY', mark_px, notional)
-    qty = q_qty((notional - fee) / fill_px)
-    if not g('positive_qty', qty is not None and qty > 0, 'qty=%s' % qty):
-        return _rej('BELOW_MIN_NOTIONAL', 'Sized quantity rounds to zero.', trace)
-    return {'reject': None, 'trace': trace, 'side': 'BUY',
-            'notional': notional, 'fillPx': fill_px, 'fee': fee, 'qty': qty}
+    # Direct-price fill (legacy path also uses zero-fee model now).
+    sized = ticket_buy_sizing('BTC', notional, mark_px)
+    sized['trace'] = trace
+    return sized
 
 
 def run_exit_gates(*, acct, mark_px, mark_fresh, canonical=None, full=False, profile=None):
@@ -439,9 +460,10 @@ def run_exit_gates(*, acct, mark_px, mark_fresh, canonical=None, full=False, pro
         sized = size_sell('BTC', sell_qty, mark_px, profile=profile, price_q=profile['priceQ'])
         sized['trace'] = trace
         return sized
-    fill_px, fee = sim_fill('SELL', mark_px, gross)
-    return {'reject': None, 'trace': trace, 'side': 'SELL',
-            'qty': sell_qty, 'fillPx': fill_px, 'fee': fee}
+    # Direct-price fill (legacy path also uses zero-fee model now).
+    sized = ticket_sell_sizing('BTC', sell_qty, mark_px)
+    sized['trace'] = trace
+    return sized
 
 
 # ==================== single-document atomic execution ======================= #
@@ -585,6 +607,8 @@ def apply_buy_atomic(col, acct_id, pid, expected_version, idem_key, proposal_id,
 
     Returns (result_dict, error_code, http_status)."""
     asset = (asset or sizing.get('asset') or canonical.get('asset') or 'BTC').upper()
+    # Use the sizing's inferred price precision, falling back to default.
+    pq = sizing.get('priceQ') or price_q or PRICE_Q
     for _ in range(5):
         acct = col.find_one({'paperAccountId': acct_id, 'ownerId': pid})
         if not acct:
@@ -605,8 +629,11 @@ def apply_buy_atomic(col, acct_id, pid, expected_version, idem_key, proposal_id,
 
         cash = D(acct.get('cash')) or Decimal('0')
         fees = D(acct.get('feesPaid')) or Decimal('0')
-        notional = sizing['notional']; fill_px = sizing['fillPx']
-        fee = sizing.get('fee') or Decimal('0'); qty = sizing['qty']
+        notional = D(sizing['notional']); fill_px = D(sizing['fillPx'])
+        fee = D(sizing.get('fee')) or Decimal('0'); qty = D(sizing['qty'])
+        # Enforce cash sufficiency at the moment of write (not at sizing time).
+        if notional > cash:
+            return None, 'INSUFFICIENT_CASH', 409
         new_cash = q_cash(cash - notional)
         new_fees = q_cash(fees + fee)
 
@@ -631,15 +658,15 @@ def apply_buy_atomic(col, acct_id, pid, expected_version, idem_key, proposal_id,
         # Preserve invalidation from the canonical decision as the initial stop reference.
         inv = canonical.get('invalidationPrice')
         if inv is not None:
-            new_ticket['invalidationPrice'] = to128(round_tick(D(inv), price_q))
+            new_ticket['invalidationPrice'] = to128(round_tick(D(inv), pq))
         lots.append(new_ticket)
 
         seq = (acct.get('accountSequence') or 0) + 1
         led = _ledger_entry(seq, 'FILL', lot_id, -notional,
-                            'BUY %s %s @ %s · ticket %s' % (qty_dstr(qty), asset, dstr(fill_px, price_q), lot_id),
-                            extra={'side': 'BUY', 'asset': asset, 'qty': qty_dstr(qty), 'fillPx': dstr(fill_px, price_q),
+                            'BUY %s %s @ %s · ticket %s' % (qty_dstr(qty), asset, dstr(fill_px, pq), lot_id),
+                            extra={'side': 'BUY', 'asset': asset, 'qty': qty_dstr(qty), 'fillPx': dstr(fill_px, pq),
                                    'fee': dstr(fee), 'notional': dstr(notional), 'proposalId': proposal_id})
-        result = {'side': 'BUY', 'asset': asset, 'qty': qty_dstr(qty), 'fillPrice': dstr(fill_px, price_q),
+        result = {'side': 'BUY', 'asset': asset, 'qty': qty_dstr(qty), 'fillPrice': dstr(fill_px, pq),
                   'fee': dstr(fee), 'notional': dstr(notional), 'positionId': lot_id, 'ticketId': lot_id,
                   'decisionSnapshotId': canonical.get('decisionSnapshotId'), 'paperOnly': True}
         applied = {'idemKey': idem_key, 'proposalId': proposal_id, 'result': result,
@@ -652,7 +679,7 @@ def apply_buy_atomic(col, acct_id, pid, expected_version, idem_key, proposal_id,
                        'idemKeys': {'$each': [idem_key], '$slice': -500},
                        'consumedProposals': {'$each': [proposal_id], '$slice': -500},
                        'appliedApprovals': {'$each': [applied], '$slice': -200}},
-             '$inc': {'version': 1, 'accountSequence': 1}})
+             '$inc': {'version': 1, 'accountSequence': 1, 'goalStatus.tradeCount': 1}})
         if upd is not None:
             return result, None, 200
     return None, 'CONCURRENCY_RETRY_EXHAUSTED', 409
@@ -670,6 +697,7 @@ def apply_sell_atomic(col, acct_id, pid, sizing, source='approval', idem_key=Non
 
     Returns (result_dict, error_code, http_status)."""
     asset = (asset or sizing.get('asset') or (canonical or {}).get('asset') or 'BTC').upper()
+    pq = sizing.get('priceQ') or price_q or PRICE_Q
     for _ in range(5):
         acct = col.find_one({'paperAccountId': acct_id, 'ownerId': pid})
         if not acct:
@@ -707,12 +735,17 @@ def apply_sell_atomic(col, acct_id, pid, sizing, source='approval', idem_key=Non
         closed = list(acct.get('closedLots') or [])
         if remaining <= 0:
             # Full close — remove ONLY this ticket, not other tickets for the same asset.
+            # Preserve full entry info on the closed record for performance reporting.
             lots = [l for l in lots if l.get('lotId') != target_lot_id]
             closed.append({'lotId': target_lot_id, 'asset': asset, 'status': 'CLOSED',
-                           'qty': to128(qty), 'avgEntry': lot.get('avgEntry'),
+                           'qty': to128(qty), 'originalQty': lot.get('originalQty'),
+                           'avgEntry': lot.get('avgEntry'), 'costBasis': lot.get('costBasis'),
                            'exitPrice': to128(fill_px), 'realizedPnl': to128(realized),
+                           'openedAt': lot.get('openedAt'),
                            'closedAt': datetime.datetime.utcnow().isoformat(),
-                           'entryDecisionSnapshotId': lot.get('entryDecisionSnapshotId')})
+                           'entryDecisionSnapshotId': lot.get('entryDecisionSnapshotId'),
+                           'rules': lot.get('rules'),
+                           'completedTargets': lot.get('completedTargets')})
         else:
             for l in lots:
                 if l.get('lotId') == target_lot_id:
@@ -726,12 +759,12 @@ def apply_sell_atomic(col, acct_id, pid, sizing, source='approval', idem_key=Non
         seq = (acct.get('accountSequence') or 0) + 1
         led = _ledger_entry(seq, 'FILL', target_lot_id, proceeds,
                             'SELL %s %s @ %s (PnL %s) · %s · ticket %s'
-                            % (qty_dstr(qty), asset, dstr(fill_px, price_q), dstr(realized), source, target_lot_id),
-                            extra={'side': 'SELL', 'asset': asset, 'qty': qty_dstr(qty), 'fillPx': dstr(fill_px, price_q),
+                            % (qty_dstr(qty), asset, dstr(fill_px, pq), dstr(realized), source, target_lot_id),
+                            extra={'side': 'SELL', 'asset': asset, 'qty': qty_dstr(qty), 'fillPx': dstr(fill_px, pq),
                                    'fee': dstr(fee), 'proceeds': dstr(proceeds), 'realized': dstr(realized),
                                    'costPortion': dstr(cost_portion), 'proposalId': proposal_id,
                                    'completedRuleId': completed_rule_id, 'ticketId': target_lot_id})
-        result = {'side': 'SELL', 'asset': asset, 'qty': qty_dstr(qty), 'fillPrice': dstr(fill_px, price_q),
+        result = {'side': 'SELL', 'asset': asset, 'qty': qty_dstr(qty), 'fillPrice': dstr(fill_px, pq),
                   'fee': dstr(fee), 'proceeds': dstr(proceeds), 'realized': dstr(realized),
                   'ticketId': target_lot_id, 'paperOnly': True}
         push = {'ledger': led}
