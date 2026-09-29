@@ -8172,7 +8172,6 @@ def _autopilot_process_account(acct, cancel=None):
         return
     px, fresh, mark_obs = _paper_mark('BTC')
     mark_ts = (mark_obs or {}).get('ts')
-    exec_prof = _paper_profiles.asset_profile('BTC', market=(mark_obs or {}).get('execution'))
     mandate = _albert_deps.get_mandate(pid) or {}
     info = _paper_core.compute_equity(acct, px, fresh)
 
@@ -8195,13 +8194,11 @@ def _autopilot_process_account(acct, cancel=None):
     lot = _paper_core._btc_lot(acct)
     if (lot and px is not None and fresh and PAPER_EXECUTION_ENABLED and lot.get('invalidationPrice') is not None
             and px < _paper_core.D(lot.get('invalidationPrice'))):
-        ex = _paper_core.run_exit_gates(acct=acct, mark_px=px, mark_fresh=fresh, full=True,
-                                        profile=exec_prof)
+        ex = _paper_core.run_exit_gates(acct=acct, mark_px=px, mark_fresh=fresh, full=True)
         if not ex.get('reject'):
             res, err, _ = _paper_core.apply_sell_atomic(paper_accounts_col, acct_id, pid, ex,
                                                         source='auto_invalidation',
-                                                        idem_key='inv:%s:%s' % (lot.get('lotId'), mark_ts),
-                                                        price_q=exec_prof['priceQ'])
+                                                        idem_key='inv:%s:%s' % (lot.get('lotId'), mark_ts))
             if not err:
                 _autopilot_set_vis(acct_id, lastTradeAt=now_iso)
                 _autopilot_notify(pid, acct_id, 'Paper position auto-exited (invalidation)',
@@ -8254,11 +8251,10 @@ def _autopilot_process_account(acct, cancel=None):
             if not _asset_caps.entry_allowed('BTC', mandate, data_ok=fresh)[0]:
                 return
             s = _paper_core.run_entry_gates(acct=acct, canonical=canonical, mark_px=px, mark_fresh=fresh,
-                                            mandate=mandate, equity_info=info, has_open_intent=False,
-                                            profile=exec_prof)
+                                            mandate=mandate, equity_info=info, has_open_intent=False)
         else:
             s = _paper_core.run_exit_gates(acct=acct, mark_px=px, mark_fresh=fresh,
-                                           canonical=canonical, profile=exec_prof)
+                                           canonical=canonical)
         if not s.get('reject'):
             _paper_make_proposal(acct_id, pid, canonical['action'], canonical, s)
             _autopilot_notify(pid, acct_id, 'Paper trade needs your approval',
@@ -8282,16 +8278,14 @@ def _autopilot_process_account(acct, cancel=None):
             if paused or not _asset_caps.entry_allowed('BTC', mandate, data_ok=fresh)[0]:
                 return  # entries paused/unsupported; leave snapshot unconsumed
             s = _paper_core.run_entry_gates(acct=acct, canonical=canonical, mark_px=px, mark_fresh=fresh,
-                                            mandate=mandate, equity_info=info, has_open_intent=False,
-                                            profile=exec_prof)
+                                            mandate=mandate, equity_info=info, has_open_intent=False)
             if s.get('reject'):
                 _paper_ledger_add(acct_id, 'AUTO_SKIPPED', 'decision', sid, None, None,
                                   'Autopilot skipped BUY: %s.' % s['reject'])
             else:
                 res, err, _ = _paper_core.apply_buy_atomic(paper_accounts_col, acct_id, pid, acct.get('version'),
                                                           idem, 'auto_' + sid, s, canonical,
-                                                          base_currency=acct.get('baseCurrency', 'USDC'),
-                                                          price_q=exec_prof['priceQ'])
+                                                          base_currency=acct.get('baseCurrency', 'USDC'))
                 if not err:
                     _autopilot_set_vis(acct_id, lastTradeAt=now_iso)
                     paper_accounts_col.update_one({'paperAccountId': acct_id},
@@ -8300,11 +8294,11 @@ def _autopilot_process_account(acct, cancel=None):
                                       'Auto-executed a simulated BUY on a fresh decision. Paper only — no real money.')
         else:  # SELL / EXIT / TRIM (reduce-only) — allowed even if paused
             s = _paper_core.run_exit_gates(acct=acct, mark_px=px, mark_fresh=fresh,
-                                           canonical=canonical, profile=exec_prof)
+                                           canonical=canonical)
             if not s.get('reject'):
                 res, err, _ = _paper_core.apply_sell_atomic(paper_accounts_col, acct_id, pid, s,
                                                             source='auto', idem_key=idem, proposal_id='auto_' + sid,
-                                                            canonical=canonical, price_q=exec_prof['priceQ'])
+                                                            canonical=canonical)
                 if not err:
                     _autopilot_set_vis(acct_id, lastTradeAt=now_iso)
                     paper_accounts_col.update_one({'paperAccountId': acct_id},
@@ -9322,14 +9316,14 @@ def _paper_autopilot_worker():
     * Hard wall of _WORKER_BUDGET_SEC (25 s) — always returns before the next
       30-second scheduler tick so the 'max_instances=1' constraint never causes
       permanent lockout.
-    * Per-account timeout = min(_WORKER_MAX_PER_ACCT_SEC, remaining budget − 1 s).
-      Timed-out threads receive a cancel event that aborts further DB writes.
+    * Processing is SYNCHRONOUS — no detached threads, so every DB write
+      completes before the lease is released. External I/O is bounded by its
+      own socket/connection timeouts.
     * Strategy accounts are processed FIRST every cycle.
     * Non-strategy accounts rotate via a stored cursor so later accounts are not
       permanently starved.
     * Genuinely empty accounts (no strategy, no holdings) are skipped.
     """
-    import threading as _threading
     import time as _time
     _AUTOPILOT['state'] = 'running'
     _AUTOPILOT['lastRunAt'] = datetime.datetime.utcnow().isoformat()
@@ -9389,42 +9383,33 @@ def _paper_autopilot_worker():
             if not token:
                 continue                # another process holds it
 
-            cancel_event = _threading.Event()
             try:
                 fresh_acct = paper_accounts_col.find_one({'paperAccountId': acct_id}) or acct
-                # Re-check runtimeState after fresh read (may have been paused between query and lease)
-                if fresh_acct.get('runtimeState') != 'RUNNING':
+                # Re-check runtimeState after fresh read (may have been paused between query and lease).
+                # Paused accounts with open lots still need exit processing; skip only fully idle ones.
+                _fresh_state = fresh_acct.get('runtimeState')
+                _has_open_lots = any((_paper_core.D(l.get('qty')) or Decimal('0')) > 0
+                                     for l in (fresh_acct.get('lots') or []))
+                if _fresh_state != 'RUNNING' and not _has_open_lots:
                     n_skipped += 1
                     if not has_strategy:
                         last_other_id = acct_id
                     continue
 
-                _acct_exc = [None]
-                _cancel = cancel_event   # close over the event for the inner function
-                def _run(_fn=fn, _fa=fresh_acct, _ce=_cancel):
-                    try:
-                        _fn(_fa, cancel=_ce)
-                    except Exception as _e:
-                        _acct_exc[0] = _e
-                per_acct_timeout = max(min(_WORKER_MAX_PER_ACCT_SEC, remaining - 1), 2)
-                t = _threading.Thread(target=_run, daemon=True)
-                t.start()
-                t.join(timeout=per_acct_timeout)
-                if t.is_alive():
-                    cancel_event.set()           # signal the zombie thread to stop writing
-                    had_error = True
+                # Synchronous call — no detached thread. All writes complete
+                # before the lease is released, eliminating zombie-write risk.
+                _t0 = _time.monotonic()
+                fn(fresh_acct)
+                _elapsed = _time.monotonic() - _t0
+                if _elapsed > _WORKER_MAX_PER_ACCT_SEC:
                     _WORKER_TIMEOUT_PENALTIES[acct_id] = _WORKER_TIMEOUT_PENALTIES.get(acct_id, 0) + 1
-                    print('WARNING: paper autopilot timed out processing %s (%.0fs, penalty=%d)'
-                          % (acct_id, per_acct_timeout, _WORKER_TIMEOUT_PENALTIES[acct_id]))
-                elif _acct_exc[0]:
-                    raise _acct_exc[0]
+                    print('WARNING: paper autopilot slow processing %s (%.1fs > %ds, penalty=%d)'
+                          % (acct_id, _elapsed, _WORKER_MAX_PER_ACCT_SEC, _WORKER_TIMEOUT_PENALTIES[acct_id]))
                 else:
-                    n_processed += 1
                     _WORKER_TIMEOUT_PENALTIES.pop(acct_id, None)  # clear penalty on success
-                    if not has_strategy:
-                        last_other_id = acct_id
-                    else:
-                        last_processed_id = acct_id  # advance strategy cursor too
+                n_processed += 1
+                if not has_strategy:
+                    last_other_id = acct_id
             except Exception:  # noqa
                 had_error = True
                 traceback.print_exc()
@@ -9825,8 +9810,8 @@ def paper_lifecycle(acct_id: str, cmd: str, payload: dict = Body(default={}),
 @app.post('/api/v1/albert/paper/proposals/{proposal_id}/{cmd}')
 def paper_proposal_action(proposal_id: str, cmd: str, payload: dict = Body(default={}),
                           user: dict = Depends(get_current_user)):
-    if cmd not in ('approve', 'cancel'):
-        raise HTTPException(status_code=422, detail='Unknown command.')
+    if cmd != 'cancel':
+        raise HTTPException(status_code=422, detail='Unknown command. Only cancel is supported.')
     prop = paper_proposals_col.find_one({'proposalId': proposal_id})
     pid = owner_pid(user)
     # Resolve the parent account owner-scoped BEFORE acting; a non-owned or unknown
@@ -9844,215 +9829,9 @@ def paper_proposal_action(proposal_id: str, cmd: str, payload: dict = Body(defau
         raise
     except Exception:  # noqa
         pass
-    if cmd == 'cancel':
-        paper_proposals_col.update_one({'proposalId': proposal_id}, {'$set': {'status': 'CANCELLED_BY_USER'}})
-        _paper_ledger_add(a['paperAccountId'], 'PROPOSAL_CANCELLED', 'proposal', proposal_id, None, None, 'You skipped this paper trade.')
-        return {'status': 'ready', 'proposalStatus': 'CANCELLED_BY_USER'}
-
-    # -------------------------- APPROVE (simulated execution) --------------------------
-    # Client must supply expectedProposalVersion + decisionSnapshotId + idempotencyKey.
-    # Client CANNOT supply/edit quantity, price, invalidation or targets — all such
-    # economic fields are recomputed atomically from the canonical decision.
-    body = payload or {}
-    expected_version = body.get('expectedProposalVersion')
-    client_sid = body.get('decisionSnapshotId')
-    idem_key = str(body.get('idempotencyKey') or '').strip()
-    if expected_version is None or client_sid is None or not idem_key:
-        raise HTTPException(status_code=422,
-                            detail='expectedProposalVersion, decisionSnapshotId and idempotencyKey are required.')
-    if int(expected_version) != int(prop.get('version') or 0):
-        raise HTTPException(status_code=409, detail='This proposal changed — reload and try again.')
-    if client_sid != prop.get('decisionSnapshotId'):
-        raise HTTPException(status_code=409, detail='Decision snapshot mismatch.')
-
-    # Execution stays OFF in deployment (single flag). Idempotent replays still
-    # return the stored result even when disabled? No — disabled means no effect at all.
-    if not PAPER_EXECUTION_ENABLED:
-        raise HTTPException(status_code=503, detail=PAPER_EXEC_DISABLED_MSG)
-    # Every old-version Review proposal becomes non-approvable after a save,
-    # including SELLs. Existing holdings can still exit with fresh pricing via
-    # the current canonical decision, protective invalidation or manual close.
-    if a.get('strategyId'):
-        current = _strategy_for_account(a)
-        if (not current or prop.get('strategyId') != a['strategyId']
-                or prop.get('strategyVersion') != current.get('version')
-                or prop.get('strategyContractHash') != current.get('contractHash')):
-            paper_proposals_col.update_one({'proposalId': proposal_id, 'status': 'CREATED'},
-                                           {'$set': {'status': 'SUPERSEDED',
-                                                     'supersededAt': datetime.datetime.utcnow().isoformat()}})
-            raise HTTPException(status_code=409, detail='This proposal was superseded by a newer strategy version.')
-    if prop['side'] == 'BUY' and a.get('runtimeState') != 'RUNNING':
-        raise HTTPException(status_code=409, detail='Paper trading is stopped; no new BUY can be approved.')
-
-    # A stale asset or mandate restriction rejects BEFORE the canonical resolver
-    # (which may persist snapshots), proposal status, ledger or wallet can change.
-    # Only BUYs require entry support: SELLs remain available for legacy lots.
-    asset = (prop.get('asset') or 'BTC').upper()
-    if prop['side'] == 'BUY':
-        gate = _asset_caps.capability(asset, _get_mandate(pid))
-        if not gate['startEligible']:
-            raise HTTPException(status_code=409, detail=(
-                f'{asset} cannot open new exposure: {gate["reasonCode"]}. Existing exits remain available.'))
-        if prop.get('strategyId'):
-            bound = strategy_contracts_col.find_one({
-                'strategyId': prop['strategyId'], 'ownerId': pid, 'latest': True,
-                'assignedPaperAccountId': a['paperAccountId'], 'status': 'PAPER_ACTIVE',
-                'version': prop.get('strategyVersion'),
-                'contractHash': prop.get('strategyContractHash')})
-            if not bound:
-                raise HTTPException(status_code=409, detail='The driving strategy changed; no paper trade placed.')
-            _c, current_hash, _sv_err, _st_err = _studio_validate(bound.get('contract') or {}, pid, account=a); errors = _sv_err + _st_err
-            if current_hash != bound.get('contractHash') or errors or asset not in _strategy_syms(bound):
-                raise HTTPException(status_code=409, detail='The strategy cannot add this asset: '
-                                    + '; '.join(errors or ['contract or strategy universe changed']))
-
-    # Canonical proposals must still match the exact immutable current decision.
-    # Explicit strategy-rule SELL proposals are NOT canonical signals: their
-    # reviewed version, current mark, open lot and exact condition are checked
-    # again immediately before the fill below.
-    asset = (prop.get('asset') or 'BTC').upper()
-    rule_proposal = prop.get('proposalKind') == 'STRATEGY_RULE'
-    if rule_proposal:
-        if prop.get('side') != 'SELL' or not prop.get('strategyId') or not prop.get('strategyRuleId'):
-            raise HTTPException(status_code=409, detail='Invalid reviewed rule proposal; no trade placed.')
-        canonical = None
-    else:
-        canonical = _paper_canonical_for(pid, asset, account=a)
-        hash_ok = bool(canonical and prop.get('decisionInputsHash')
-                       and canonical.get('decisionInputsHash') == prop.get('decisionInputsHash'))
-        if not (_paper_core.revalidate_ok(canonical, prop['side'], prop.get('decisionSnapshotId')) and hash_ok):
-            paper_proposals_col.update_one({'proposalId': proposal_id, 'status': 'CREATED'},
-                                           {'$set': {'status': 'REJECTED_ON_REVALIDATION'}})
-            _paper_ledger_add(a['paperAccountId'], 'PROPOSAL_REVALIDATION_FAILED', 'proposal', proposal_id, None, None,
-                              'The decision changed or went stale on revalidation — not executed.')
-            return {'status': 'ready', 'proposalStatus': 'REJECTED_ON_REVALIDATION',
-                    'message': 'The decision changed on a fresh check — paper trade not placed.'}
-
-    # M-E: if this proposal was driven by a strategy, that strategy must STILL be the
-    # active one on this account, at the SAME version + contract hash (fail closed).
-    if prop.get('strategyId'):
-        strat_now = strategy_contracts_col.find_one({'strategyId': prop['strategyId'],
-                                                     'ownerId': pid, 'latest': True},
-                                                    sort=[('version', -1)])
-        strat_ok = bool(strat_now and strat_now.get('ownerId') == pid
-                        and strat_now.get('status') == 'PAPER_ACTIVE'
-                        and strat_now.get('assignedPaperAccountId') == a['paperAccountId']
-                        and int(strat_now.get('version') or -1) == int(prop.get('strategyVersion') or -2)
-                        and strat_now.get('contractHash') == prop.get('strategyContractHash'))
-        if not strat_ok:
-            paper_proposals_col.update_one({'proposalId': proposal_id, 'status': 'CREATED'},
-                                           {'$set': {'status': 'REJECTED_ON_REVALIDATION'}})
-            _paper_ledger_add(a['paperAccountId'], 'PROPOSAL_REVALIDATION_FAILED', 'proposal', proposal_id,
-                              None, None, 'The driving strategy changed or is no longer active — not executed.')
-            return {'status': 'ready', 'proposalStatus': 'REJECTED_ON_REVALIDATION',
-                    'message': 'The strategy behind this trade changed — paper trade not placed.'}
-
-    px, fresh, approval_obs = _paper_mark(asset)
-    if px is None or not fresh:
-        raise HTTPException(status_code=409, detail='Waiting for data: current verified price for %s is unavailable.' % asset)
-    if rule_proposal:
-        bound = _strategy_for_account(a)
-        lot = next((l for l in (a.get('lots') or []) if l.get('asset') == asset
-                    and (_paper_core.D(l.get('qty')) or Decimal('0')) > 0), None)
-        if not bound or not lot or a.get('mode') != 'APPROVAL_REQUIRED':
-            raise HTTPException(status_code=409, detail='The reviewed exit or its open holding is no longer available.')
-        rule_id = prop['strategyRuleId']
-        if rule_id == 'invalidation':
-            inv = _paper_core.D(lot.get('invalidationPrice'))
-            meets = inv is not None and px < inv
-        else:
-            verdict = _studio_rule_check(bound, asset, 'SELL', px, a, approval_obs)
-            meets = verdict['ready'] and rule_id in [r['ruleId'] for r in verdict['results'] if r['state'] == 'MET']
-        if not meets:
-            paper_proposals_col.update_one({'proposalId': proposal_id, 'status': 'CREATED'},
-                                           {'$set': {'status': 'REJECTED_ON_REVALIDATION'}})
-            return {'status': 'ready', 'proposalStatus': 'REJECTED_ON_REVALIDATION',
-                    'message': 'WAIT: the exact reviewed exit condition is no longer met; no paper trade placed.'}
-    elif prop['side'] == 'BUY' and a.get('strategyId'):
-        verdict = _studio_rule_check(bound, asset, 'BUY', px, a, approval_obs)
-        if not verdict['ready']:
-            raise HTTPException(status_code=409, detail=verdict['reason'] or 'WAIT: reviewed BUY rule not met.')
-    prof = _paper_profiles.asset_profile(asset, market=(approval_obs or {}).get('execution'))
-    # Value the whole portfolio (all held assets) so sizing respects every limit.
-    marks = {}
-    for l in (a.get('lots') or []):
-        if (_paper_core.D(l.get('qty')) or Decimal('0')) > 0:
-            s = (l.get('asset') or 'BTC').upper()
-            mpx, mfresh, _t = _paper_mark(s)
-            marks[s] = (mpx, mfresh)
-    marks[asset] = (px, fresh)
-    equity_info = _paper_portfolio.compute_portfolio_equity(a, marks)
-    if prop['side'] == 'BUY':
-        _rk, _tier, _rmeta = _paper_rank_for(asset, *_paper_live_ranks())
-        cand = {'symbol': asset, 'action': 'BUY', 'score': canonical.get('score'),
-                'confidence': canonical.get('confidence'), 'rank': _rk, 'tier': _tier,
-                'recommendedDeployNowUsd': canonical.get('recommendedDeployNowUsd'),
-                'invalidationPrice': canonical.get('invalidationPrice')}
-        alloc = _paper_portfolio.allocate(acct=a, equity_info=equity_info, candidates=[cand],
-                                          regime=canonical.get('regime') or 'RANGE', marks=marks)
-        intent = next((i for i in alloc['intents'] if i['symbol'] == asset and i['action'] in ('BUY', 'ADD')), None)
-        if not intent:
-            raise HTTPException(status_code=409, detail='Gate rejected: no room to add %s now.' % asset)
-        budget = (_studio_entry_budget(bound, asset, intent['notional'], a, equity_info)
-                  if a.get('strategyId') else intent['notional'])
-        if budget is None:
-            raise HTTPException(status_code=409, detail='Reviewed weight, reserve or position limit blocks this BUY.')
-        sizing = _paper_core.ticket_buy_sizing(asset, budget, px)
-        if sizing.get('reject'):
-            raise HTTPException(status_code=409, detail='Gate rejected: %s.' % sizing['reject'])
-        if a.get('strategyId'):
-            current_acct = paper_accounts_col.find_one({'paperAccountId': a['paperAccountId'],
-                                                        'ownerId': pid, 'runtimeState': 'RUNNING',
-                                                        'strategyVersion': bound['version']})
-            if not current_acct or current_acct.get('version') != a.get('version'):
-                raise HTTPException(status_code=409, detail='Strategy or paper wallet changed; retry the review.')
-        result, err, code = _paper_core.apply_buy_atomic(
-            paper_accounts_col, a['paperAccountId'], pid, a.get('version'),
-            idem_key, proposal_id, sizing, canonical, base_currency=a.get('baseCurrency', 'USDC'),
-            asset=asset,
-            strategy_version=bound['version'] if a.get('strategyId') else None,
-            strategy_hash=bound['contractHash'] if a.get('strategyId') else None,
-            required_mode='APPROVAL_REQUIRED' if a.get('strategyId') else None)
-    else:  # SELL / EXIT of THIS asset
-        pos = next((p for p in equity_info['positions'] if p['symbol'] == asset and p['qty'] > 0), None)
-        if not pos:
-            raise HTTPException(status_code=409, detail='No open %s position to reduce.' % asset)
-        # Compute sell quantity — partial target proposals sell only a portion.
-        sell_qty = _paper_core.D(pos['qty'])
-        if prop.get('isPartialTarget'):
-            # Find the specific ticket this proposal targets.
-            _target_tid = prop.get('ticketId')
-            lot = _paper_core._ticket_by_id(a, _target_tid) if _target_tid else next(
-                (l for l in (a.get('lots') or []) if (l.get('asset') or '').upper() == asset
-                 and (_paper_core.D(l.get('qty')) or Decimal('0')) > 0), None)
-            if lot and prop.get('sizing') and prop['sizing'].get('qty'):
-                sell_qty = min(_paper_core.D(prop['sizing']['qty']), _paper_core.D(lot.get('qty')) or sell_qty)
-            elif lot:
-                raise HTTPException(status_code=409, detail='Partial target has no explicit quantity; cannot execute.')
-            else:
-                raise HTTPException(status_code=409, detail='Target ticket not found or already closed.')
-        # Direct-price fill at observed price.
-        sizing = _paper_core.ticket_sell_sizing(asset, sell_qty, px)
-        if sizing.get('reject'):
-            raise HTTPException(status_code=409, detail='Gate rejected: %s.' % sizing['reject'])
-        # Determine the ticket ID for ticket-centric sell.
-        _ticket_id = prop.get('ticketId') or (lot.get('lotId') if lot else None)
-        result, err, code = _paper_core.apply_sell_atomic(
-            paper_accounts_col, a['paperAccountId'], pid, sizing, source='approval_strategy_rule' if rule_proposal else 'approval',
-            idem_key=idem_key, proposal_id=proposal_id, canonical=canonical,
-            asset=asset,
-            strategy_version=bound['version'] if rule_proposal else None,
-            strategy_hash=bound['contractHash'] if rule_proposal else None,
-            required_mode='APPROVAL_REQUIRED' if rule_proposal else None,
-            completed_rule_id=prop.get('strategyRuleId') if rule_proposal and (prop.get('isPartialTarget') or prop.get('strategyRuleId')) else None,
-            ticket_id=_ticket_id)
-    if err:
-        raise HTTPException(status_code=code, detail='Could not execute: %s.' % err)
-    # Mirror proposal status (non-authoritative; the account doc is the source of truth).
-    paper_proposals_col.update_one({'proposalId': proposal_id, 'status': 'CREATED'},
-                                   {'$set': {'status': 'APPROVED', 'approvedAt': datetime.datetime.utcnow().isoformat()},
-                                    '$inc': {'version': 1}})
-    return {'status': 'ready', 'proposalStatus': 'APPROVED', 'fill': result}
+    paper_proposals_col.update_one({'proposalId': proposal_id}, {'$set': {'status': 'CANCELLED_BY_USER'}})
+    _paper_ledger_add(a['paperAccountId'], 'PROPOSAL_CANCELLED', 'proposal', proposal_id, None, None, 'You skipped this paper trade.')
+    return {'status': 'ready', 'proposalStatus': 'CANCELLED_BY_USER'}
 
 
 @app.post('/api/v1/albert/paper/positions/{position_id}/close')

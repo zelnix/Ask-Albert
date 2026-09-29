@@ -78,8 +78,8 @@ def capability(symbol, mandate=None, data_availability='UNVERIFIED'):
     # decision.build_decisions(strategy_symbols=...) injects requested symbols;
     # scoring.score_asset uses deps.daily_ohlcv and its own asset price.
     decisions = bool(own_data and sym in ENTRY_ASSETS)
-    # portfolio.compute_portfolio_equity + core.size_buy/size_sell and atomic
-    # apply_buy_atomic/apply_sell_atomic use the same symbol's account lot.
+    # portfolio.compute_portfolio_equity + core.ticket_buy_sizing/ticket_sell_sizing
+    # and atomic apply_buy_atomic/apply_sell_atomic use the same symbol's account lot.
     wallet = bool(decisions and sym in ENTRY_ASSETS)
     capabilities = {
         'uniqueAssetIdentity': {'implemented': unique_id, 'reasonCode': None if unique_id else 'NO_UNIQUE_ASSET_IDENTITY',

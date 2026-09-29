@@ -43,15 +43,8 @@ SUPPORTED_ENGINE_VERSIONS = {'albert-decide-v2', 'albert-decide-v3', 'albert-dec
 DECISION_TTL_MIN = 30
 PROPOSAL_TTL_MIN = 30
 
-# Conservative deterministic execution profile — SUPERSEDED.
-# Paper trading now fills at the freshly observed market price with zero fees.
-# Kept only so legacy ledger replay recognises historical fee fields.
-EXEC_PROFILE = {'executionProfileId': 'ep_conservative_v1', 'feeBps': Decimal('40'),
-                'spreadBps': Decimal('5'), 'slippageBps': Decimal('8'), 'model': 'conservative'}
-BPS = Decimal('10000')
 
-
-# ========================= direct-price fill (v2) ============================ #
+# ============================ Decimal helpers ================================ #
 def ticket_buy_sizing(asset, notional, mark_px, *, price_q=None):
     """Direct-price BUY sizing. No fee, no slippage — fill at the observed market
     price. `price_q` preserves per-asset precision (e.g. Decimal('0.000001')
@@ -172,42 +165,6 @@ def round_tick(value, tick, mode=ROUND_DOWN):
     return (v / q).to_integral_value(rounding=mode) * q
 
 
-def sim_fill(side, ref_px, notional):
-    """SUPERSEDED — legacy fee-based fill. Retained only for historical ledger
-    replay. New fills use ticket_buy_sizing / ticket_sell_sizing."""
-    ref_px = D(ref_px)
-    notional = D(notional) or Decimal('0')
-    slip = (EXEC_PROFILE['spreadBps'] + EXEC_PROFILE['slippageBps']) / BPS
-    if side == 'BUY':
-        fill_px = ref_px * (Decimal('1') + slip)
-    else:
-        fill_px = ref_px * (Decimal('1') - slip)
-    fee = (notional * EXEC_PROFILE['feeBps'] / BPS)
-    return q_price(fill_px), q_cash(fee)
-
-
-def sim_fill_p(side, ref_px, notional, profile, price_q=PRICE_Q):
-    """SUPERSEDED — legacy profile-based fill. Retained only for historical
-    ledger replay. New fills use ticket_buy_sizing / ticket_sell_sizing."""
-    ref_px = D(ref_px)
-    notional = D(notional) or Decimal('0')
-    slip = (D(profile.get('spreadBps')) + D(profile.get('slippageBps'))) / BPS
-    if side == 'BUY':
-        fill_px = ref_px * (Decimal('1') + slip)
-    else:
-        fill_px = ref_px * (Decimal('1') - slip)
-    fee = (notional * D(profile.get('feeBps')) / BPS)
-    return round_tick(fill_px, price_q, ROUND_HALF_UP), q_cash(fee)
-
-
-def size_buy(asset, notional, mark_px, *, profile=None, price_q=PRICE_Q):
-    """SUPERSEDED — delegates to ticket_buy_sizing (direct price, zero fee)."""
-    return ticket_buy_sizing(asset, notional, mark_px, price_q=price_q)
-
-
-def size_sell(asset, qty, mark_px, *, profile=None, price_q=PRICE_Q):
-    """SUPERSEDED — delegates to ticket_sell_sizing (direct price, zero fee)."""
-    return ticket_sell_sizing(asset, qty, mark_px, price_q=price_q)
 
 
 # ============================ account state ================================== #
@@ -322,7 +279,7 @@ def _rej(code, msg, trace):
 
 
 def run_entry_gates(*, acct, canonical, mark_px, mark_fresh, mandate, equity_info,
-                    has_open_intent=False, profile=None):
+                    has_open_intent=False):
     """Ordered mandate + risk gates for a paper BUY. Returns a dict with either
     'reject' set (with the failing gate in 'trace') or a sizing result. Sizing can
     only REDUCE the canonical amount."""
@@ -415,17 +372,13 @@ def run_entry_gates(*, acct, canonical, mark_px, mark_fresh, mandate, equity_inf
     notional = q_cash(notional)
     if not g('min_notional', notional is not None and notional >= MIN_NOTIONAL, 'notional=%s' % notional):
         return _rej('BELOW_MIN_NOTIONAL', 'Sized notional is below the minimum.', trace)
-    if profile is not None:
-        sized = size_buy('BTC', notional, mark_px, profile=profile, price_q=profile['priceQ'])
-        sized['trace'] = trace
-        return sized
-    # Direct-price fill (legacy path also uses zero-fee model now).
+    # Direct-price fill (zero-fee model).
     sized = ticket_buy_sizing('BTC', notional, mark_px)
     sized['trace'] = trace
     return sized
 
 
-def run_exit_gates(*, acct, mark_px, mark_fresh, canonical=None, full=False, profile=None):
+def run_exit_gates(*, acct, mark_px, mark_fresh, canonical=None, full=False):
     """Reduce-only paper SELL. `full`=True is a safe user-initiated exit that does
     not require a canonical SELL; otherwise a canonical SELL decision drives it."""
     trace = []
@@ -456,11 +409,7 @@ def run_exit_gates(*, acct, mark_px, mark_fresh, canonical=None, full=False, pro
     if not g('positive_qty', sell_qty is not None and sell_qty > 0):
         return _rej('BELOW_MIN_NOTIONAL', 'Nothing to sell.', trace)
     gross = sell_qty * mark_px
-    if profile is not None:
-        sized = size_sell('BTC', sell_qty, mark_px, profile=profile, price_q=profile['priceQ'])
-        sized['trace'] = trace
-        return sized
-    # Direct-price fill (legacy path also uses zero-fee model now).
+    # Direct-price fill (zero-fee model).
     sized = ticket_sell_sizing('BTC', sell_qty, mark_px)
     sized['trace'] = trace
     return sized
@@ -679,7 +628,7 @@ def apply_buy_atomic(col, acct_id, pid, expected_version, idem_key, proposal_id,
                        'idemKeys': {'$each': [idem_key], '$slice': -500},
                        'consumedProposals': {'$each': [proposal_id], '$slice': -500},
                        'appliedApprovals': {'$each': [applied], '$slice': -200}},
-             '$inc': {'version': 1, 'accountSequence': 1, 'goalStatus.tradeCount': 1}})
+             '$inc': {'version': 1, 'accountSequence': 1}})
         if upd is not None:
             return result, None, 200
     return None, 'CONCURRENCY_RETRY_EXHAUSTED', 409
@@ -780,7 +729,11 @@ def apply_sell_atomic(col, acct_id, pid, sizing, source='approval', idem_key=Non
             if proposal_id:
                 push['consumedProposals'] = {'$each': [proposal_id], '$slice': -500}
                 flt['consumedProposals'] = {'$ne': proposal_id}
-        upd = col.find_one_and_update(flt, {'$set': setd, '$push': push, '$inc': {'version': 1, 'accountSequence': 1}})
+        inc = {'version': 1, 'accountSequence': 1}
+        if remaining <= 0:
+            # Full close — this completes one trade for portfolio goal counting.
+            inc['goalStatus.tradeCount'] = 1
+        upd = col.find_one_and_update(flt, {'$set': setd, '$push': push, '$inc': inc})
         if upd is not None:
             return result, None, 200
     return None, 'CONCURRENCY_RETRY_EXHAUSTED', 409
