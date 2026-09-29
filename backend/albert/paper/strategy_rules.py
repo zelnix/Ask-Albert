@@ -195,12 +195,44 @@ def requested_triggers(text, assets):
                 sym = symbols[0]
                 expanded_multi = True
 
+        # Short coin-agnostic fragment: when the clause is just a bare percentage
+        # exit (e.g. "take-profit 8%") with no coin names, no scope phrase, and no
+        # additional instructions, expand it to all strategy symbols. This handles
+        # LLM-fragmented unresolved instructions that are actually valid.
+        if raw and not sym and not named and symbols and not expanded_multi:
+            expandable_kinds = {'STOP_LOSS_PCT', 'TAKE_PROFIT_PCT', 'TRAILING_STOP_PCT',
+                                'PARTIAL_TAKE_PROFIT_PCT'}
+            residual_check = clause
+            for start, end in covered:
+                residual_check = residual_check[:start] + ' ' * (end - start) + residual_check[end:]
+            residual_words = re.sub(r'[^A-Za-z]+', ' ', residual_check).strip().split()
+            # Only expand when the residual is empty or contains only trivial words
+            trivial = {'', 'and', 'or', 'with', 'per', 'position', 'positions', 'target',
+                       'targets', 'strict', 'limit', 'limits', 'the', 'a', 'an', 'of', 'at'}
+            if (all(r['kind'] in expandable_kinds for r in raw) and
+                    all(w.lower() in trivial for w in residual_words)):
+                expanded = []
+                for r in raw:
+                    for s in symbols:
+                        expanded.append({**r, 'symbol': s})
+                raw = expanded
+                sym = symbols[0]
+                expanded_multi = True
+
         # A bare condition, unsupported indicator or narrative-gated action must not
         # quietly become the canonical preset. Explicit advisory discussion is fine.
         residual = list(clause)
         for start, end in covered:
             residual[start:end] = ' ' * (end - start)
         remaining = ''.join(residual)
+        # Strip exclusion/negation phrases that are NOT trading conditions:
+        # "no other assets or conditions", "nothing else", "no additional", etc.
+        # These are plain English constraints, not OR-logic branching.
+        remaining_for_or = re.sub(
+            r'\bno\s+(?:other|additional|further|more)\b[^.;!?\n]{0,60}?\bor\b[^.;!?\n]{0,40}',
+            ' ', remaining, flags=re.I)
+        remaining_for_or = re.sub(r'\bnothing\s+(?:else|more|further)\b', ' ', remaining_for_or, flags=re.I)
+        remaining_for_or = re.sub(r'\bwithout\s+(?:any\s+)?(?:other|additional)\b', ' ', remaining_for_or, flags=re.I)
         # A clause containing a parsed condition must not hide another operation
         # behind "and", "or" or free-form prose. Put separate allocations or
         # advisory context into their own clause so omissions are visible.
@@ -210,10 +242,10 @@ def requested_triggers(text, assets):
         uncaptured = re.sub(r'\b(?:buy|sell|enter|exit|close|trade|if|when|unless|after|before|and|for|the|a|an|of|my|please|only|at|price|is|by|to|coin|asset|on|daily|close|indicator)\b', ' ', uncaptured, flags=re.I)
         # Also strip common descriptive/summary words that are not actionable
         # triggers to avoid flagging strategy descriptions as unsupported instructions.
-        uncaptured = re.sub(r'\b(?:strategy|paper|virtual|allocating|allocated|allocation|strict|limits?|per|with|its|this|from|entry|reserves?|protected|starting|cash|wallet|balance|budget|named|called|positions?|targets?|implements?|trading|across|all|every|each)\b', ' ', uncaptured, flags=re.I)
+        uncaptured = re.sub(r'\b(?:strategy|paper|virtual|allocating|allocated|allocation|strict|limits?|per|with|its|this|from|entry|reserves?|protected|starting|cash|wallet|balance|budget|named|called|positions?|targets?|implements?|trading|across|all|every|each|no|other|additional|further|nothing|else|more|without|any|conditions?|assets?|implement)\b', ' ', uncaptured, flags=re.I)
         extra_instruction = bool(raw and re.search(r'[A-Za-z]{2,}|[<>%]|\$\s*\d', uncaptured))
         unknown_trigger = bool(extra_instruction or re.search(r'\b(?:trail(?:ing)?|stop[ -]?loss|take[ -]?profit|profit\s+target|RSI|SMA|EMA|MACD|indicator|pullback|breakout|cross(?:over)?|limit\s+order|rebalance|short|leverage)\b', remaining, re.I)
-                               or (raw and re.search(r'\bor\b', remaining, re.I))
+                               or (raw and re.search(r'\bor\b', remaining_for_or, re.I))
                                or re.search(r'\bprice\s+(?:above|below|over|under)\b', remaining, re.I))
         expects = bool(unknown_trigger
                        or re.search(r'\b(?:buy|sell|enter|exit|trade)\b.{0,70}\b(?:if|when|unless|after|before|at\s+\$)\b', clause, re.I)
@@ -225,7 +257,7 @@ def requested_triggers(text, assets):
         # for unknown_trigger (not real unrecognised trigger keywords or OR logic).
         if expanded_multi and raw:
             real_trigger_keyword = bool(re.search(r'\b(?:pullback|breakout|cross(?:over)?|limit\s+order|rebalance|short|leverage)\b', remaining, re.I))
-            real_or_logic = bool(re.search(r'\bor\b', remaining, re.I))
+            real_or_logic = bool(re.search(r'\bor\b', remaining_for_or, re.I))
             if not real_trigger_keyword and not real_or_logic:
                 unknown_trigger = False
                 extra_instruction = False

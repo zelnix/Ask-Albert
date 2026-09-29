@@ -95,7 +95,13 @@ def build_decisions(pid, summary_override=None, strategy_symbols=None):
     # Evaluate this saved paper strategy's exact legs through the SAME canonical
     # engine. Do not globally scan 57 price feeds or insert/reweight other coins.
     extra = [str(s).upper() for s in (strategy_symbols or []) if str(s).upper() not in STABLES]
-    universe = list(dict.fromkeys([*universe_mod.discovery_universe(held.keys()), *extra]))
+    if extra:
+        # Strategy-specific account: score ONLY the strategy's coins + any held
+        # positions. Avoids 50+ price-feed fetches that cause worker timeouts.
+        universe = list(dict.fromkeys([*held.keys(), *extra]))
+    else:
+        # Legacy / read-only account: full discovery universe.
+        universe = list(dict.fromkeys([*universe_mod.discovery_universe(held.keys()), *extra]))
     universe = [s for s in universe if s not in STABLES]
     decisions = []
     for sym in universe:

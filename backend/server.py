@@ -13805,6 +13805,38 @@ def studio_set_approval_mode(sid: str, payload: dict = Body(default={}),
     return _studio_idem(pid, key, result)
 
 
+
+def _filter_strategy_activity(activity, strat):
+    """Filter activity (ledger) entries to those relevant to the strategy's own
+    coins. Non-decision events (ACCOUNT_OPENED, MODE_CHANGED, etc.) are always
+    kept. OBSERVED/PROPOSAL events are filtered to the strategy's asset symbols."""
+    strat_syms = _strategy_syms(strat) or set()
+    if not strat_syms:
+        return activity  # no filter needed
+    strat_syms_lower = {s.lower() for s in strat_syms}
+    filtered = []
+    # Entity types that are always relevant (account-level, not coin-specific).
+    always_keep = {'ACCOUNT_OPENED', 'MODE_CHANGED', 'AUTO_DISABLED', 'RISK_BREAKER',
+                   'PROPOSAL_CREATED', 'PROPOSAL_SUPERSEDED', 'PROPOSAL_CANCELLED',
+                   'PROPOSAL_REVALIDATION_FAILED'}
+    for entry in activity:
+        et = entry.get('eventType', '')
+        if et in always_keep:
+            filtered.append(entry)
+            continue
+        # For OBSERVED/decision entries, check if the note mentions a strategy coin.
+        note = str(entry.get('note') or '').lower()
+        entity_id = str(entry.get('entityId') or '').lower()
+        if any(s in note or s in entity_id for s in strat_syms_lower):
+            filtered.append(entry)
+            continue
+        # If the entity_id doesn't match any strategy coin, skip it.
+        # But keep entries with no entity_id (generic events).
+        if not entry.get('entityId'):
+            filtered.append(entry)
+    return filtered
+
+
 @app.get('/api/v1/albert/studio/strategies/{sid}/paper')
 def studio_strategy_paper(sid: str, user: dict = Depends(get_current_user)):
     """Everything the strategy card needs: status, trade approval, activity and
@@ -13840,7 +13872,7 @@ def studio_strategy_paper(sid: str, user: dict = Depends(get_current_user)):
             'positions': d.get('positions') or [],
             'pendingApprovals': d.get('pendingProposals') or [],
             'proposalHistory': proposal_history,
-            'activity': d.get('recentActivity') or [],
+            'activity': _filter_strategy_activity(d.get('recentActivity') or [], doc),
             'integrity': d.get('integrity') or {},
             'marketData': (d.get('integrity') or {}).get('marketData'),
             'dashboard': d}
