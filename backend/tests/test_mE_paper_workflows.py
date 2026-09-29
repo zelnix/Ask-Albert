@@ -78,7 +78,7 @@ class _Patch:
         self._orig['dec'] = server._paper_canonical_decisions
         self._orig['mark'] = server._paper_mark
         self._orig['alloc'] = server._paper_portfolio.allocate
-        self._orig['size'] = server._paper_core.size_buy
+        self._orig['size'] = server._paper_core.ticket_buy_sizing
         oid = self.obs_id
         server._paper_canonical_decisions = lambda pid, account=None: list(self.decisions)
         server._paper_mark = lambda sym: (Decimal('100'), True, {'obsId': f'{sym}:{oid}'})
@@ -88,17 +88,17 @@ class _Patch:
                                  'boundBy': 'test'} for c in (candidates or []) if c['action'] == 'BUY']}
         server._paper_portfolio.allocate = _alloc
 
-        def _size(sym, notional, px, profile=None, price_q=None):
+        def _size(sym, notional, px, price_q=None):
             return {'notional': Decimal('1000'), 'qty': Decimal('10'), 'fillPx': Decimal('100'),
-                    'fee': Decimal('1'), 'trace': [{'gate': 'size', 'ok': True}]}
-        server._paper_core.size_buy = _size
+                    'fee': Decimal('0'), 'trace': [{'gate': 'size', 'ok': True}]}
+        server._paper_core.ticket_buy_sizing = _size
         return self
 
     def __exit__(self, *a):
         server._paper_canonical_decisions = self._orig['dec']
         server._paper_mark = self._orig['mark']
         server._paper_portfolio.allocate = self._orig['alloc']
-        server._paper_core.size_buy = self._orig['size']
+        server._paper_core.ticket_buy_sizing = self._orig['size']
 
 
 def test_units_strategy_binding_and_sds_immutability():

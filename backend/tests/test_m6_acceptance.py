@@ -181,7 +181,7 @@ def test_full_acceptance_sequence(monkeypatch):
     eth_lot = next(l for l in a2['lots'] if l['asset'] == 'ETH')
     px, fresh, _o = server._paper_mark('ETH')
     prof = server._paper_profiles.asset_profile('ETH')
-    sizing = core.size_sell('ETH', core.D(eth_lot['qty']), px, profile=prof, price_q=prof['priceQ'])
+    sizing = core.ticket_sell_sizing('ETH', core.D(eth_lot['qty']), px)
     res, err, code = core.apply_sell_atomic(PA, aid, pid, sizing, source='manual_close',
                                             idem_key='close_eth_' + eth_lot['lotId'], asset='ETH')
     assert err is None and res['asset'] == 'ETH'

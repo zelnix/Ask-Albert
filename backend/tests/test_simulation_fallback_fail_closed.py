@@ -301,16 +301,16 @@ def test_paper_mark_returns_none_when_observation_missing_assetid():
         server._market_observation = original_market_observation
 
 
-def test_paper_size_buy_rejects_when_mark_none():
-    """Test that size_buy rejects when mark_px is None."""
+def test_paper_ticket_buy_sizing_rejects_when_mark_none():
+    """Test that ticket_buy_sizing rejects when mark_px is None."""
     profile = paper_profiles.asset_profile('BTC', rank=1, mark_price=50000.0)
     
     # Test with None mark
-    sizing = paper_core.size_buy('BTC', notional=1000.0, mark_px=None, profile=profile, price_q=profile['priceQ'])
+    sizing = paper_core.ticket_buy_sizing('BTC', notional=1000.0, mark_px=None)
     
     assert sizing['reject'] == 'NO_VALID_MARK', f"Should reject None mark: {sizing['reject']}"
     assert 'trace' in sizing, "Should have trace"
-    print(f"✓ size_buy rejects when mark_px is None: {sizing['reject']}")
+    print(f"✓ ticket_buy_sizing rejects when mark_px is None: {sizing['reject']}")
 
 
 def test_paper_apply_buy_not_called_when_sizing_rejected():
@@ -362,12 +362,12 @@ def test_paper_apply_buy_not_called_when_sizing_rejected():
 def test_paper_exit_rejects_missing_price():
     """Test that exit rejects when mark price is missing."""
     # Test with None mark
-    sizing_none = paper_core.size_sell('BTC', qty=0.5, mark_px=None)
+    sizing_none = paper_core.ticket_sell_sizing('BTC', qty=0.5, mark_px=None)
     assert sizing_none['reject'] == 'INVALID_EXIT_PRICE'
     print(f"✓ Exit rejects None mark: {sizing_none['reject']}")
     
     # Test with zero mark
-    sizing_zero = paper_core.size_sell('BTC', qty=0.5, mark_px=0.0)
+    sizing_zero = paper_core.ticket_sell_sizing('BTC', qty=0.5, mark_px=0.0)
     assert sizing_zero['reject'] == 'INVALID_EXIT_PRICE'
     print(f"✓ Exit rejects zero mark: {sizing_zero['reject']}")
 
@@ -413,9 +413,9 @@ def test_paper_exit_succeeds_with_valid_id_bound_coingecko_mark():
         assert obs['source'] == 'coingecko'
         print(f"✓ _paper_mark returns valid ID-bound CoinGecko mark: ${price}")
         
-        # Test size_sell succeeds
+        # Test ticket_sell_sizing succeeds
         profile = paper_profiles.asset_profile('BTC', rank=1, mark_price=float(price))
-        sizing = paper_core.size_sell('BTC', qty=0.5, mark_px=float(price), profile=profile, price_q=profile['priceQ'])
+        sizing = paper_core.ticket_sell_sizing('BTC', qty=0.5, mark_px=float(price))
         
         assert sizing['reject'] is None, f"Should not reject valid exit: {sizing['reject']}"
         assert sizing['side'] == 'SELL'
@@ -567,7 +567,7 @@ if __name__ == '__main__':
     print("=" * 80)
     test_paper_mark_returns_none_when_observation_not_fresh()
     test_paper_mark_returns_none_when_observation_missing_assetid()
-    test_paper_size_buy_rejects_when_mark_none()
+    test_paper_ticket_buy_sizing_rejects_when_mark_none()
     test_paper_apply_buy_not_called_when_sizing_rejected()
     
     print("\n" + "=" * 80)

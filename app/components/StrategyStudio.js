@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
   Crosshair, Plus, Loader2, Sparkles, ShieldCheck, ChevronDown, Play, Square, Archive,
-  FlaskConical, CheckCircle2, AlertTriangle, ArrowRight, X, HandCoins, Bot, XCircle, Info,
+  FlaskConical, CheckCircle2, AlertTriangle, ArrowRight, X, Bot, Info,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -160,11 +160,6 @@ const PAPER_STATUS = {
 };
 const ps = (s) => PAPER_STATUS[s] || PAPER_STATUS.SAVED;
 
-// Trade approval — the ONLY two ways a live strategy can behave. "Observe" is gone.
-const APPROVALS = [
-  { id: 'REVIEW', label: 'Review and approve', desc: 'Every proposed simulated BUY or SELL, including reviewed protective exits, waits for your approval. Manual close remains your choice.', Icon: HandCoins },
-  { id: 'AUTOPILOT', label: 'Autopilot', desc: 'Albert records virtual fills after the reviewed rules and risk gates pass; no exchange orders.', Icon: Bot },
-];
 
 function PaperBadge() {
   return <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-300"><FlaskConical className="h-3 w-3" />Paper only</span>;
@@ -358,7 +353,7 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
           </div>
           <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-[12px] text-slate-300">
             <p className="font-semibold text-white">Executable strategy rules · checked every paper cycle</p>
-            <p className="mt-1">BUY: all of that coin’s triggers and canonical BUY must pass. SELL: any reviewed exit trigger may reduce that coin’s holding. Missing indicator or price data means WAIT, not a substitute. Review always asks before a proposed trade; Autopilot uses only your approved strategy.</p>
+            <p className="mt-1">BUY: all of that coin’s triggers and canonical BUY must pass. SELL: any reviewed exit trigger may reduce that coin’s holding. Missing indicator or price data means WAIT, not a substitute. Autopilot uses only your reviewed strategy rules.</p>
             <label className="mt-2 block text-slate-400">Maximum open positions
               <input type="number" min="1" max="8" value={draft.riskLimits?.maxPositions ?? draft.assets?.length ?? 1}
                 onChange={(e) => updateDraft({ ...draft, riskLimits: { ...(draft.riskLimits || {}), maxPositions: Number(e.target.value) } })}
@@ -471,7 +466,7 @@ function Methodology({ bt, contractHash }) {
    -------------------------------------------------------------------
    Build -> save -> start paper trading. No separate setup, no Observe
    mode, no account picker: the strategy owns its own paper wallet and
-   its own Status, Trade approval, Activity and Performance.
+   its own Status, Activity and Performance.
    =================================================================== */
 function PaperPanel({ sid, name, onChange }) {
   const [p, setP] = useState(null);
@@ -479,10 +474,7 @@ function PaperPanel({ sid, name, onChange }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [msg, setMsg] = useState(null);
-  const [choice, setChoice] = useState('REVIEW');   // default: Review and approve
   const [arming, setArming] = useState(false);
-  const [pending, setPending] = useState({});
-  const keysRef = React.useRef({});
 
   const load = useCallback(async () => {
     setLoadError('');
@@ -491,7 +483,6 @@ function PaperPanel({ sid, name, onChange }) {
         (data) => data.strategyId === sid && typeof data.paperStatus === 'string'
           && typeof data.canStart === 'boolean');
       setP(j);
-      if (j.approvalMode) setChoice(j.approvalMode);
     } catch (error) {
       setP(null);
       setLoadError(readError('Paper trading status', error));
@@ -518,49 +509,6 @@ function PaperPanel({ sid, name, onChange }) {
     finally { setBusy(false); setArming(false); }
   };
 
-  const keyFor = (id) => {
-    if (!keysRef.current[id]) {
-      keysRef.current[id] = (typeof crypto !== 'undefined' && crypto.randomUUID)
-        ? crypto.randomUUID() : 'idem_' + Date.now() + Math.random().toString(36).slice(2);
-    }
-    return keysRef.current[id];
-  };
-
-  // Approval sends ONLY the contract fields — never quantity/price/targets. One
-  // idempotency key per action, reused on retry, so a double-tap can't double-fill.
-  const approve = async (pr) => {
-    if (pending[pr.proposalId]) return;
-    setPending((s) => ({ ...s, [pr.proposalId]: true })); setMsg(null);
-    let keep = true;
-    try {
-      const r = await post(`/v1/albert/paper/proposals/${pr.proposalId}/approve`, {
-        expectedProposalVersion: pr.version ?? 0,
-        decisionSnapshotId: pr.decisionSnapshotId, idempotencyKey: keyFor(pr.proposalId),
-      });
-      if (r.status === 503) setMsg({ t: 'info', m: 'Paper execution is temporarily switched off. No real money is affected.' });
-      else if (r.status === 401) setMsg({ t: 'err', m: 'Your session expired — please sign in again.' });
-      else if (r.status === 404) { setMsg({ t: 'err', m: 'That proposal is no longer available.' }); keep = false; }
-      else if (r.status === 409) { setMsg({ t: 'warn', m: 'That proposal expired or changed — Albert will surface a fresh one.' }); keep = false; }
-      else if (r.ok) {
-        const j = await r.json().catch(() => ({}));
-        if (j.proposalStatus === 'REJECTED_ON_REVALIDATION') { setMsg({ t: 'warn', m: 'The decision changed on a fresh check — no paper trade was placed.' }); keep = false; }
-        else { setMsg({ t: 'ok', m: 'Paper trade approved and simulated. No real money was involved.' }); keep = false; }
-      } else setMsg({ t: 'err', m: 'Something went wrong — please retry.' });
-    } catch (e) { setMsg({ t: 'err', m: 'Network error — you can safely retry; it won’t double-fill.' }); }
-    if (!keep) delete keysRef.current[pr.proposalId];
-    await load();
-    setPending((s) => { const n = { ...s }; delete n[pr.proposalId]; return n; });
-  };
-
-  const skip = async (pr) => {
-    if (pending[pr.proposalId]) return;
-    setPending((s) => ({ ...s, [pr.proposalId]: true }));
-    try { await post(`/v1/albert/paper/proposals/${pr.proposalId}/cancel`, {}); } catch (e) { /* noop */ }
-    delete keysRef.current[pr.proposalId];
-    await load();
-    setPending((s) => { const n = { ...s }; delete n[pr.proposalId]; return n; });
-  };
-
   const closePos = async (posId) => {
     setBusy(true);
     try { await post(`/v1/albert/paper/positions/${posId}/close`, { confirm: true, idempotencyKey: idem() }); } catch (e) { /* noop */ }
@@ -585,7 +533,6 @@ function PaperPanel({ sid, name, onChange }) {
   const perf = p.performance || {};
   const live = ['LIVE', 'WAIT'].includes(p.paperStatus);
   const runningButUnavailable = ['UNAVAILABLE', 'NEEDS_CHANGES', 'RESTRICTED_IN_WALLET'].includes(p.paperStatus);
-  const approvals = p.pendingApprovals || [];
   const positions = p.positions || [];
   const activity = p.activity || [];
   const proposalHistory = p.proposalHistory || [];
@@ -619,43 +566,19 @@ function PaperPanel({ sid, name, onChange }) {
           ) : (
             arming ? (
               <>
-                <Button size="sm" disabled={busy || !p.canStart || !!p.modeBlockers?.[choice]} onClick={() => cmd('start-paper', { approvalMode: choice })} className="h-7 gap-1 bg-emerald-600 px-2.5 text-[12px] hover:bg-emerald-500">
+                <Button size="sm" disabled={busy || !p.canStart} onClick={() => cmd('start-paper', { approvalMode: 'AUTOPILOT' })} className="h-7 gap-1 bg-emerald-600 px-2.5 text-[12px] hover:bg-emerald-500">
                   {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
-                  Confirm start · {choice === 'AUTOPILOT' ? 'Autopilot' : 'Review and approve'}
+                  Confirm start · Autopilot
                 </Button>
                 <button onClick={() => setArming(false)} className="rounded p-1 text-slate-400 hover:text-white"><X className="h-3.5 w-3.5" /></button>
               </>
             ) : (
-              <Button size="sm" disabled={p.paperStatus === 'ARCHIVED' || !p.canStart || !!p.modeBlockers?.[choice]} onClick={() => setArming(true)} className="h-7 gap-1 bg-emerald-600 px-2.5 text-[12px] hover:bg-emerald-500">
+              <Button size="sm" disabled={p.paperStatus === 'ARCHIVED' || !p.canStart} onClick={() => setArming(true)} className="h-7 gap-1 bg-emerald-600 px-2.5 text-[12px] hover:bg-emerald-500">
                 <Play className="h-3.5 w-3.5" />{p.paperStatus === 'STOPPED' ? 'Resume paper trading' : 'Start paper trading'}
               </Button>
             )
           )}
         </div>
-      </div>
-
-      {/* ---- Trade approval ---- */}
-      <div>
-        <p className="mb-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-500">Trade approval</p>
-        <div className="grid gap-2 sm:grid-cols-2">
-          {APPROVALS.map((a) => {
-            const on = (live || runningButUnavailable) ? p.approvalMode === a.id : choice === a.id;
-            return (
-              <button key={a.id} disabled={busy || !!p.modeBlockers?.[a.id] || (p.paperStatus === 'NEEDS_CHANGES' && (p.entryBlockers || []).length > 0)}
-                onClick={() => ((live || runningButUnavailable) ? cmd('approval-mode', { approvalMode: a.id }) : setChoice(a.id))}
-                className={`rounded-xl border p-2.5 text-left transition-colors ${on ? 'border-sky-500/50 bg-sky-500/10' : 'border-slate-800 bg-slate-950/50 hover:border-slate-600'} disabled:opacity-60`}>
-                <span className="flex items-center gap-1.5">
-                  <a.Icon className={`h-3.5 w-3.5 ${on ? 'text-sky-300' : 'text-slate-400'}`} />
-                  <span className={`text-[12px] font-bold ${on ? 'text-sky-200' : 'text-slate-200'}`}>{a.label}</span>
-                  {on && <CheckCircle2 className="ml-auto h-3.5 w-3.5 text-sky-300" />}
-                </span>
-                <span className="mt-0.5 block text-[10.5px] leading-snug text-slate-500">{a.desc}</span>
-              </button>
-            );
-          })}
-        </div>
-        {!p.approvalMode && <p className="mt-1 text-[10.5px] text-slate-500">Pick how hands-on you want to be, then start. You can change this at any time.</p>}
-        {p.modeBlockers?.[choice] && <p role="status" className="mt-1 text-[11px] text-amber-300">{p.modeBlockers[choice]}</p>}
       </div>
 
       {(p.saveErrors || []).length > 0 && (
@@ -781,25 +704,6 @@ function PaperPanel({ sid, name, onChange }) {
           <p className="mt-1.5 text-[10.5px] text-slate-500">This strategy trades its own ring-fenced {usd(perf.startingCash)} of virtual cash, so its results are never mixed with your other strategies.</p>
         </div>
       )}
-
-      {/* ---- Waiting for your approval ---- */}
-      {approvals.map((pr) => (
-        <div key={pr.proposalId} className="rounded-xl border border-sky-500/30 bg-sky-500/[0.06] p-3">
-          <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-sky-300"><HandCoins className="h-3.5 w-3.5" />Needs your approval</p>
-          <p className="mt-0.5 text-[14px] font-bold text-white">{pr.side} {pr.asset} · {usd(pr.notionalValue)}</p>
-          <p className="text-[11.5px] text-slate-400">Ref {usd(pr.referencePrice)} · est. fees {usd(pr.estimatedFees)}{pr.invalidationPrice ? ` · invalidation ${usd(pr.invalidationPrice)}` : ''}</p>
-          {pr.reason && <p className="mt-1 text-[12px] leading-relaxed text-slate-300">{pr.reason}</p>}
-          {(pr.typedRuleResults || []).map((rule) => <p key={rule.ruleId} className="text-[11px] text-sky-200">{rule.kind}: {rule.state}{rule.observed != null ? ` · observed ${rule.observed} vs ${rule.threshold}` : ''}</p>)}
-          <div className="mt-2 flex gap-2">
-            <Button size="sm" disabled={!!pending[pr.proposalId]} onClick={() => approve(pr)} className="h-7 gap-1 bg-emerald-600 px-2.5 text-[12px] hover:bg-emerald-500">
-              {pending[pr.proposalId] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}Approve
-            </Button>
-            <Button size="sm" variant="outline" disabled={!!pending[pr.proposalId]} onClick={() => skip(pr)} className="h-7 gap-1 border-slate-700 px-2.5 text-[12px] text-slate-300">
-              <XCircle className="h-3.5 w-3.5" />Skip
-            </Button>
-          </div>
-        </div>
-      ))}
 
       {/* ---- Positions ---- */}
       {positions.length > 0 && (
@@ -1087,7 +991,7 @@ export default function StrategyStudio({ chatGoal = '', chatDraftKey = null, cha
                 </div>
                 <p className="mt-1 truncate text-[12px] text-slate-500">
                   {(s.contract?.assets || []).map((a) => a.symbol).join(' · ')} · v{s.version}
-                  {s.approvalMode ? ` · ${s.approvalMode === 'AUTOPILOT' ? 'Autopilot' : 'Review and approve'}` : ''}
+                  {s.approvalMode ? ` · ${s.approvalMode === 'AUTOPILOT' ? 'Autopilot' : s.approvalMode}` : ''}
                 </p>
               </button>
             );

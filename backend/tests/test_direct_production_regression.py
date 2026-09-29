@@ -3,7 +3,7 @@
 Tests ACTUAL importable production code with DIRECT calls:
 1. market_adapter.history_coverage + _valid_closed with real data
 2. engine.scoring.score_asset with patched deps
-3. paper.core.size_buy and size_sell with real profiles
+3. paper.core.ticket_buy_sizing and ticket_sell_sizing with real profiles
 4. server._studio_backtest with monkeypatched data
 5. server handlers with fake collections (if safely importable)
 
@@ -300,11 +300,11 @@ def test_scoring_score_asset_missing_data():
 
 
 # ============================================================================
-# TEST 5: paper.core.size_buy and size_sell with real profiles
+# TEST 5: paper.core.ticket_buy_sizing and ticket_sell_sizing with real profiles
 # ============================================================================
-def test_paper_core_size_buy_with_verified_profile():
-    """Test size_buy with real asset_profile (verified market)."""
-    print("\n=== TEST 5A: paper.core.size_buy (verified profile) ===")
+def test_paper_core_ticket_buy_sizing_with_verified_profile():
+    """Test ticket_buy_sizing with real asset_profile (verified market)."""
+    print("\n=== TEST 5A: paper.core.ticket_buy_sizing (verified profile) ===")
     
     # Create a verified market profile for BTC
     market = {
@@ -320,10 +320,10 @@ def test_paper_core_size_buy_with_verified_profile():
     
     print(f"✓ Created verified profile: {profile['model']}, executionVerified={profile['executionVerified']}")
     
-    # Test size_buy with $1000 notional
-    result = paper_core.size_buy('BTC', Decimal('1000'), Decimal('50000'), profile=profile, price_q=profile['priceQ'])
+    # Test ticket_buy_sizing with $1000 notional
+    result = paper_core.ticket_buy_sizing('BTC', Decimal('1000'), Decimal('50000'))
     
-    print(f"✓ size_buy called successfully")
+    print(f"✓ ticket_buy_sizing called successfully")
     print(f"  reject: {result['reject']}")
     print(f"  side: {result.get('side')}")
     print(f"  notional: {result.get('notional')}")
@@ -337,12 +337,12 @@ def test_paper_core_size_buy_with_verified_profile():
     assert result['notional'] == Decimal('1000'), f"Expected notional=1000, got {result['notional']}"
     assert result['qty'] > 0, f"Expected positive qty, got {result['qty']}"
     
-    print("✅ PASS: size_buy with verified profile returns valid sizing")
+    print("✅ PASS: ticket_buy_sizing with verified profile returns valid sizing")
 
 
-def test_paper_core_size_buy_below_min_notional():
-    """Test size_buy rejects below minimum notional."""
-    print("\n=== TEST 5B: paper.core.size_buy (below min notional) ===")
+def test_paper_core_ticket_buy_sizing_below_min_notional():
+    """Test ticket_buy_sizing rejects below minimum notional."""
+    print("\n=== TEST 5B: paper.core.ticket_buy_sizing (below min notional) ===")
     
     market = {
         'priceQ': '0.01',
@@ -356,20 +356,20 @@ def test_paper_core_size_buy_below_min_notional():
     profile = profiles.asset_profile('BTC', market=market)
     
     # Test with $5 notional (below $10 minimum)
-    result = paper_core.size_buy('BTC', Decimal('5'), Decimal('50000'), profile=profile, price_q=profile['priceQ'])
+    result = paper_core.ticket_buy_sizing('BTC', Decimal('5'), Decimal('50000'))
     
-    print(f"✓ size_buy called with below-min notional")
+    print(f"✓ ticket_buy_sizing called with below-min notional")
     print(f"  reject: {result['reject']}")
     
     # Accept either BELOW_MIN_NOTIONAL or MINAMOUNT_NOT_MET (both indicate insufficient size)
     assert result['reject'] in ['BELOW_MIN_NOTIONAL', 'MINAMOUNT_NOT_MET'], f"Expected rejection for insufficient size, got {result['reject']}"
     
-    print("✅ PASS: size_buy rejects below minimum notional")
+    print("✅ PASS: ticket_buy_sizing rejects below minimum notional")
 
 
-def test_paper_core_size_sell_with_verified_profile():
-    """Test size_sell with real asset_profile (verified market)."""
-    print("\n=== TEST 5C: paper.core.size_sell (verified profile) ===")
+def test_paper_core_ticket_sell_sizing_with_verified_profile():
+    """Test ticket_sell_sizing with real asset_profile (verified market)."""
+    print("\n=== TEST 5C: paper.core.ticket_sell_sizing (verified profile) ===")
     
     market = {
         'priceQ': '0.01',
@@ -382,10 +382,10 @@ def test_paper_core_size_sell_with_verified_profile():
     }
     profile = profiles.asset_profile('BTC', market=market)
     
-    # Test size_sell with 0.02 BTC
-    result = paper_core.size_sell('BTC', Decimal('0.02'), Decimal('50000'), profile=profile, price_q=profile['priceQ'])
+    # Test ticket_sell_sizing with 0.02 BTC
+    result = paper_core.ticket_sell_sizing('BTC', Decimal('0.02'), Decimal('50000'))
     
-    print(f"✓ size_sell called successfully")
+    print(f"✓ ticket_sell_sizing called successfully")
     print(f"  reject: {result['reject']}")
     print(f"  side: {result.get('side')}")
     print(f"  qty: {result.get('qty')}")
@@ -397,12 +397,12 @@ def test_paper_core_size_sell_with_verified_profile():
     assert result['asset'] == 'BTC', f"Expected asset='BTC', got {result['asset']}"
     assert result['qty'] == Decimal('0.02'), f"Expected qty=0.02, got {result['qty']}"
     
-    print("✅ PASS: size_sell with verified profile returns valid sizing")
+    print("✅ PASS: ticket_sell_sizing with verified profile returns valid sizing")
 
 
-def test_paper_core_size_sell_pepe_subcent():
-    """Test size_sell with PEPE (subcent token) to verify precision."""
-    print("\n=== TEST 5D: paper.core.size_sell (PEPE subcent) ===")
+def test_paper_core_ticket_sell_sizing_pepe_subcent():
+    """Test ticket_sell_sizing with PEPE (subcent token) to verify precision."""
+    print("\n=== TEST 5D: paper.core.ticket_sell_sizing (PEPE subcent) ===")
     
     # PEPE is a SPEC tier token with subcent pricing
     # Use larger quantity to meet minCost requirement
@@ -419,10 +419,10 @@ def test_paper_core_size_sell_pepe_subcent():
     
     print(f"✓ Created PEPE profile: priceQ={profile['priceQ']}, tier={profile['tier']}")
     
-    # Test size_sell with 10,000,000 PEPE at $0.000001 each = $10 gross (meets minCost)
-    result = paper_core.size_sell('PEPE', Decimal('10000000'), Decimal('0.000001'), profile=profile, price_q=profile['priceQ'])
+    # Test ticket_sell_sizing with 10,000,000 PEPE at $0.000001 each = $10 gross (meets minCost)
+    result = paper_core.ticket_sell_sizing('PEPE', Decimal('10000000'), Decimal('0.000001'))
     
-    print(f"✓ size_sell called for PEPE")
+    print(f"✓ ticket_sell_sizing called for PEPE")
     print(f"  reject: {result['reject']}")
     print(f"  qty: {result.get('qty')}")
     print(f"  fillPx: {result.get('fillPx')}")
@@ -431,11 +431,11 @@ def test_paper_core_size_sell_pepe_subcent():
     if result['reject'] is None:
         assert result['qty'] == Decimal('10000000'), f"Expected qty=10000000, got {result['qty']}"
         assert result['fillPx'] is not None, "Expected fillPx to be set"
-        print("✅ PASS: size_sell handles PEPE subcent pricing correctly")
+        print("✅ PASS: ticket_sell_sizing handles PEPE subcent pricing correctly")
     else:
         # Rejection is valid if limits aren't met, but verify precision was handled
         print(f"  Note: Rejected with {result['reject']} (valid if limits not met)")
-        print("✅ PASS: size_sell handles PEPE subcent precision (rejected due to limits)")
+        print("✅ PASS: ticket_sell_sizing handles PEPE subcent precision (rejected due to limits)")
 
 
 # ============================================================================
@@ -526,10 +526,10 @@ if __name__ == '__main__':
         test_scoring_score_asset_with_valid_data,
         test_scoring_score_asset_insufficient_data,
         test_scoring_score_asset_missing_data,
-        test_paper_core_size_buy_with_verified_profile,
-        test_paper_core_size_buy_below_min_notional,
-        test_paper_core_size_sell_with_verified_profile,
-        test_paper_core_size_sell_pepe_subcent,
+        test_paper_core_ticket_buy_sizing_with_verified_profile,
+        test_paper_core_ticket_buy_sizing_below_min_notional,
+        test_paper_core_ticket_sell_sizing_with_verified_profile,
+        test_paper_core_ticket_sell_sizing_pepe_subcent,
         test_server_studio_backtest_complete_data,
         test_server_studio_backtest_incomplete_data,
         test_server_studio_start_paper_with_fake_collection,

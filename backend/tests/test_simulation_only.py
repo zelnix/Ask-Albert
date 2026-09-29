@@ -7,7 +7,7 @@ Key test areas:
 1. 57 frozen IDs mapping (MATIC -> POL alias)
 2. market_adapter with mocked CoinGecko
 3. scoring.score_asset with different data points (190 vs 240 days)
-4. paper trading functions (profiles, size_buy/sell, apply operations)
+4. paper trading functions (profiles, ticket_buy_sizing/sell, apply operations)
 5. server studio validation/save/start-paper/backtest
 """
 import datetime
@@ -591,12 +591,12 @@ def test_paper_asset_profile():
     print(f"✓ PEPE profile: tier={profile_pepe['tier']}, feeBps={profile_pepe['feeBps']}, liquidityScale={profile_pepe['liquidityScale']}")
 
 
-def test_paper_size_buy_fractional_small_price():
-    """Test ACTUAL paper.core.size_buy with fractional small-price qty."""
+def test_paper_ticket_buy_sizing_fractional_small_price():
+    """Test ACTUAL paper.core.ticket_buy_sizing with fractional small-price qty."""
     profile = paper_profiles.asset_profile('PEPE', rank=57, mark_price=0.00000123)
     
     # Test buy sizing
-    sizing = paper_core.size_buy('PEPE', notional=100.0, mark_px=0.00000123, profile=profile, price_q=profile['priceQ'])
+    sizing = paper_core.ticket_buy_sizing('PEPE', notional=100.0, mark_px=0.00000123)
     
     assert sizing['reject'] is None, "Should not reject valid buy"
     assert sizing['side'] == 'BUY'
@@ -608,12 +608,12 @@ def test_paper_size_buy_fractional_small_price():
     print(f"✓ PEPE buy sizing: notional=${sizing['notional']}, qty={sizing['qty']}, fillPx={sizing['fillPx']}, fee=${sizing['fee']}")
 
 
-def test_paper_size_sell():
-    """Test ACTUAL paper.core.size_sell."""
+def test_paper_ticket_sell_sizing():
+    """Test ACTUAL paper.core.ticket_sell_sizing."""
     profile = paper_profiles.asset_profile('BTC', rank=1, mark_price=50000.0)
     
     # Test sell sizing
-    sizing = paper_core.size_sell('BTC', qty=0.5, mark_px=50000.0, profile=profile, price_q=profile['priceQ'])
+    sizing = paper_core.ticket_sell_sizing('BTC', qty=0.5, mark_px=50000.0)
     
     assert sizing['reject'] is None, "Should not reject valid sell"
     assert sizing['side'] == 'SELL'
@@ -697,7 +697,7 @@ def test_paper_apply_buy_atomic_in_memory():
     
     # Create sizing
     profile = paper_profiles.asset_profile('BTC', rank=1, mark_price=50000.0)
-    sizing = paper_core.size_buy('BTC', notional=10000.0, mark_px=50000.0, profile=profile, price_q=profile['priceQ'])
+    sizing = paper_core.ticket_buy_sizing('BTC', notional=10000.0, mark_px=50000.0)
     
     # Create canonical decision
     canonical = {
@@ -809,7 +809,7 @@ def test_paper_apply_sell_atomic_in_memory():
     
     # Create sizing for partial sell
     profile = paper_profiles.asset_profile('BTC', rank=1, mark_price=52000.0)
-    sizing = paper_core.size_sell('BTC', qty=0.1, mark_px=52000.0, profile=profile, price_q=profile['priceQ'])
+    sizing = paper_core.ticket_sell_sizing('BTC', qty=0.1, mark_px=52000.0)
     
     # Apply sell
     result, error, status = paper_core.apply_sell_atomic(
@@ -836,17 +836,17 @@ def test_paper_apply_sell_atomic_in_memory():
 def test_paper_exit_with_invalid_missing_mark_rejected():
     """Test that exit with invalid/missing mark is rejected."""
     # Test with None mark
-    sizing_none = paper_core.size_sell('BTC', qty=0.5, mark_px=None)
+    sizing_none = paper_core.ticket_sell_sizing('BTC', qty=0.5, mark_px=None)
     assert sizing_none['reject'] == 'INVALID_EXIT_PRICE'
     print(f"✓ Exit with None mark rejected: {sizing_none['reject']}")
     
     # Test with zero mark
-    sizing_zero = paper_core.size_sell('BTC', qty=0.5, mark_px=0.0)
+    sizing_zero = paper_core.ticket_sell_sizing('BTC', qty=0.5, mark_px=0.0)
     assert sizing_zero['reject'] == 'INVALID_EXIT_PRICE'
     print(f"✓ Exit with zero mark rejected: {sizing_zero['reject']}")
     
     # Test with negative mark
-    sizing_neg = paper_core.size_sell('BTC', qty=0.5, mark_px=-100.0)
+    sizing_neg = paper_core.ticket_sell_sizing('BTC', qty=0.5, mark_px=-100.0)
     assert sizing_neg['reject'] == 'INVALID_EXIT_PRICE'
     print(f"✓ Exit with negative mark rejected: {sizing_neg['reject']}")
 
@@ -1050,8 +1050,8 @@ if __name__ == '__main__':
     print("TEST 4: paper trading functions")
     print("=" * 80)
     test_paper_asset_profile()
-    test_paper_size_buy_fractional_small_price()
-    test_paper_size_sell()
+    test_paper_ticket_buy_sizing_fractional_small_price()
+    test_paper_ticket_sell_sizing()
     test_paper_apply_buy_atomic_in_memory()
     test_paper_apply_sell_atomic_in_memory()
     test_paper_exit_with_invalid_missing_mark_rejected()
