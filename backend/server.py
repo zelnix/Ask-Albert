@@ -3960,7 +3960,9 @@ import hashlib as _hashlib
 
 def _uat_check_origin(request: Request):
     """Validate the request Origin/Referer against the trusted HTTPS origin.
-    Rejects requests from unknown origins on UAT-sensitive endpoints."""
+    Skips the check when both headers are absent (same-origin fetch through
+    the Next.js proxy often strips them).  Session/owner validation already
+    handles authentication — this is an extra CSRF layer only."""
     if not _UAT_TRUSTED_ORIGIN:
         return  # No origin configured — skip (development only)
     origin = (request.headers.get('origin') or '').rstrip('/')
@@ -3972,7 +3974,7 @@ def _uat_check_origin(request: Request):
             parsed = urlparse(referer)
             origin = f'{parsed.scheme}://{parsed.netloc}'.rstrip('/')
     if not origin:
-        raise HTTPException(status_code=403, detail='Missing Origin header.')
+        return  # Same-origin requests through proxy may lack both headers; owner auth still applies.
     if origin != _UAT_TRUSTED_ORIGIN:
         raise HTTPException(status_code=403, detail='Origin not allowed.')
 
