@@ -12762,11 +12762,11 @@ def _studio_canonical(draft):
     contract = {
         'assets': assets,
         'timeframe': str(draft.get('timeframe') or '').strip()[:20] or 'paper cycle',
-        'entryRules': str(draft.get('entryRules') or STUDIO_RULES['entryRules']).strip()[:1000],
-        'exitRules': str(draft.get('exitRules') or STUDIO_RULES['exitRules']).strip()[:1000],
-        'profitTaking': str(draft.get('profitTaking') or STUDIO_RULES['profitTaking']).strip()[:1000],
-        'invalidation': str(draft.get('invalidation') or STUDIO_RULES['invalidation']).strip()[:1000],
-        'sizing': str(draft.get('sizing') or STUDIO_RULES['sizing']).strip()[:500],
+        'entryRules': str(draft.get('entryRules') or '').strip()[:1000],
+        'exitRules': str(draft.get('exitRules') or '').strip()[:1000],
+        'profitTaking': str(draft.get('profitTaking') or '').strip()[:1000],
+        'invalidation': str(draft.get('invalidation') or '').strip()[:1000],
+        'sizing': str(draft.get('sizing') or '').strip()[:500],
         'requestedPlan': str(draft.get('requestedPlan') or '').strip()[:4000],
         'reservePct': _f(draft.get('reservePct'), 0.0),
         'maxDrawdownPct': _f(draft.get('maxDrawdownPct')),
@@ -13146,10 +13146,11 @@ def studio_draft(payload: dict = Body(...), user: dict = Depends(get_current_use
         try:
             chat = (LlmChat(api_key=LLM_READY_KEY, session_id='studio-' + uuid.uuid4().hex[:8],
                             system_message=STUDIO_DRAFT_SYSTEM)
-                    .with_model('gemini', _model_for('strategy')).with_params(temperature=0.2, max_tokens=1200))
+                    .with_model('gemini', _model_for('strategy')).with_params(temperature=0.2, max_tokens=3000))
             instructions = (f'Goal: {goal}\nEligible paper-entry symbols: {", ".join(eligible)}. '
                             f'Exact user-named symbols: {", ".join(requested) or "none"}. '
-                            f'Exact user weights (when supplied): {_weights}.')
+                            f'Exact user weights (when supplied): {_weights}. '
+                            'Return a single compact JSON object (no pretty-print).')
             if attempt:
                 instructions += (' Your earlier proposal failed server validation: ' + '; '.join(errors) +
                                  '. Regenerate only within the eligible set; preserve every requested symbol '
@@ -13161,7 +13162,30 @@ def studio_draft(payload: dict = Body(...), user: dict = Depends(get_current_use
             if '```' in raw:
                 raw = re.sub(r'```(?:json)?', '', raw).strip()
             s, e = raw.find('{'), raw.rfind('}')
-            if s < 0 or e < s:
+            if s >= 0 and e < s:
+                # Truncated response — the LLM returned partial JSON (opening { but no closing }).
+                # Attempt recovery: strip trailing incomplete values and close brackets.
+                partial = raw[s:]
+                # Count open braces/brackets vs. closed ones and attempt closure.
+                opens_b, opens_a = 0, 0
+                for ch in partial:
+                    if ch == '{': opens_b += 1
+                    elif ch == '}': opens_b -= 1
+                    elif ch == '[': opens_a += 1
+                    elif ch == ']': opens_a -= 1
+                # Trim trailing incomplete key/value after last comma or colon
+                repair = re.sub(r'[,:\s]*(?:"[^"]*"?\s*:?\s*)?$', '', partial)
+                repair += ']' * max(0, opens_a) + '}' * max(0, opens_b)
+                try:
+                    candidate = json.loads(repair)
+                    if isinstance(candidate, dict):
+                        s, e = 0, len(repair) - 1
+                        raw = repair
+                    else:
+                        raise ValueError('repaired JSON was not a dict')
+                except Exception:
+                    raise ValueError('LLM response was truncated and could not be repaired: %s' % raw[:200])
+            elif s < 0:
                 raise ValueError('LLM response contained no JSON object: %s' % raw[:200])
             candidate = json.loads(raw[s:e + 1])
             if not isinstance(candidate, dict):
@@ -13492,11 +13516,18 @@ def _paper_new_wallet_for_strategy(pid, doc, acct_mode):
     name = contract.get('walletName') or (doc.get('name') or 'Strategy')[:60]
     if start is None or not _paper_core.MIN_NOTIONAL <= start <= Decimal('1000000000'):
         raise HTTPException(status_code=422, detail='Needs changes: invalid reviewed virtual starting amount.')
-    try:
-        mandate = _albert_deps.get_mandate(pid) or {}
-    except Exception:  # noqa
-        mandate = {}
-    reserve_pct = _paper_core.D(mandate.get('reserve_pct')) or Decimal('0')
+    # Strategy-dedicated wallets use the reviewed contract reserve.
+    # The mandate default (25%) is a generic safety net that should not silently
+    # override an explicitly reviewed strategy reserve.
+    contract_reserve = _paper_core.D(contract.get('reservePct'))
+    if contract_reserve is not None:
+        reserve_pct = contract_reserve
+    else:
+        try:
+            mandate = _albert_deps.get_mandate(pid) or {}
+        except Exception:  # noqa
+            mandate = {}
+        reserve_pct = _paper_core.D(mandate.get('reserve_pct')) or Decimal('0')
     econ = _paper_core.new_account_economics(start, reserve_pct)
     acct = {'paperAccountId': 'pa_' + uuid.uuid4().hex[:12], 'ownerId': pid,
             'name': name, 'baseCurrency': 'USDC',

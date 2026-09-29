@@ -178,6 +178,23 @@ def requested_triggers(text, assets):
                 sym = named[0]  # suppress "name the coin" error
                 expanded_multi = True
 
+        # When no specific coins are named but the clause references "all positions",
+        # "per position", "each position", "every position/asset/coin", resolve
+        # generic percentage exits against ALL strategy symbols.
+        if raw and not sym and not named and symbols:
+            all_positions = bool(re.search(
+                r'\b(?:all|every|each|per)[\s-]+(?:position|asset|coin)s?\b', clause, re.I))
+            expandable_kinds = {'STOP_LOSS_PCT', 'TAKE_PROFIT_PCT', 'TRAILING_STOP_PCT',
+                                'PARTIAL_TAKE_PROFIT_PCT'}
+            if all_positions and all(r['kind'] in expandable_kinds for r in raw):
+                expanded = []
+                for r in raw:
+                    for s in symbols:
+                        expanded.append({**r, 'symbol': s})
+                raw = expanded
+                sym = symbols[0]
+                expanded_multi = True
+
         # A bare condition, unsupported indicator or narrative-gated action must not
         # quietly become the canonical preset. Explicit advisory discussion is fine.
         residual = list(clause)
@@ -193,7 +210,7 @@ def requested_triggers(text, assets):
         uncaptured = re.sub(r'\b(?:buy|sell|enter|exit|close|trade|if|when|unless|after|before|and|for|the|a|an|of|my|please|only|at|price|is|by|to|coin|asset|on|daily|close|indicator)\b', ' ', uncaptured, flags=re.I)
         # Also strip common descriptive/summary words that are not actionable
         # triggers to avoid flagging strategy descriptions as unsupported instructions.
-        uncaptured = re.sub(r'\b(?:strategy|paper|virtual|allocating|allocated|allocation|strict|limits?|per|with|its|this|from|entry|reserves?|protected|starting|cash|wallet|balance|budget|named|called)\b', ' ', uncaptured, flags=re.I)
+        uncaptured = re.sub(r'\b(?:strategy|paper|virtual|allocating|allocated|allocation|strict|limits?|per|with|its|this|from|entry|reserves?|protected|starting|cash|wallet|balance|budget|named|called|positions?|targets?|implements?|trading|across|all|every|each)\b', ' ', uncaptured, flags=re.I)
         extra_instruction = bool(raw and re.search(r'[A-Za-z]{2,}|[<>%]|\$\s*\d', uncaptured))
         unknown_trigger = bool(extra_instruction or re.search(r'\b(?:trail(?:ing)?|stop[ -]?loss|take[ -]?profit|profit\s+target|RSI|SMA|EMA|MACD|indicator|pullback|breakout|cross(?:over)?|limit\s+order|rebalance|short|leverage)\b', remaining, re.I)
                                or (raw and re.search(r'\bor\b', remaining, re.I))

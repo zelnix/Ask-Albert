@@ -970,8 +970,13 @@ export default function StrategyStudio({ chatGoal = '', chatDraftKey = null, cha
     }
   }, [chatDraftKey, chatProposal, chatGoal]);
   const revise = (s) => {
+    // Filter empty/null values from saved contracts so STUDIO_EXEC_RULES defaults
+    // aren't overridden by legacy empty strings (preserves hash for the saved version).
+    const saved = Object.fromEntries(
+      Object.entries(s.contract || {}).filter(([_, v]) => v != null && v !== '')
+    );
     setRevision({ id: s.strategyId, version: s.version, goal: s.contract?.requestedPlan || '',
-      draft: { ...STUDIO_EXEC_RULES, ...(s.contract || {}), name: s.name, rules: s.contract?.rules || [],
+      draft: { ...STUDIO_EXEC_RULES, ...saved, name: s.name, rules: s.contract?.rules || [],
         walletName: s.walletName || s.contract?.walletName || `${s.name} wallet`,
         startingCash: s.startingCash || s.contract?.startingCash || '' } });
     setSel(null); setBuilding(true); onChatDismiss?.();
