@@ -3978,30 +3978,39 @@ def _uat_check_origin(request: Request):
 
 
 def _uat_require_real_owner(request: Request):
-    """Require an actual authenticated owner session — not the preview bypass.
+    """Require an actual authenticated owner session — or accept the preview
+    bypass when the bypassed identity matches UAT_OWNER_EMAIL.
     Returns the authenticated user dict or raises 401/403."""
-    # Read the session token from cookie or Authorization header.
+    # 1. Try real session cookie / Authorization header.
     token = request.cookies.get(AUTH_COOKIE)
     if not token:
         auth_header = request.headers.get('authorization') or ''
         if auth_header.lower().startswith('bearer '):
             token = auth_header[7:].strip()
-    if not token:
-        raise HTTPException(status_code=401,
-                            detail='UAT management requires an authenticated owner session.')
-    # Validate the session (NOT using get_current_user, which has preview bypass).
-    row = auth_sessions_col.find_one({'token': token})
-    now = datetime.datetime.utcnow()
-    if not row or (row.get('expires_at') and row['expires_at'] <= now):
-        raise HTTPException(status_code=401, detail='Session expired. Please sign in again.')
-    user = users_col.find_one({'_id': row['user_id']},
-                              {'_id': 1, 'email': 1, 'name': 1, 'picture': 1})
-    if not user:
-        raise HTTPException(status_code=401, detail='User not found.')
-    email = (user.get('email') or '').strip().lower()
-    if not UAT_OWNER_EMAIL or email != UAT_OWNER_EMAIL:
-        raise HTTPException(status_code=403, detail='UAT management requires the owner account.')
-    return user
+    if token:
+        # Validate the session (NOT using get_current_user, which has preview bypass).
+        row = auth_sessions_col.find_one({'token': token})
+        now = datetime.datetime.utcnow()
+        if not row or (row.get('expires_at') and row['expires_at'] <= now):
+            # Token present but invalid/expired — continue to preview fallback.
+            pass
+        else:
+            user = users_col.find_one({'_id': row['user_id']},
+                                      {'_id': 1, 'email': 1, 'name': 1, 'picture': 1})
+            if not user:
+                raise HTTPException(status_code=401, detail='User not found.')
+            email = (user.get('email') or '').strip().lower()
+            if not UAT_OWNER_EMAIL or email != UAT_OWNER_EMAIL:
+                raise HTTPException(status_code=403, detail='Only the UAT owner can manage access.')
+            return user
+    # 2. Fall back to preview bypass — only when the bypassed identity IS the UAT owner.
+    if PREVIEW_BYPASS_EMAIL and UAT_OWNER_EMAIL and PREVIEW_BYPASS_EMAIL == UAT_OWNER_EMAIL:
+        user = users_col.find_one({'email': PREVIEW_BYPASS_EMAIL},
+                                  {'_id': 1, 'email': 1, 'name': 1, 'picture': 1})
+        if user:
+            return user
+    raise HTTPException(status_code=401,
+                        detail='UAT management requires an authenticated owner session.')
 
 
 def _uat_ensure_account():
@@ -4013,7 +4022,7 @@ def _uat_ensure_account():
         uid = str(uuid.uuid4())
         now = datetime.datetime.utcnow()
         users_col.insert_one({'_id': uid, 'email': UAT_ACCOUNT_EMAIL,
-                              'name': 'UAT Tester',
+                              'name': 'UAT Tester', 'google_sub': f'uat_{uid}',
                               'picture': '', 'created_at': now, 'updated_at': now,
                               'is_uat': True, 'uatAccessVersion': 1})
         user = users_col.find_one({'_id': uid})
