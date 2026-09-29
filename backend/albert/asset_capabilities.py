@@ -134,8 +134,9 @@ def entry_allowed(symbol, mandate=None, data_ok=None):
     return bool(row['entryEligible']), row
 
 
-def validate_assets(draft, canonical_assets, mandate=None):
-    """Validate every raw leg and every canonical leg without discarding or reweighting."""
+def validate_assets(draft, canonical_assets, mandate=None, reserve_pct=0.0):
+    """Validate every raw leg and every canonical leg without discarding or reweighting.
+    When a protected cash reserve is specified, asset weights + reservePct must equal 100%."""
     errors = []
     raw = draft.get('assets') or []
     if not isinstance(raw, list):
@@ -164,8 +165,18 @@ def validate_assets(draft, canonical_assets, mandate=None):
         if not math.isfinite(a['weightPct']) or a['weightPct'] <= 0:
             errors.append(f'{sym} must have a finite, positive weight.')
     total = sum(a['weightPct'] for a in canonical_assets)
-    if canonical_assets and (not math.isfinite(total) or abs(total - 100.0) > 0.0001):
-        errors.append(f'Asset weights must sum to exactly 100% (currently {total:g}%). No weights will be redistributed.')
+    # Asset weights + protected cash reserve must sum to 100%.
+    # When reservePct > 0 the user explicitly allocated the remainder as cash.
+    try:
+        rpct = float(reserve_pct or 0)
+    except (ValueError, TypeError):
+        rpct = 0.0
+    expected = 100.0 - max(0.0, min(100.0, rpct))
+    if canonical_assets and (not math.isfinite(total) or abs(total - expected) > 0.5):
+        if rpct > 0:
+            errors.append(f'Asset weights must sum to {expected:g}% (100% minus {rpct:g}% reserve); currently {total:g}%. No weights will be redistributed.')
+        else:
+            errors.append(f'Asset weights must sum to exactly 100% (currently {total:g}%). No weights will be redistributed.')
     return errors
 
 

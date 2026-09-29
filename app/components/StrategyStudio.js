@@ -37,31 +37,49 @@ function proposalToDraft(proposal) {
     // Preserve targets[] (array) and stop from legs.
     targets: Array.isArray(l.targets) ? l.targets : (l.target ? [l.target] : []),
     stop: l.stop || null,
+    stopPct: l.stop_pct != null ? Number(l.stop_pct) : (l.stop?.stop_pct != null ? Number(l.stop.stop_pct) : undefined),
     notes: l.notes || '',
   }));
 
   // Deterministically translate leg targets/stops into typed executable rules.
+  // For TAKE_PROFIT_PCT and STOP_LOSS_PCT rules, value must be a percentage
+  // (e.g. "8" for 8%) — not an absolute price. These rule kinds do NOT accept
+  // an operator or indicator field.
   const rules = [];
   legs.forEach((l) => {
     const sym = String(l.symbol || '').toUpperCase();
-    // Translate targets[] into PARTIAL_TAKE_PROFIT_PCT or TAKE_PROFIT_PCT rules.
+    const entry = Number(l.entry_price) || 0;
+    const isShort = /short/i.test(l.position || l.direction || 'long');
+
+    // Translate targets[] into TAKE_PROFIT_PCT or PARTIAL_TAKE_PROFIT_PCT rules.
     (Array.isArray(l.targets) ? l.targets : []).forEach((t, ti) => {
-      if (t && t.price != null) {
-        const pct = t.pct_of_position || t.pctOfPosition || 100;
-        if (pct < 100) {
-          rules.push({ kind: 'PARTIAL_TAKE_PROFIT_PCT', side: 'SELL', symbol: sym,
-            value: String(t.price), operator: 'ABOVE', portionPct: String(pct),
-            portionOf: 'original', _fromTarget: true, _label: t.label || `TP${ti + 1}` });
-        } else {
-          rules.push({ kind: 'TAKE_PROFIT_PCT', side: 'SELL', symbol: sym,
-            value: String(t.price), operator: 'ABOVE', _fromTarget: true, _label: t.label || `TP${ti + 1}` });
-        }
+      if (!t) return;
+      // Prefer explicit exit_pct; otherwise compute from absolute price vs entry.
+      let pctVal = t.exit_pct != null ? Number(t.exit_pct) : null;
+      if (pctVal == null && t.price != null && entry > 0) {
+        const diff = isShort ? (entry - Number(t.price)) : (Number(t.price) - entry);
+        pctVal = Math.round(diff / entry * 10000) / 100; // two-decimal %
       }
+      if (pctVal == null || pctVal <= 0) return;
+      const portion = t.pct_of_position || t.pctOfPosition || 100;
+      const kind = Number(portion) < 100 ? 'PARTIAL_TAKE_PROFIT_PCT' : 'TAKE_PROFIT_PCT';
+      const rule = { kind, side: 'SELL', symbol: sym, value: String(pctVal),
+        _fromTarget: true, _label: t.label || `TP${ti + 1}` };
+      if (kind === 'PARTIAL_TAKE_PROFIT_PCT') {
+        rule.portionPct = String(portion);
+        rule.portionOf = 'original';
+      }
+      rules.push(rule);
     });
-    // Translate stop into STOP_LOSS_PCT rule.
-    if (l.stop && l.stop.price != null) {
+    // Translate stop into STOP_LOSS_PCT rule — value is a percentage.
+    let stopPctVal = l.stop_pct != null ? Number(l.stop_pct) : (l.stop?.stop_pct != null ? Number(l.stop.stop_pct) : null);
+    if (stopPctVal == null && l.stop?.price != null && entry > 0) {
+      const diff = isShort ? (Number(l.stop.price) - entry) : (entry - Number(l.stop.price));
+      stopPctVal = Math.round(diff / entry * 10000) / 100;
+    }
+    if (stopPctVal != null && stopPctVal > 0) {
       rules.push({ kind: 'STOP_LOSS_PCT', side: 'SELL', symbol: sym,
-        value: String(l.stop.price), operator: 'BELOW', _fromStop: true });
+        value: String(stopPctVal), _fromStop: true });
     }
   });
 
@@ -97,6 +115,10 @@ function proposalToDraft(proposal) {
     objective: proposal.objective || proposal.thesis || '',
     proposalId: proposal.proposalId || undefined,
     proposalRevision: proposal.revision || 1,
+    // Preserve wallet name from proposal; fall back to strategy-derived default
+    walletName: proposal.walletName || undefined,
+    // Canonical execution gates — supply standard values so validation passes
+    ...STUDIO_EXEC_RULES,
   };
 }
 
@@ -200,7 +222,7 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
   const [goal, setGoal] = useState(initialGoal);
   const [drafting, setDrafting] = useState(false);
   const [draft, setDraft] = useState(initialDraft ? {
-    ...initialDraft, rules: initialDraft.rules || [],
+    ...STUDIO_EXEC_RULES, ...initialDraft, rules: initialDraft.rules || [],
     walletName: initialDraft.walletName || `${initialDraft.name || 'Strategy'} wallet`,
     startingCash: initialDraft.startingCash || '',
   } : null);
@@ -243,7 +265,7 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
         setErr(typeof j.detail === 'object' ? j.detail.message : (j.detail || 'Albert could not draft a strategy. Nothing was substituted.'));
         return;
       }
-      setDraft(j.draft);
+      setDraft({ ...STUDIO_EXEC_RULES, ...j.draft });
       setReview({ contract: j.contract, hash: j.contractHash, summary: j.summary,
         saveErrors: j.saveErrors || [], startErrors: j.startErrors || [],
         errors: j.validationErrors || [], capabilities: j.assetCapabilities || [], for: JSON.stringify(j.draft) });
@@ -949,8 +971,8 @@ export default function StrategyStudio({ chatGoal = '', chatDraftKey = null, cha
   }, [chatDraftKey, chatProposal, chatGoal]);
   const revise = (s) => {
     setRevision({ id: s.strategyId, version: s.version, goal: s.contract?.requestedPlan || '',
-      draft: { ...(s.contract || {}), name: s.name, rules: s.contract?.rules || [],
-        walletName: s.walletName || `${s.name} wallet`,
+      draft: { ...STUDIO_EXEC_RULES, ...(s.contract || {}), name: s.name, rules: s.contract?.rules || [],
+        walletName: s.walletName || s.contract?.walletName || `${s.name} wallet`,
         startingCash: s.startingCash || s.contract?.startingCash || '' } });
     setSel(null); setBuilding(true); onChatDismiss?.();
   };

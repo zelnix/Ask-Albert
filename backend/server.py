@@ -12697,7 +12697,9 @@ STUDIO_RULES = {
 def _studio_requested_wallet(goal):
     text = str(goal or '')
     amount = re.search(r'\b(?:start(?:ing)?|initial|virtual\s+starting|wallet\s+balance|budget)\b[^.!?;\n]{0,32}?\$\s*([\d,]+(?:\.\d{1,2})?)', text, re.I)
-    name = re.search(r'\b(?:wallet\s+(?:named|called)|name\s+(?:my\s+|the\s+)?wallet)\s+["\']?([\w -]{2,60})', text, re.I)
+    # Match: "wallet named X", "name wallet X", "name my wallet X", "wallet name X",
+    # "wallet called X", or "Name wallet X" (imperative form).
+    name = re.search(r'\b(?:wallet\s+(?:named?|called)|name\s+(?:my\s+|the\s+)?wallet)\s+["\']?([\w -]{2,60})', text, re.I)
     return ((amount.group(1).replace(',', '') if amount else None),
             (name.group(1).strip().strip('"\' ') if name else None))
 
@@ -12760,11 +12762,11 @@ def _studio_canonical(draft):
     contract = {
         'assets': assets,
         'timeframe': str(draft.get('timeframe') or '').strip()[:20] or 'paper cycle',
-        'entryRules': str(draft.get('entryRules') or '').strip()[:1000],
-        'exitRules': str(draft.get('exitRules') or '').strip()[:1000],
-        'profitTaking': str(draft.get('profitTaking') or '').strip()[:1000],
-        'invalidation': str(draft.get('invalidation') or '').strip()[:1000],
-        'sizing': str(draft.get('sizing') or '').strip()[:500],
+        'entryRules': str(draft.get('entryRules') or STUDIO_RULES['entryRules']).strip()[:1000],
+        'exitRules': str(draft.get('exitRules') or STUDIO_RULES['exitRules']).strip()[:1000],
+        'profitTaking': str(draft.get('profitTaking') or STUDIO_RULES['profitTaking']).strip()[:1000],
+        'invalidation': str(draft.get('invalidation') or STUDIO_RULES['invalidation']).strip()[:1000],
+        'sizing': str(draft.get('sizing') or STUDIO_RULES['sizing']).strip()[:500],
         'requestedPlan': str(draft.get('requestedPlan') or '').strip()[:4000],
         'reservePct': _f(draft.get('reservePct'), 0.0),
         'maxDrawdownPct': _f(draft.get('maxDrawdownPct')),
@@ -12822,7 +12824,7 @@ def _studio_validate(draft, pid, account=None):
     m = _get_mandate(pid)
     save_errors = []
     start_errors = []
-    cap_errors = _asset_caps.validate_assets(draft, c['assets'], m)
+    cap_errors = _asset_caps.validate_assets(draft, c['assets'], m, reserve_pct=c.get('reservePct', 0))
     for e in cap_errors:
         if 'not a recognized' in e.lower() or 'no assets' in e.lower():
             save_errors.append(e)
@@ -13153,18 +13155,28 @@ def studio_draft(payload: dict = Body(...), user: dict = Depends(get_current_use
                                  '. Regenerate only within the eligible set; preserve every requested symbol '
                                  'and explicit weight. Never silently substitute or redistribute.')
             reply = asyncio.run(chat.send_message(UserMessage(text=instructions)))
-            raw = (getattr(reply, 'text', '') or '').strip()
+            # Try .text first, then .content — different LLM client versions use different attributes.
+            raw = (getattr(reply, 'text', None) or getattr(reply, 'content', None) or
+                   (reply if isinstance(reply, str) else '')).strip() if reply else ''
             if '```' in raw:
                 raw = re.sub(r'```(?:json)?', '', raw).strip()
             s, e = raw.find('{'), raw.rfind('}')
+            if s < 0 or e < s:
+                raise ValueError('LLM response contained no JSON object: %s' % raw[:200])
             candidate = json.loads(raw[s:e + 1])
             if not isinstance(candidate, dict):
                 raise ValueError('Gemini returned no object')
             candidate['requestedPlan'] = goal  # original plan is immutable review evidence
+            # Supply canonical fields when the LLM omits them — do not overwrite
+            # explicitly conflicting values (validation will flag those separately).
+            for _field, _canonical in STUDIO_RULES.items():
+                if not candidate.get(_field):
+                    candidate[_field] = _canonical
             # The server, not the LLM, transcribes only literal supported triggers.
             parsed_rules, parse_errors = _strategy_rules.requested_triggers(goal, requested)
             requested_cash, requested_wallet = _studio_requested_wallet(goal)
             candidate['rules'] = parsed_rules
+            # Explicitly supplied wallet name takes precedence; LLM default only when absent.
             candidate['walletName'] = requested_wallet or str(candidate.get('walletName') or (candidate.get('name') or 'New strategy') + ' wallet')[:60]
             candidate['startingCash'] = requested_cash or candidate.get('startingCash') or '100000.00'
             c, chash, _sv_err, _st_err = _studio_validate(candidate, pid); errors = _sv_err + _st_err
@@ -17505,15 +17517,22 @@ ALBERT_BASKET_SYSTEM = (
     '  "title": "<=70 chars",\n'
     '  "thesis": "<=500 chars, plain English",\n'
     '  "horizon_days": <int 3-180>,\n'
+    '  "startingCapital": <num or null>,\n'
+    '  "reservePct": <num 0-50 or null>,\n'
+    '  "walletName": "<string or null>",\n'
     '  "legs": [\n'
-    '    {"symbol":"BTC","position":"long|short","weight_pct":<int>,\n'
-    '     "targets":[{"price":<num>,"label":"TP1","pct_of_position":<int>}],\n'
-    '     "stop":{"price":<num>}}\n'
+    '    {"symbol":"BTC","position":"long|short","weight_pct":<num>,\n'
+    '     "targets":[{"price":<num>,"label":"TP1","pct_of_position":<int>,"exit_pct":<num or null>}],\n'
+    '     "stop":{"price":<num>,"stop_pct":<num or null>}}\n'
     "  ]\n"
     "}\n"
-    "Rules: use REAL ticker symbols. weight_pct across legs should sum to ~100 (leave equal if unsure). "
-    "Targets/stops are ABSOLUTE USD prices near the given current prices. For SHORT legs, targets are "
-    "BELOW entry and the stop is ABOVE. Output ONLY the JSON object."
+    "Rules: use REAL ticker symbols. "
+    "When the user specifies dollar amounts per coin, set weight_pct to reflect those amounts relative to startingCapital. "
+    "When the user specifies a cash reserve or protected cash, set reservePct so that weight_pct across legs sums to (100 - reservePct). "
+    "When the user specifies PERCENTAGE take-profit/stop-loss (e.g. '8% take-profit'), set exit_pct/stop_pct to those percentages AND "
+    "also compute the implied absolute USD price in the price field. "
+    "When the user specifies ABSOLUTE USD targets/stops, set the price field and leave exit_pct/stop_pct null. "
+    "For SHORT legs, targets are BELOW entry and the stop is ABOVE. Output ONLY the JSON object."
 )
 
 BASKET_UNIVERSE = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'ADA', 'AVAX', 'DOGE', 'LINK', 'DOT', 'LTC', 'TRX']
@@ -17538,21 +17557,44 @@ def _normalize_basket_leg(raw):
         try:
             price = round(float(t.get('price')), 2)
         except Exception:
-            continue
+            price = None
         try:
             pct = int(t.get('pct_of_position') or 50)
         except Exception:
             pct = 50
-        targets.append({'price': price, 'label': (t.get('label') or f'TP{len(targets)+1}')[:20],
-                        'pct_of_position': max(1, min(100, pct)), 'hit': False})
+        exit_pct = None
+        try:
+            if t.get('exit_pct') is not None:
+                exit_pct = round(float(t['exit_pct']), 2)
+        except (ValueError, TypeError):
+            pass
+        if price is None and exit_pct is None:
+            continue
+        entry = {'label': (t.get('label') or f'TP{len(targets)+1}')[:20],
+                 'pct_of_position': max(1, min(100, pct)), 'hit': False}
+        if price is not None:
+            entry['price'] = price
+        if exit_pct is not None:
+            entry['exit_pct'] = exit_pct
+        targets.append(entry)
     stop = None
+    stop_pct = None
     try:
         if (raw.get('stop') or {}).get('price') is not None:
             stop = {'price': round(float(raw['stop']['price']), 2), 'hit': False}
     except Exception:
         stop = None
-    return {'symbol': symbol, 'coin_name': _strat_coin_name(symbol), 'position': position,
+    try:
+        sp = (raw.get('stop') or {}).get('stop_pct')
+        if sp is not None:
+            stop_pct = round(float(sp), 2)
+    except (ValueError, TypeError):
+        pass
+    result = {'symbol': symbol, 'coin_name': _strat_coin_name(symbol), 'position': position,
             'weight_pct': weight, 'entry_price': round(spot, 2), 'targets': targets, 'stop': stop}
+    if stop_pct is not None:
+        result['stop_pct'] = stop_pct
+    return result
 
 
 def _normalize_basket_draft(raw):
@@ -17562,15 +17604,26 @@ def _normalize_basket_draft(raw):
         if leg and leg['symbol'] not in seen:
             seen.add(leg['symbol'])
             legs.append(leg)
+    # Compute reservePct early so weight normalisation respects it.
+    reserve_pct = 0
+    for field in ('reservePct', 'protectedReserve', 'reserve_pct'):
+        val = raw.get(field)
+        if val is not None:
+            try:
+                reserve_pct = max(0, min(100, float(val)))
+            except (ValueError, TypeError):
+                pass
+            break
+    expected_total = 100 - reserve_pct
     tot = sum(l['weight_pct'] for l in legs)
     if legs:
         if tot <= 0:
-            eq = round(100.0 / len(legs), 2)
+            eq = round(expected_total / len(legs), 2)
             for l in legs:
                 l['weight_pct'] = eq
-        elif abs(tot - 100) > 0.5:
+        elif abs(tot - expected_total) > 0.5:
             for l in legs:
-                l['weight_pct'] = round(l['weight_pct'] / tot * 100, 2)
+                l['weight_pct'] = round(l['weight_pct'] / tot * expected_total, 2)
     try:
         horizon = max(3, min(180, int(raw.get('horizon_days') or 30)))
     except Exception:
@@ -17590,15 +17643,12 @@ def _normalize_basket_draft(raw):
             break
     if raw.get('currency'):
         result['currency'] = str(raw['currency'])[:10].upper()
-    # Reserve
-    for field in ('reservePct', 'protectedReserve', 'reserve_pct'):
-        val = raw.get(field)
-        if val is not None:
-            try:
-                result['reservePct'] = max(0, min(100, float(val)))
-            except (ValueError, TypeError):
-                pass
-            break
+    # Wallet name
+    if raw.get('walletName'):
+        result['walletName'] = str(raw['walletName'])[:70].strip()
+    # Reserve (already extracted above for weight normalisation)
+    if reserve_pct > 0:
+        result['reservePct'] = reserve_pct
     # Typed rules (entry conditions, profit taking, stops, management, custom)
     rules = []
     for key in ('entryConditions', 'profitTaking', 'stopLoss', 'managementRules'):

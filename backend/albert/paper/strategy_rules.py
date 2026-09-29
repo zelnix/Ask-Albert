@@ -102,6 +102,8 @@ def requested_triggers(text, assets):
     """Conservative literal parser. If a conditional instruction cannot be parsed,
     return Needs changes instead of silently substituting a generic rule.
     Supports one coin per clause (or an explicit coin before each trigger).
+    When a clause names multiple coins and contains generic percentage exits,
+    expand those rules to every named coin rather than rejecting the clause.
     """
     text = str(text or '')
     symbols = [str(s).upper() for s in assets]
@@ -126,8 +128,16 @@ def requested_triggers(text, assets):
             add('TRAILING_STOP_PCT', 'SELL', match.group(1), span=match.span())
         for match in re.finditer(r'\b(?:stop[ -]?loss|stop\s+out)\s*(?:at|of|by)?\s*' + numeric + r'\s*%', clause, re.I):
             add('STOP_LOSS_PCT', 'SELL', match.group(1), span=match.span())
+        # Reverse order: "5% stop-loss"
+        for match in re.finditer(numeric + r'\s*%\s*(?:stop[ -]?loss|stop\s+out)\b', clause, re.I):
+            if not any(match.start() < c[1] and match.end() > c[0] for c in covered):
+                add('STOP_LOSS_PCT', 'SELL', match.group(1), span=match.span())
         for match in re.finditer(r'\b(?:take[ -]?profit|profit\s+target)\s*(?:at|of)?\s*' + numeric + r'\s*%', clause, re.I):
             add('TAKE_PROFIT_PCT', 'SELL', match.group(1), span=match.span())
+        # Reverse order: "8% take-profit"
+        for match in re.finditer(numeric + r'\s*%\s*(?:take[ -]?profit|profit\s+target)\b', clause, re.I):
+            if not any(match.start() < c[1] and match.end() > c[0] for c in covered):
+                add('TAKE_PROFIT_PCT', 'SELL', match.group(1), span=match.span())
         for match in re.finditer(r'\b(RSI(?:\s*\(?14\)?)?|SMA\s*\(?20\)?|EMA\s*\(?20\)?|MACD(?:\s+hist(?:ogram)?)?)\s*(?:is\s*)?(above|below|>|<)\s*\$?' + numeric, clause, re.I):
             label = match.group(1).upper()
             indicator = ('RSI_14' if label.startswith('RSI') else 'SMA_20' if label.startswith('SMA')
@@ -149,6 +159,25 @@ def requested_triggers(text, assets):
             falling = bool(re.match(r'(drop|fall|down|decrease)', direction))
             add('CHANGE_PCT_24H', 'SELL' if has_sell and not has_buy else 'BUY',
                 '-' + value.lstrip('-') if falling else value.lstrip('-'), 'BELOW' if falling else 'ABOVE', span=match.span())
+
+        # ---- Multi-coin expansion: when sym is None because the clause names
+        # multiple coins and the parsed triggers are generic percentage exits,
+        # expand each trigger to every named coin. ----
+        expanded_multi = False
+        if raw and not sym and len(named) > 1:
+            # Only expand generic percentage exits (TP/SL/trailing) that are
+            # coin-agnostic — price/indicator rules require an explicit coin.
+            expandable_kinds = {'STOP_LOSS_PCT', 'TAKE_PROFIT_PCT', 'TRAILING_STOP_PCT',
+                                'PARTIAL_TAKE_PROFIT_PCT'}
+            if all(r['kind'] in expandable_kinds for r in raw):
+                expanded = []
+                for r in raw:
+                    for s in named:
+                        expanded.append({**r, 'symbol': s})
+                raw = expanded
+                sym = named[0]  # suppress "name the coin" error
+                expanded_multi = True
+
         # A bare condition, unsupported indicator or narrative-gated action must not
         # quietly become the canonical preset. Explicit advisory discussion is fine.
         residual = list(clause)
@@ -162,6 +191,9 @@ def requested_triggers(text, assets):
         for s in symbols:
             uncaptured = re.sub(r'\b' + re.escape(s) + r'\b', ' ', uncaptured, flags=re.I)
         uncaptured = re.sub(r'\b(?:buy|sell|enter|exit|close|trade|if|when|unless|after|before|and|for|the|a|an|of|my|please|only|at|price|is|by|to|coin|asset|on|daily|close|indicator)\b', ' ', uncaptured, flags=re.I)
+        # Also strip common descriptive/summary words that are not actionable
+        # triggers to avoid flagging strategy descriptions as unsupported instructions.
+        uncaptured = re.sub(r'\b(?:strategy|paper|virtual|allocating|allocated|allocation|strict|limits?|per|with|its|this|from|entry|reserves?|protected|starting|cash|wallet|balance|budget|named|called)\b', ' ', uncaptured, flags=re.I)
         extra_instruction = bool(raw and re.search(r'[A-Za-z]{2,}|[<>%]|\$\s*\d', uncaptured))
         unknown_trigger = bool(extra_instruction or re.search(r'\b(?:trail(?:ing)?|stop[ -]?loss|take[ -]?profit|profit\s+target|RSI|SMA|EMA|MACD|indicator|pullback|breakout|cross(?:over)?|limit\s+order|rebalance|short|leverage)\b', remaining, re.I)
                                or (raw and re.search(r'\bor\b', remaining, re.I))
@@ -169,11 +201,24 @@ def requested_triggers(text, assets):
         expects = bool(unknown_trigger
                        or re.search(r'\b(?:buy|sell|enter|exit|trade)\b.{0,70}\b(?:if|when|unless|after|before|at\s+\$)\b', clause, re.I)
                        or re.search(r'\b(?:if|when|unless)\b.{0,70}\b(?:buy|sell|enter|exit|trade)\b', clause, re.I))
+
+        # When triggers were successfully parsed and expanded to all named coins,
+        # the clause is a valid multi-coin description — suppress residual-text
+        # false positives. Only suppress when extra_instruction is the sole reason
+        # for unknown_trigger (not real unrecognised trigger keywords or OR logic).
+        if expanded_multi and raw:
+            real_trigger_keyword = bool(re.search(r'\b(?:pullback|breakout|cross(?:over)?|limit\s+order|rebalance|short|leverage)\b', remaining, re.I))
+            real_or_logic = bool(re.search(r'\bor\b', remaining, re.I))
+            if not real_trigger_keyword and not real_or_logic:
+                unknown_trigger = False
+                extra_instruction = False
+                expects = False
+
         if has_sell and has_buy and raw:
             errors.append('Needs changes: separate BUY and SELL conditions into distinct sentences or semicolon-separated clauses: ' + clause[:150])
         if unknown_trigger:
             errors.append('Needs changes: an instruction or OR condition is not supported as an exact rule: ' + clause[:150])
-        if raw and not sym:
+        if raw and not sym and not expanded_multi:
             errors.append('Needs changes: name the coin for each trigger in a multi-coin strategy.')
         elif expects and not raw:
             errors.append('Needs changes: an instruction cannot be executed as a typed price, daily-change, indicator or percentage-exit rule: ' + clause[:150])
