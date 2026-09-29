@@ -43,10 +43,46 @@ SUPPORTED_ENGINE_VERSIONS = {'albert-decide-v2', 'albert-decide-v3', 'albert-dec
 DECISION_TTL_MIN = 30
 PROPOSAL_TTL_MIN = 30
 
-# Conservative deterministic execution profile (all Decimal bps).
+# Conservative deterministic execution profile — SUPERSEDED.
+# Paper trading now fills at the freshly observed market price with zero fees.
+# Kept only so legacy ledger replay recognises historical fee fields.
 EXEC_PROFILE = {'executionProfileId': 'ep_conservative_v1', 'feeBps': Decimal('40'),
                 'spreadBps': Decimal('5'), 'slippageBps': Decimal('8'), 'model': 'conservative'}
 BPS = Decimal('10000')
+
+
+# ========================= direct-price fill (v2) ============================ #
+def ticket_buy_sizing(asset, notional, mark_px, *, price_q=PRICE_Q):
+    """Direct-price BUY sizing. No fee, no slippage — fill at the observed market
+    price. Returns a sizing dict compatible with apply_buy_atomic."""
+    mark = D(mark_px)
+    notional = q_cash(notional)
+    if notional is None or not notional.is_finite() or notional <= 0:
+        return {'reject': 'BELOW_MIN_NOTIONAL', 'trace': []}
+    if mark is None or not mark.is_finite() or mark <= 0:
+        return {'reject': 'NO_VALID_MARK', 'trace': []}
+    fill_px = round_tick(mark, price_q, ROUND_HALF_UP)
+    qty = round_tick(notional / fill_px, QTY_Q) if fill_px and fill_px > 0 else None
+    if qty is None or not qty.is_finite() or qty <= 0:
+        return {'reject': 'BELOW_MIN_NOTIONAL', 'trace': []}
+    # Recalculate exact notional from qty × fill so cash debit is exact.
+    exact_notional = q_cash(qty * fill_px)
+    return {'reject': None, 'trace': [], 'side': 'BUY', 'asset': (asset or '').upper(),
+            'notional': exact_notional, 'fillPx': fill_px, 'fee': Decimal('0'), 'qty': qty}
+
+
+def ticket_sell_sizing(asset, qty, mark_px, *, price_q=PRICE_Q):
+    """Direct-price SELL sizing. No fee, no slippage — fill at observed price.
+    Returns a sizing dict compatible with apply_sell_atomic."""
+    mark = D(mark_px)
+    if mark is None or not mark.is_finite() or mark <= 0:
+        return {'reject': 'INVALID_EXIT_PRICE', 'trace': []}
+    qty = round_tick(qty, QTY_Q)
+    if qty is None or not qty.is_finite() or qty <= 0:
+        return {'reject': 'BELOW_MIN_NOTIONAL', 'trace': []}
+    fill_px = round_tick(mark, price_q, ROUND_HALF_UP)
+    return {'reject': None, 'trace': [], 'side': 'SELL', 'asset': (asset or '').upper(),
+            'qty': qty, 'fillPx': fill_px, 'fee': Decimal('0')}
 
 
 # ============================ Decimal helpers ================================ #
@@ -114,7 +150,8 @@ def round_tick(value, tick, mode=ROUND_DOWN):
 
 
 def sim_fill(side, ref_px, notional):
-    """Deterministic conservative fill. Returns (fill_px: Decimal, fee: Decimal)."""
+    """SUPERSEDED — legacy fee-based fill. Retained only for historical ledger
+    replay. New fills use ticket_buy_sizing / ticket_sell_sizing."""
     ref_px = D(ref_px)
     notional = D(notional) or Decimal('0')
     slip = (EXEC_PROFILE['spreadBps'] + EXEC_PROFILE['slippageBps']) / BPS
@@ -127,9 +164,8 @@ def sim_fill(side, ref_px, notional):
 
 
 def sim_fill_p(side, ref_px, notional, profile, price_q=PRICE_Q):
-    """Deterministic conservative fill using a per-asset exec PROFILE (M5).
-    Returns (fill_px: Decimal, fee: Decimal). Higher spread+slippage (less liquid
-    assets) => worse fills. price_q gives per-asset price precision."""
+    """SUPERSEDED — legacy profile-based fill. Retained only for historical
+    ledger replay. New fills use ticket_buy_sizing / ticket_sell_sizing."""
     ref_px = D(ref_px)
     notional = D(notional) or Decimal('0')
     slip = (D(profile.get('spreadBps')) + D(profile.get('slippageBps'))) / BPS
@@ -142,39 +178,13 @@ def sim_fill_p(side, ref_px, notional, profile, price_q=PRICE_Q):
 
 
 def size_buy(asset, notional, mark_px, *, profile=None, price_q=PRICE_Q):
-    """Build a BUY sizing dict for a pre-allocated notional (M5). The portfolio
-    allocator already enforced every risk/exposure limit; here we only translate
-    the exact notional into a conservative fill/fee/qty. Never enlarges notional."""
-    profile = profile or EXEC_PROFILE
-    notional = q_cash(notional)
-    mark = D(mark_px)
-    if notional is None or not notional.is_finite() or notional <= 0:
-        return {'reject': 'BELOW_MIN_NOTIONAL', 'trace': []}
-    if mark is None or not mark.is_finite() or mark <= 0:
-        return {'reject': 'NO_VALID_MARK', 'trace': []}
-    fill_px, fee = sim_fill_p('BUY', mark, notional, profile, price_q)
-    qty = round_tick((notional - fee) / fill_px, profile.get('qtyQ') or QTY_Q) if fill_px and fill_px > 0 else None
-    if qty is None or not qty.is_finite() or qty <= 0:
-        return {'reject': 'BELOW_MIN_NOTIONAL', 'trace': []}
-    return {'reject': None, 'trace': [], 'side': 'BUY', 'asset': (asset or '').upper(),
-            'notional': notional, 'fillPx': fill_px, 'fee': fee, 'qty': qty}
+    """SUPERSEDED — delegates to ticket_buy_sizing (direct price, zero fee)."""
+    return ticket_buy_sizing(asset, notional, mark_px, price_q=price_q)
 
 
 def size_sell(asset, qty, mark_px, *, profile=None, price_q=PRICE_Q):
-    """Build a reduce-only SELL sizing dict for an exact quantity (M5)."""
-    profile = profile or EXEC_PROFILE
-    mark = D(mark_px)
-    if mark is None or not mark.is_finite() or mark <= 0:
-        return {'reject': 'INVALID_EXIT_PRICE', 'trace': []}
-    qty = round_tick(qty, profile.get('qtyQ') or QTY_Q)
-    if qty is None or not qty.is_finite() or qty <= 0:
-        return {'reject': 'BELOW_MIN_NOTIONAL', 'trace': []}
-    gross = qty * mark
-    fill_px, fee = sim_fill_p('SELL', mark, gross, profile, price_q)
-    if fill_px is None or fill_px <= 0:
-        return {'reject': 'INVALID_EXIT_PRICE', 'trace': []}
-    return {'reject': None, 'trace': [], 'side': 'SELL', 'asset': (asset or '').upper(),
-            'qty': qty, 'fillPx': fill_px, 'fee': fee}
+    """SUPERSEDED — delegates to ticket_sell_sizing (direct price, zero fee)."""
+    return ticket_sell_sizing(asset, qty, mark_px, price_q=price_q)
 
 
 # ============================ account state ================================== #
@@ -192,7 +202,7 @@ def new_account_economics(starting_cash, reserve_pct):
 
 
 def _lot_for(acct, sym):
-    """Open lot for a given asset symbol (M5 multi-asset)."""
+    """First open lot for a given asset symbol (legacy compat — prefer _ticket_by_id)."""
     sym = (sym or '').upper()
     for lot in (acct.get('lots') or []):
         if (lot.get('asset') or '').upper() == sym:
@@ -200,13 +210,32 @@ def _lot_for(acct, sym):
     return None
 
 
-def _btc_lot(acct):
-    return _lot_for(acct, 'BTC')
+def _ticket_by_id(acct, ticket_id):
+    """Find a specific ticket (lot) by its lotId / ticketId."""
+    if not ticket_id:
+        return None
+    for lot in (acct.get('lots') or []):
+        if lot.get('lotId') == ticket_id:
+            return lot
+    return None
+
+
+def tickets_for(acct, sym):
+    """ALL open tickets for a given asset symbol."""
+    sym = (sym or '').upper()
+    return [l for l in (acct.get('lots') or [])
+            if (l.get('asset') or '').upper() == sym and (D(l.get('qty')) or Decimal('0')) > 0]
 
 
 def position_qty(acct, sym='BTC'):
-    lot = _lot_for(acct, sym)
-    return D((lot or {}).get('qty')) or Decimal('0')
+    """Aggregate position quantity across ALL tickets for the symbol."""
+    return sum((D(l.get('qty')) or Decimal('0'))
+               for l in tickets_for(acct, sym))
+
+
+def _btc_lot(acct):
+    """Legacy BTC-only lot lookup (compat for single-asset reconciliation)."""
+    return _lot_for(acct, 'BTC')
 
 
 def account_position_qty(acct):
@@ -513,7 +542,10 @@ def materialize_multi_from_ledger(acct):
 
 def reconcile_multi(acct):
     """M5 multi-asset reconciliation: compare stored per-asset lots + globals
-    against a pure multi-asset ledger replay. ANY mismatch => caller FAILS CLOSED."""
+    against a pure multi-asset ledger replay. ANY mismatch => caller FAILS CLOSED.
+
+    TICKET MODEL: multiple lots can exist for the same asset. Aggregate them
+    by symbol for comparison against the ledger replay (which is per-asset)."""
     rep = materialize_multi_from_ledger(acct)
     checks = {
         'cash': (D(acct.get('cash')) or Decimal('0')) == rep['cash'],
@@ -521,22 +553,36 @@ def reconcile_multi(acct):
         'realizedPnl': (D(acct.get('realizedPnl')) or Decimal('0')) == rep['realizedPnl'],
         'accountSequence': (acct.get('accountSequence') or 0) >= rep['accountSequence'],
     }
-    lots_by_sym = {(l.get('asset') or '').upper(): l for l in (acct.get('lots') or [])
-                   if (D(l.get('qty')) or Decimal('0')) > 0}
-    all_syms = set(lots_by_sym) | {s for s, v in rep['perAsset'].items() if v['qty'] > 0}
+    # Aggregate lot qty/costBasis by symbol (tickets → asset totals).
+    lots_agg = {}
+    for l in (acct.get('lots') or []):
+        sym = (l.get('asset') or '').upper()
+        lq = D(l.get('qty')) or Decimal('0')
+        lcb = D(l.get('costBasis')) or Decimal('0')
+        if lq > 0:
+            if sym not in lots_agg:
+                lots_agg[sym] = {'qty': Decimal('0'), 'costBasis': Decimal('0')}
+            lots_agg[sym]['qty'] += lq
+            lots_agg[sym]['costBasis'] += lcb
+    all_syms = set(lots_agg) | {s for s, v in rep['perAsset'].items() if v['qty'] > 0}
     for sym in all_syms:
-        lot = lots_by_sym.get(sym) or {}
+        la = lots_agg.get(sym) or {'qty': Decimal('0'), 'costBasis': Decimal('0')}
         rs = rep['perAsset'].get(sym) or {'qty': Decimal('0'), 'costBasis': Decimal('0')}
-        checks['qty:%s' % sym] = q_qty(D(lot.get('qty')) or Decimal('0')) == q_qty(rs['qty'])
-        checks['cb:%s' % sym] = q_cash(D(lot.get('costBasis')) or Decimal('0')) == q_cash(rs['costBasis'])
+        checks['qty:%s' % sym] = q_qty(la['qty']) == q_qty(rs['qty'])
+        checks['cb:%s' % sym] = q_cash(la['costBasis']) == q_cash(rs['costBasis'])
     return {'ok': all(checks.values()), 'checks': checks, 'replay': rep}
 
 
 def apply_buy_atomic(col, acct_id, pid, expected_version, idem_key, proposal_id,
                      sizing, canonical, base_currency='USDC', asset=None, price_q=PRICE_Q,
-                     strategy_version=None, strategy_hash=None, required_mode=None):
+                     strategy_version=None, strategy_hash=None, required_mode=None,
+                     ticket_rules=None):
     """Apply a BUY as ONE conditional update. Idempotent + concurrency-safe.
-    `asset` (M5) defaults to the canonical/sizing asset (BTC for M1-M4).
+
+    TICKET MODEL: every distinct BUY creates a NEW ticket (lot). Multiple tickets
+    for the same asset are separate entries with independent rules and accounting.
+    No merge-on-BUY. ticket_rules (optional) stores stop/target/trailing state.
+
     Returns (result_dict, error_code, http_status)."""
     asset = (asset or sizing.get('asset') or canonical.get('asset') or 'BTC').upper()
     for _ in range(5):
@@ -556,48 +602,45 @@ def apply_buy_atomic(col, acct_id, pid, expected_version, idem_key, proposal_id,
             return None, 'ALREADY_CONSUMED', 409
         if acct.get('version') != expected_version:
             expected_version = acct.get('version')
-            # fall through & retry with the current version
 
         cash = D(acct.get('cash')) or Decimal('0')
         fees = D(acct.get('feesPaid')) or Decimal('0')
-        notional, fill_px, fee, qty = sizing['notional'], sizing['fillPx'], sizing['fee'], sizing['qty']
+        notional = sizing['notional']; fill_px = sizing['fillPx']
+        fee = sizing.get('fee') or Decimal('0'); qty = sizing['qty']
         new_cash = q_cash(cash - notional)
         new_fees = q_cash(fees + fee)
-        lot = _lot_for(acct, asset)
+
+        # ── ALWAYS create a new ticket — never merge into an existing lot ──
         lots = list(acct.get('lots') or [])
-        if lot:
-            oq = D(lot.get('qty')); ocb = D(lot.get('costBasis'))
-            nq = q_qty(oq + qty); ncb = q_cash(ocb + notional)
-            navg = round_tick(ncb / nq, price_q, ROUND_HALF_UP) if nq > 0 else Decimal('0')
-            for l in lots:
-                if (l.get('asset') or '').upper() == asset:
-                    l['qty'] = to128(nq); l['costBasis'] = to128(ncb); l['avgEntry'] = to128(navg)
-                    l['positionVersion'] = (l.get('positionVersion') or 0) + 1
-                    # Track the original entry quantity separately. Additions increase
-                    # the basis for "% of original" partial targets.
-                    if not l.get('originalQty'):
-                        l['originalQty'] = to128(oq)  # first recorded basis
-                    l['originalQty'] = to128(D(l.get('originalQty') or oq) + qty)
-            lot_id = lot.get('lotId')
-        else:
-            lot_id = 'pp_' + uuid.uuid4().hex[:12]
-            lots.append({'lotId': lot_id, 'asset': asset, 'status': 'OPEN',
-                         'qty': to128(qty), 'originalQty': to128(qty),
-                         'avgEntry': to128(fill_px), 'costBasis': to128(notional),
-                         'realizedPnl': to128(Decimal('0')), 'feesPaid': to128(fee),
-                         'openedAt': datetime.datetime.utcnow().isoformat(),
-                         'entryDecisionSnapshotId': canonical.get('decisionSnapshotId'),
-                         'entryDecisionId': canonical.get('decisionId'),
-                         'invalidationPrice': to128(round_tick(D(canonical.get('invalidationPrice')), price_q)) if canonical.get('invalidationPrice') else None,
-                         'completedTargets': [],
-                         'positionVersion': 1})
+        lot_id = 'pp_' + uuid.uuid4().hex[:12]
+        new_ticket = {
+            'lotId': lot_id, 'asset': asset, 'status': 'OPEN',
+            'qty': to128(qty), 'originalQty': to128(qty),
+            'avgEntry': to128(fill_px), 'costBasis': to128(notional),
+            'realizedPnl': to128(Decimal('0')), 'feesPaid': to128(fee),
+            'openedAt': datetime.datetime.utcnow().isoformat(),
+            'entryDecisionSnapshotId': canonical.get('decisionSnapshotId'),
+            'entryDecisionId': canonical.get('decisionId'),
+            'strategyVersion': strategy_version,
+            'completedTargets': [],
+            'positionVersion': 1,
+        }
+        # Attach stop/target/trailing rules from the strategy to this ticket.
+        if ticket_rules:
+            new_ticket['rules'] = ticket_rules
+        # Preserve invalidation from the canonical decision as the initial stop reference.
+        inv = canonical.get('invalidationPrice')
+        if inv is not None:
+            new_ticket['invalidationPrice'] = to128(round_tick(D(inv), price_q))
+        lots.append(new_ticket)
+
         seq = (acct.get('accountSequence') or 0) + 1
         led = _ledger_entry(seq, 'FILL', lot_id, -notional,
-                            'BUY %s %s @ %s (fee %s) · approval' % (qty_dstr(qty), asset, dstr(fill_px, price_q), dstr(fee)),
+                            'BUY %s %s @ %s · ticket %s' % (qty_dstr(qty), asset, dstr(fill_px, price_q), lot_id),
                             extra={'side': 'BUY', 'asset': asset, 'qty': qty_dstr(qty), 'fillPx': dstr(fill_px, price_q),
                                    'fee': dstr(fee), 'notional': dstr(notional), 'proposalId': proposal_id})
         result = {'side': 'BUY', 'asset': asset, 'qty': qty_dstr(qty), 'fillPrice': dstr(fill_px, price_q),
-                  'fee': dstr(fee), 'notional': dstr(notional), 'positionId': lot_id,
+                  'fee': dstr(fee), 'notional': dstr(notional), 'positionId': lot_id, 'ticketId': lot_id,
                   'decisionSnapshotId': canonical.get('decisionSnapshotId'), 'paperOnly': True}
         applied = {'idemKey': idem_key, 'proposalId': proposal_id, 'result': result,
                    'at': datetime.datetime.utcnow().isoformat()}
@@ -612,19 +655,20 @@ def apply_buy_atomic(col, acct_id, pid, expected_version, idem_key, proposal_id,
              '$inc': {'version': 1, 'accountSequence': 1}})
         if upd is not None:
             return result, None, 200
-        # CAS miss: loop re-reads (idempotent replay / already-consumed handled at top).
     return None, 'CONCURRENCY_RETRY_EXHAUSTED', 409
 
 
 def apply_sell_atomic(col, acct_id, pid, sizing, source='approval', idem_key=None,
                       proposal_id=None, canonical=None, base_currency='USDC', asset=None, price_q=PRICE_Q,
                       strategy_version=None, strategy_hash=None, required_mode=None,
-                      completed_rule_id=None):
-    """Apply a reduce-only SELL as ONE conditional update. `asset` (M5) defaults
-    to the sizing/canonical asset (BTC for M1-M4).
-    When completed_rule_id is provided, it is atomically added to the lot's
-    completedTargets within the same write — preventing re-fire on crash between
-    fill and completion."""
+                      completed_rule_id=None, ticket_id=None):
+    """Apply a reduce-only SELL as ONE conditional update.
+
+    TICKET MODEL: if ticket_id is provided, ONLY that ticket is affected. Other
+    tickets for the same asset remain untouched. If ticket_id is None, falls back
+    to the first lot for the asset (legacy compat).
+
+    Returns (result_dict, error_code, http_status)."""
     asset = (asset or sizing.get('asset') or (canonical or {}).get('asset') or 'BTC').upper()
     for _ in range(5):
         acct = col.find_one({'paperAccountId': acct_id, 'ownerId': pid})
@@ -638,17 +682,21 @@ def apply_sell_atomic(col, acct_id, pid, sizing, source='approval', idem_key=Non
             for ap in (acct.get('appliedApprovals') or []):
                 if ap.get('idemKey') == idem_key:
                     return ap.get('result'), None, 200
-        lot = _lot_for(acct, asset)
+        # Find the target ticket — by ID or by symbol (legacy fallback).
+        lot = _ticket_by_id(acct, ticket_id) if ticket_id else _lot_for(acct, asset)
         if not lot or (D(lot.get('qty')) or Decimal('0')) <= 0:
             return None, 'NO_POSITION', 404
+        target_lot_id = lot.get('lotId')
         expected_version = acct.get('version')
         cash = D(acct.get('cash')) or Decimal('0')
         fees = D(acct.get('feesPaid')) or Decimal('0')
         realized_acc = D(acct.get('realizedPnl')) or Decimal('0')
-        qty = sizing['qty']; fill_px = sizing['fillPx']; fee = sizing['fee']
+        qty = sizing['qty']; fill_px = sizing['fillPx']
+        fee = sizing.get('fee') or Decimal('0')
         oq = D(lot.get('qty')); ocb = D(lot.get('costBasis'))
         qty = q_qty(min(oq, qty))
-        proceeds = q_cash(qty * fill_px - fee)
+        # Direct-price accounting: proceeds = qty × fill, P&L = proceeds − cost portion.
+        proceeds = q_cash(qty * fill_px)
         cost_portion = q_cash(ocb * (qty / oq)) if oq > 0 else Decimal('0')
         realized = q_cash(proceeds - cost_portion)
         new_cash = q_cash(cash + proceeds)
@@ -658,34 +706,34 @@ def apply_sell_atomic(col, acct_id, pid, sizing, source='approval', idem_key=Non
         lots = list(acct.get('lots') or [])
         closed = list(acct.get('closedLots') or [])
         if remaining <= 0:
-            lots = [l for l in lots if (l.get('asset') or '').upper() != asset]
-            closed.append({'lotId': lot.get('lotId'), 'asset': asset, 'status': 'CLOSED',
+            # Full close — remove ONLY this ticket, not other tickets for the same asset.
+            lots = [l for l in lots if l.get('lotId') != target_lot_id]
+            closed.append({'lotId': target_lot_id, 'asset': asset, 'status': 'CLOSED',
                            'qty': to128(qty), 'avgEntry': lot.get('avgEntry'),
                            'exitPrice': to128(fill_px), 'realizedPnl': to128(realized),
                            'closedAt': datetime.datetime.utcnow().isoformat(),
                            'entryDecisionSnapshotId': lot.get('entryDecisionSnapshotId')})
         else:
             for l in lots:
-                if (l.get('asset') or '').upper() == asset:
+                if l.get('lotId') == target_lot_id:
                     l['qty'] = to128(remaining)
                     l['costBasis'] = to128(q_cash(ocb - cost_portion))
                     l['positionVersion'] = (l.get('positionVersion') or 0) + 1
-                    # Atomically record the completed target within the same lot write.
                     if completed_rule_id:
                         existing = set(l.get('completedTargets') or [])
                         existing.add(completed_rule_id)
                         l['completedTargets'] = list(existing)
         seq = (acct.get('accountSequence') or 0) + 1
-        led = _ledger_entry(seq, 'FILL', lot.get('lotId'), proceeds,
-                            'SELL %s %s @ %s (fee %s, PnL %s) · %s'
-                            % (qty_dstr(qty), asset, dstr(fill_px, price_q), dstr(fee), dstr(realized), source),
+        led = _ledger_entry(seq, 'FILL', target_lot_id, proceeds,
+                            'SELL %s %s @ %s (PnL %s) · %s · ticket %s'
+                            % (qty_dstr(qty), asset, dstr(fill_px, price_q), dstr(realized), source, target_lot_id),
                             extra={'side': 'SELL', 'asset': asset, 'qty': qty_dstr(qty), 'fillPx': dstr(fill_px, price_q),
                                    'fee': dstr(fee), 'proceeds': dstr(proceeds), 'realized': dstr(realized),
                                    'costPortion': dstr(cost_portion), 'proposalId': proposal_id,
-                                   'completedRuleId': completed_rule_id})
+                                   'completedRuleId': completed_rule_id, 'ticketId': target_lot_id})
         result = {'side': 'SELL', 'asset': asset, 'qty': qty_dstr(qty), 'fillPrice': dstr(fill_px, price_q),
                   'fee': dstr(fee), 'proceeds': dstr(proceeds), 'realized': dstr(realized),
-                  'paperOnly': True}
+                  'ticketId': target_lot_id, 'paperOnly': True}
         push = {'ledger': led}
         setd = {'cash': to128(new_cash), 'feesPaid': to128(new_fees),
                 'realizedPnl': to128(new_realized), 'lots': lots, 'closedLots': closed}

@@ -7816,11 +7816,10 @@ def _simulation_cg_get(path, params):
 
 _verified_market.configure_coingecko(_simulation_cg_get)
 
-PAPER_EXEC_PROFILE = {'executionProfileId': _paper_core.EXEC_PROFILE['executionProfileId'],
-                      'feeBps': int(_paper_core.EXEC_PROFILE['feeBps']),
-                      'spreadBps': int(_paper_core.EXEC_PROFILE['spreadBps']),
-                      'slippageBps': int(_paper_core.EXEC_PROFILE['slippageBps']),
-                      'model': _paper_core.EXEC_PROFILE['model']}
+PAPER_EXEC_PROFILE = {'executionProfileId': 'ep_direct_price_v2',
+                      'feeBps': 0, 'spreadBps': 0, 'slippageBps': 0,
+                      'model': 'direct_price',
+                      'note': 'Paper trading fills at the observed market price with zero fees.'}
 PAPER_PROPOSAL_TTL_MIN = _paper_core.PROPOSAL_TTL_MIN
 
 
@@ -8097,21 +8096,30 @@ def _paper_proposal_public(prop):
 # ------------------------- Background Paper Autopilot -------------------------
 # A durable worker (APScheduler job, max_instances=1) runs independently of any
 # browser/dashboard. It is the ONLY thing that trades. GET/dashboard is read-only.
-_AUTOPILOT = {'lastRunAt': None, 'lastCompletedAt': None, 'state': 'starting', 'intervalSec': 60}
+_AUTOPILOT = {'lastRunAt': None, 'lastCompletedAt': None, 'state': 'starting',
+              'intervalSec': 30, '_cursor': None, 'lastCycleSec': None,
+              'lastCycleProcessed': 0, 'lastCycleSkipped': 0}
+_WORKER_BUDGET_SEC = 25      # hard wall — must finish before the 30-s scheduler tick
+_WORKER_MAX_PER_ACCT_SEC = 8   # per-account ceiling (dynamic: capped to remaining budget)
+_WORKER_TIMEOUT_PENALTIES = {}  # {acct_id: consecutive_timeout_count} — deprioritise repeat offenders
 
 
 def _paper_autopilot_status(a):
     ap = a.get('autopilot') or {}
     nxt = None
-    if _AUTOPILOT['lastRunAt']:
+    if _AUTOPILOT.get('lastCompletedAt'):
         try:
-            nxt = (datetime.datetime.fromisoformat(_AUTOPILOT['lastRunAt'])
+            nxt = (datetime.datetime.fromisoformat(_AUTOPILOT['lastCompletedAt'])
                    + datetime.timedelta(seconds=_AUTOPILOT['intervalSec'])).isoformat()
         except Exception:  # noqa
             nxt = None
     return {'mode': a.get('mode'), 'runtimeState': a.get('runtimeState'),
             'workerState': _AUTOPILOT['state'],
             'workerLastRunAt': _AUTOPILOT['lastRunAt'],
+            'workerLastCompletedAt': _AUTOPILOT.get('lastCompletedAt'),
+            'lastCycleSec': _AUTOPILOT.get('lastCycleSec'),
+            'lastCycleProcessed': _AUTOPILOT.get('lastCycleProcessed', 0),
+            'lastCycleSkipped': _AUTOPILOT.get('lastCycleSkipped', 0),
             'lastCheckAt': ap.get('lastCheckAt'),
             'lastDecisionProcessed': ap.get('lastDecisionProcessed'),
             'lastTradeAt': ap.get('lastTradeAt'),
@@ -8153,12 +8161,14 @@ def _autopilot_set_vis(acct_id, **fields):
                                   {'$set': {('autopilot.' + k): v for k, v in fields.items()}})
 
 
-def _autopilot_process_account(acct):
+def _autopilot_process_account(acct, cancel=None):
     """Process ONE paper account for the current tick. Reused by the worker only."""
     acct_id = acct['paperAccountId']; pid = acct['ownerId']
     now_iso = datetime.datetime.utcnow().isoformat()
     _autopilot_set_vis(acct_id, lastCheckAt=now_iso)
     if acct.get('archivedAt'):
+        return
+    if cancel and cancel.is_set():
         return
     px, fresh, mark_obs = _paper_mark('BTC')
     mark_ts = (mark_obs or {}).get('ts')
@@ -8543,7 +8553,7 @@ def _materialize_sds(acct, strat, canonical, obs, action, asset, sizing, gate_tr
     return _id
 
 
-def _autopilot_process_account_multi(acct):
+def _autopilot_process_account_multi(acct, cancel=None):
     """M5 Expert Multi-Asset Trader tick for ONE paper account.
 
     Reuses the M4 durability guarantees (per-account lease upstream, single-doc
@@ -8558,19 +8568,58 @@ def _autopilot_process_account_multi(acct):
     _autopilot_set_vis(acct_id, lastCheckAt=now_iso)
     if acct.get('archivedAt'):
         return
+    if cancel and cancel.is_set():
+        return
     mandate = _albert_deps.get_mandate(pid) or {}
     excluded = set(mandate.get('excluded_coins') or [])
     approved = set(mandate.get('approved_coins') or [])
 
-    # Canonical decisions for every asset, built from THIS account's portfolio (blocker #2).
-    decisions = _paper_canonical_decisions(pid, account=acct)
-    dec_by_sym = {(d.get('asset') or '').upper(): d for d in decisions}
+    # ── checkpoint: abort before expensive canonical-decision call ──
+    if cancel and cancel.is_set():
+        return
     # A Studio wallet with no latest active executable version has NO entry
     # universe. Its existing holdings still receive protective/manual exits.
     _strat = _strategy_for_account(acct)
     _strat_syms = _strategy_syms(_strat) if _strat else (set() if acct.get('strategyId') else None)
 
+    # If the account is bound to a strategy but the strategy document is gone
+    # (archived, orphaned, version mismatch), skip the expensive canonical-
+    # decision scan entirely — there is nothing actionable.
+    _orphaned_strategy = bool(acct.get('strategyId') and not _strat)
+    if _orphaned_strategy:
+        held_any = any((_paper_core.D(l.get('qty')) or Decimal('0')) > 0
+                       for l in (acct.get('lots') or []))
+        if not held_any:
+            return  # orphaned strategy account with no positions: nothing to do
+
+    # Canonical decisions for every asset, built from THIS account's portfolio (blocker #2).
+    # For orphaned strategy accounts WITH holdings, scope to held-only so the scoring
+    # engine does not scan 50+ coins on an account that cannot make new entries anyway.
+    if _orphaned_strategy:
+        _held_syms_for_scope = [(l.get('asset') or '').upper() for l in (acct.get('lots') or [])
+                                 if (_paper_core.D(l.get('qty')) or Decimal('0')) > 0]
+        override = _portfolio_summary_from_account(acct)
+        snap = _albert_decision_mod.build_decisions(pid, summary_override=override,
+                                                     strategy_symbols=_held_syms_for_scope)
+        decisions = []
+        try:
+            key = _paper_hist_key(pid, acct)
+            _decision_history_repo.reconcile(key, snap)
+            for d in (snap.get('decisions') or []):
+                env = _decision_history_repo.get_current(key, d.get('symbol'))
+                can = _envelope_to_canonical(env)
+                if can:
+                    decisions.append(can)
+        except Exception:  # noqa
+            traceback.print_exc()
+    else:
+        decisions = _paper_canonical_decisions(pid, account=acct)
+    dec_by_sym = {(d.get('asset') or '').upper(): d for d in decisions}
+
     # Marks for every held + candidate asset.
+    # ── checkpoint: abort before mark fetches ──
+    if cancel and cancel.is_set():
+        return
     held_syms = [(l.get('asset') or '').upper() for l in (acct.get('lots') or [])
                  if (_paper_core.D(l.get('qty')) or Decimal('0')) > 0]
     universe = list(dict.fromkeys(held_syms + list(dec_by_sym.keys())))
@@ -8594,6 +8643,9 @@ def _autopilot_process_account_multi(acct):
 
     equity_info = _paper_portfolio.compute_portfolio_equity(acct, marks)
 
+    # ── checkpoint: abort before protective-exit and trade phases ──
+    if cancel and cancel.is_set():
+        return
     # 1) High-water + portfolio drawdown breaker (verified valuation only).
     if equity_info['available'] and equity_info['equity'] is not None:
         _paper_core.update_high_water(paper_accounts_col, acct_id, pid, equity_info['equity'])
@@ -8611,6 +8663,8 @@ def _autopilot_process_account_multi(acct):
             acct = paper_accounts_col.find_one({'paperAccountId': acct_id}) or acct
 
     # 2) Protective invalidation exits per held asset (run even when paused).
+    #    TICKET-CENTRIC: each ticket is evaluated independently.
+    #    FLASH-CRASH: fill at observed market price (never substitute stop price).
     if PAPER_EXECUTION_ENABLED:
         for lot in list(acct.get('lots') or []):
             sym = (lot.get('asset') or '').upper()
@@ -8619,9 +8673,9 @@ def _autopilot_process_account_multi(acct):
             px, fresh = marks.get(sym, (None, False))
             if qty <= 0 or inv is None or px is None or not fresh or px >= inv:
                 continue
-            prof = _paper_profiles.asset_profile(sym, (dec_by_sym.get(sym) or {}).get('rank'),
-                                                  market=(mark_obs.get(sym) or {}).get('execution'))
-            sizing = _paper_core.size_sell(sym, qty, px, profile=prof, price_q=prof['priceQ'])
+            lot_id = lot.get('lotId')
+            # Direct-price fill at observed market price (gap below stop → fill at gap, not stop).
+            sizing = _paper_core.ticket_sell_sizing(sym, qty, px)
             if sizing.get('reject'):
                 continue
             if acct.get('strategyId') and acct.get('mode') == 'APPROVAL_REQUIRED':
@@ -8641,20 +8695,25 @@ def _autopilot_process_account_multi(acct):
                 continue
             res, err, _ = _paper_core.apply_sell_atomic(
                 paper_accounts_col, acct_id, pid, sizing, source='auto_invalidation',
-                idem_key='inv:%s:%s' % (lot.get('lotId'), (mark_obs.get(sym) or {}).get('obsId')),
-                asset=sym, price_q=prof['priceQ'])
+                idem_key='inv:%s:%s' % (lot_id, (mark_obs.get(sym) or {}).get('obsId')),
+                asset=sym, ticket_id=lot_id)
             if not err:
                 _autopilot_set_vis(acct_id, lastTradeAt=now_iso)
                 _autopilot_notify(pid, acct_id, 'Paper position auto-exited (invalidation)',
-                                  '%s fell below the engine invalidation — position closed. Paper only.' % sym,
+                                  '%s ticket %s fell below the engine invalidation — closed at observed price. Paper only.' % (sym, lot_id),
                                   'warning')
         acct = paper_accounts_col.find_one({'paperAccountId': acct_id}) or acct
         equity_info = _paper_portfolio.compute_portfolio_equity(acct, marks)
 
     # Native reviewed percentage/price/indicator exits. SELL is reduce-only and
     # never needs a fabricated canonical SELL; Review proposes rather than fills.
-    # Partial targets sell only the specified portion; the matched ruleId is marked
-    # completed on the lot so it does not re-fire on the next cycle.
+    # TICKET-CENTRIC: each ticket is evaluated individually against its saved
+    # targets and the freshly observed price. Partial targets sell only the
+    # specified portion of THIS ticket. The matched ruleId is marked completed
+    # on the ticket so it does not re-fire on the next cycle.
+    # ── checkpoint: abort before rule-based exits ──
+    if cancel and cancel.is_set():
+        return
     if _strat and PAPER_EXECUTION_ENABLED:
         for lot in list(acct.get('lots') or []):
             sym = (lot.get('asset') or '').upper()
@@ -8662,6 +8721,7 @@ def _autopilot_process_account_multi(acct):
             px, fresh = marks.get(sym, (None, False))
             if qty <= 0 or not fresh or px is None or not (mark_obs.get(sym) or {}).get('obsId'):
                 continue
+            lot_id = lot.get('lotId')
             verdict = _studio_rule_check(_strat, sym, 'SELL', px, acct, mark_obs.get(sym))
             if not verdict['ready']:
                 continue
@@ -8679,9 +8739,8 @@ def _autopilot_process_account_multi(acct):
                     else:
                         sell_qty = (qty * portion_pct / Decimal('100')).quantize(Decimal('1e-8'))
                     sell_qty = min(sell_qty, qty)  # never sell more than held
-            prof = _paper_profiles.asset_profile(sym, (dec_by_sym.get(sym) or {}).get('rank'),
-                                                  market=(mark_obs.get(sym) or {}).get('execution'))
-            sizing = _paper_core.size_sell(sym, sell_qty, px, profile=prof, price_q=prof['priceQ'])
+            # Direct-price fill at observed price.
+            sizing = _paper_core.ticket_sell_sizing(sym, sell_qty, px)
             if sizing.get('reject'):
                 continue
             rule_can = _studio_rule_envelope(_strat, sym, mark_obs[sym], rule_id)
@@ -8700,7 +8759,8 @@ def _autopilot_process_account_multi(acct):
                     if is_partial:
                         paper_proposals_col.update_one({'proposalId': proposal.get('proposalId')},
                                                       {'$set': {'isPartialTarget': True, 'partialRuleId': rule_id,
-                                                                'sizing': {'qty': str(sell_qty), 'fillPx': str(px)}}})
+                                                                'sizing': {'qty': str(sell_qty), 'fillPx': str(px)},
+                                                                'ticketId': lot_id}})
                     _autopilot_notify(pid, acct_id, 'Paper exit needs your approval',
                                       f'{sym} met a reviewed exit rule{" (partial target)" if is_partial else ""}. Open Review to approve. Paper only.')
             elif acct.get('mode') == 'PAPER_AUTOPILOT' and PAPER_AUTOPILOT_ENABLED:
@@ -8710,10 +8770,11 @@ def _autopilot_process_account_multi(acct):
                     continue
                 result, err, _ = _paper_core.apply_sell_atomic(
                     paper_accounts_col, acct_id, pid, sizing, source='auto_strategy_rule',
-                    idem_key='rule:%s:%s:%s' % (lot.get('lotId'), rule_id, mark_obs[sym]['obsId']),
-                    asset=sym, price_q=prof['priceQ'], strategy_version=_strat['version'],
+                    idem_key='rule:%s:%s:%s' % (lot_id, rule_id, mark_obs[sym]['obsId']),
+                    asset=sym, strategy_version=_strat['version'],
                     strategy_hash=_strat['contractHash'], required_mode='PAPER_AUTOPILOT',
-                    completed_rule_id=rule_id if (is_partial or rule_id) else None)
+                    completed_rule_id=rule_id if (is_partial or rule_id) else None,
+                    ticket_id=lot_id)
                 if not err:
                     _materialize_sds(acct, _strat, rule_can, mark_obs[sym], 'SELL', sym,
                                      sizing, [], 'EXECUTED', rule_results=verdict['results'])
@@ -8722,6 +8783,9 @@ def _autopilot_process_account_multi(acct):
         equity_info = _paper_portfolio.compute_portfolio_equity(acct, marks)
 
     if not decisions:
+        return
+    # ── checkpoint: abort before entry-decision processing ──
+    if cancel and cancel.is_set():
         return
     mode = acct.get('mode')
     processed = dict(acct.get('processedDecisionSnapshots') or {})   # {asset: snapshotId}
@@ -8829,12 +8893,12 @@ def _autopilot_process_account_multi(acct):
                 if budget is None:
                     _studio_wait_reason(acct, _strat, sym, 'reviewed weight, protected reserve, maximum positions or available cash blocks this BUY.')
                     continue  # reviewed weights/risk cannot be replaced by generic sizing
-                sizing = _paper_core.size_buy(sym, budget, px, profile=prof, price_q=prof['priceQ'])
+                sizing = _paper_core.ticket_buy_sizing(sym, budget, px)
             else:
                 pos = next((p for p in equity_info['positions'] if p['symbol'] == sym), None)
                 if not pos:
                     newly_seen[sym] = c['_sid']; continue
-                sizing = _paper_core.size_sell(sym, pos['qty'], px, profile=prof, price_q=prof['priceQ'])
+                sizing = _paper_core.ticket_sell_sizing(sym, pos['qty'], px)
             if sizing.get('reject'):
                 newly_seen[sym] = c['_sid']; continue
             if c['action'] == 'BUY' and not _asset_caps.entry_allowed(sym, mandate, data_ok=True)[0]:
@@ -8909,15 +8973,24 @@ def _autopilot_process_account_multi(acct):
                     current_strat = _strategy_for_account(current_acct) if current_acct else None
                     if not current_strat or current_strat.get('version') != _strat.get('version'):
                         continue
-                sizing = _paper_core.size_buy(sym, budget, px, profile=prof, price_q=prof['priceQ'])
+                sizing = _paper_core.ticket_buy_sizing(sym, budget, px)
                 if sizing.get('reject'):
                     continue
+                # Build ticket rules from the strategy for this asset.
+                _ticket_rules = None
+                if _strat:
+                    _sell_rules = [r for r in (_strat.get('rules') or [])
+                                   if r.get('side') == 'SELL' and
+                                   ((r.get('asset') or '').upper() == sym or not r.get('asset'))]
+                    if _sell_rules:
+                        _ticket_rules = _sell_rules
                 res, err, _ = _paper_core.apply_buy_atomic(
                     paper_accounts_col, acct_id, pid, acct.get('version'), idem, 'auto_%s_%s' % (sym, sid),
-                    sizing, can, base_currency=acct.get('baseCurrency', 'USDC'), asset=sym, price_q=prof['priceQ'],
+                    sizing, can, base_currency=acct.get('baseCurrency', 'USDC'), asset=sym,
                     strategy_version=_strat['version'] if _strat else None,
                     strategy_hash=_strat['contractHash'] if _strat else None,
-                    required_mode='PAPER_AUTOPILOT' if _strat else None)
+                    required_mode='PAPER_AUTOPILOT' if _strat else None,
+                    ticket_rules=_ticket_rules)
                 if not err:
                     traded_syms.add(sym)
                     _materialize_sds(acct, _strat, can, mark_obs.get(sym), 'BUY', sym,
@@ -8938,13 +9011,13 @@ def _autopilot_process_account_multi(acct):
                     continue
                 frac = intent.get('fraction') or Decimal('1')
                 sell_qty = _paper_core.q_qty(pos['qty'] * frac)
-                sizing = _paper_core.size_sell(sym, sell_qty, px, profile=prof, price_q=prof['priceQ'])
+                sizing = _paper_core.ticket_sell_sizing(sym, sell_qty, px)
                 if sizing.get('reject'):
                     continue
                 res, err, _ = _paper_core.apply_sell_atomic(
                     paper_accounts_col, acct_id, pid, sizing, source='auto_%s' % intent.get('reason', 'sell'),
                     idem_key=idem, proposal_id='auto_%s_%s' % (sym, sid), canonical=can,
-                    asset=sym, price_q=prof['priceQ'])
+                    asset=sym, ticket_id=pos.get('ticketId'))
                 if not err:
                     traded_syms.add(sym)
                     if intent.get('reason') == 'ROTATION':      # M5.1 open a rotation record
@@ -9091,48 +9164,125 @@ def _paper_make_proposal_multi(acct_id, pid, side, canonical, sizing, asset, str
 
 
 def _paper_autopilot_worker():
-    """Durable background job: process every non-archived paper account once,
-    under a per-account DB lease. Independent of any frontend activity."""
+    """Durable background job: process RUNNING paper accounts under a time budget.
+
+    Guarantees:
+    * Hard wall of _WORKER_BUDGET_SEC (25 s) — always returns before the next
+      30-second scheduler tick so the 'max_instances=1' constraint never causes
+      permanent lockout.
+    * Per-account timeout = min(_WORKER_MAX_PER_ACCT_SEC, remaining budget − 1 s).
+      Timed-out threads receive a cancel event that aborts further DB writes.
+    * Strategy accounts are processed FIRST every cycle.
+    * Non-strategy accounts rotate via a stored cursor so later accounts are not
+      permanently starved.
+    * Genuinely empty accounts (no strategy, no holdings) are skipped.
+    """
     import threading as _threading
+    import time as _time
     _AUTOPILOT['state'] = 'running'
     _AUTOPILOT['lastRunAt'] = datetime.datetime.utcnow().isoformat()
     had_error = False
+    cycle_start = _time.monotonic()
+    n_processed = 0
+    n_skipped = 0
+    last_other_id = None   # rotating cursor bookmark among non-strategy accounts
     try:
-        cur = paper_accounts_col.find({'archivedAt': None,
-                                       'mode': {'$in': ['OBSERVE', 'APPROVAL_REQUIRED', 'PAPER_AUTOPILOT']}})
-        for acct in cur:
+        # ── 1. Fetch only RUNNING, non-archived accounts ──
+        all_accts = list(paper_accounts_col.find(
+            {'archivedAt': None, 'runtimeState': 'RUNNING',
+             'mode': {'$in': ['OBSERVE', 'APPROVAL_REQUIRED', 'PAPER_AUTOPILOT']}}))
+
+        # ── 2. Split into strategy-first + others, apply rotation ──
+        strat_accts = [a for a in all_accts if a.get('strategyId')]
+        other_accts = [a for a in all_accts if not a.get('strategyId')]
+        # Within strategy accounts, push repeated-timeout offenders to the end
+        # so healthy strategy accounts are always served first.
+        strat_accts.sort(key=lambda a: _WORKER_TIMEOUT_PENALTIES.get(a['paperAccountId'], 0))
+        cursor_id = _AUTOPILOT.get('_cursor')
+        if cursor_id and other_accts:
+            idx = next((i for i, a in enumerate(other_accts)
+                        if a['paperAccountId'] > cursor_id), 0)
+            other_accts = other_accts[idx:] + other_accts[:idx]
+        ordered = strat_accts + other_accts
+
+        fn = _autopilot_process_account_multi if PAPER_MULTI_ASSET_ENABLED else _autopilot_process_account
+
+        for acct in ordered:
+            remaining = _WORKER_BUDGET_SEC - (_time.monotonic() - cycle_start)
+            if remaining < 3:          # not enough time for any useful work
+                break
+
             acct_id = acct['paperAccountId']
-            token = _autopilot_acquire_lease(acct_id)
+            has_strategy = bool(acct.get('strategyId'))
+
+            # ── 3. Skip genuinely empty accounts ──
+            if not has_strategy:
+                has_holdings = any((_paper_core.D(l.get('qty')) or Decimal('0')) > 0
+                                   for l in (acct.get('lots') or []))
+                if not has_holdings:
+                    n_skipped += 1
+                    last_other_id = acct_id
+                    continue
+
+            # ── 4. Acquire a lease bounded to remaining budget ──
+            lease_ttl = int(min(_WORKER_MAX_PER_ACCT_SEC, remaining)) + 5
+            token = _autopilot_acquire_lease(acct_id, ttl_sec=lease_ttl)
             if not token:
-                continue  # another worker holds the lease
+                continue                # another process holds it
+
+            cancel_event = _threading.Event()
             try:
                 fresh_acct = paper_accounts_col.find_one({'paperAccountId': acct_id}) or acct
-                fn = _autopilot_process_account_multi if PAPER_MULTI_ASSET_ENABLED else _autopilot_process_account
-                # Run in a daemon thread with a timeout so a single stuck account
-                # does not block the entire worker indefinitely.
+                # Re-check runtimeState after fresh read (may have been paused between query and lease)
+                if fresh_acct.get('runtimeState') != 'RUNNING':
+                    n_skipped += 1
+                    if not has_strategy:
+                        last_other_id = acct_id
+                    continue
+
                 _acct_exc = [None]
-                def _run():
-                    try: fn(fresh_acct)
-                    except Exception as _e: _acct_exc[0] = _e
+                _cancel = cancel_event   # close over the event for the inner function
+                def _run(_fn=fn, _fa=fresh_acct, _ce=_cancel):
+                    try:
+                        _fn(_fa, cancel=_ce)
+                    except Exception as _e:
+                        _acct_exc[0] = _e
+                per_acct_timeout = max(min(_WORKER_MAX_PER_ACCT_SEC, remaining - 1), 2)
                 t = _threading.Thread(target=_run, daemon=True)
                 t.start()
-                t.join(timeout=90)  # 90 seconds per account
+                t.join(timeout=per_acct_timeout)
                 if t.is_alive():
+                    cancel_event.set()           # signal the zombie thread to stop writing
                     had_error = True
-                    print(f'WARNING: paper autopilot timed out processing {acct_id} (90s)')
+                    _WORKER_TIMEOUT_PENALTIES[acct_id] = _WORKER_TIMEOUT_PENALTIES.get(acct_id, 0) + 1
+                    print('WARNING: paper autopilot timed out processing %s (%.0fs, penalty=%d)'
+                          % (acct_id, per_acct_timeout, _WORKER_TIMEOUT_PENALTIES[acct_id]))
                 elif _acct_exc[0]:
                     raise _acct_exc[0]
+                else:
+                    n_processed += 1
+                    _WORKER_TIMEOUT_PENALTIES.pop(acct_id, None)  # clear penalty on success
+                    if not has_strategy:
+                        last_other_id = acct_id
             except Exception:  # noqa
                 had_error = True
                 traceback.print_exc()
             finally:
                 _autopilot_release_lease(acct_id, token)
+
+        # ── 5. Persist rotating cursor for next cycle ──
+        if last_other_id:
+            _AUTOPILOT['_cursor'] = last_other_id
     except Exception:  # noqa
         had_error = True
         traceback.print_exc()
     finally:
+        elapsed = _time.monotonic() - cycle_start
         _AUTOPILOT['lastCompletedAt'] = datetime.datetime.utcnow().isoformat()
         _AUTOPILOT['state'] = 'delayed' if had_error else 'running'
+        _AUTOPILOT['lastCycleSec'] = round(elapsed, 1)
+        _AUTOPILOT['lastCycleProcessed'] = n_processed
+        _AUTOPILOT['lastCycleSkipped'] = n_skipped
 
 
 def _paper_make_proposal(acct_id, pid, side, canonical, sizing):
@@ -9194,6 +9344,17 @@ def _paper_get(acct_id, pid):
     a = paper_accounts_col.find_one({'paperAccountId': acct_id})
     if not a or a.get('ownerId') != pid:
         return None
+    # ── Legacy lot migration: ensure every lot has a lotId (ticket ID) ──
+    migrated = False
+    for lot in (a.get('lots') or []):
+        if not lot.get('lotId'):
+            lot['lotId'] = 'pp_legacy_' + uuid.uuid4().hex[:8]
+            migrated = True
+        if not lot.get('originalQty'):
+            lot['originalQty'] = lot.get('qty')
+            migrated = True
+    if migrated:
+        paper_accounts_col.update_one({'paperAccountId': acct_id}, {'$set': {'lots': a.get('lots') or []}})
     return a
 
 
@@ -9663,7 +9824,7 @@ def paper_proposal_action(proposal_id: str, cmd: str, payload: dict = Body(defau
                   if a.get('strategyId') else intent['notional'])
         if budget is None:
             raise HTTPException(status_code=409, detail='Reviewed weight, reserve or position limit blocks this BUY.')
-        sizing = _paper_core.size_buy(asset, budget, px, profile=prof, price_q=prof['priceQ'])
+        sizing = _paper_core.ticket_buy_sizing(asset, budget, px)
         if sizing.get('reject'):
             raise HTTPException(status_code=409, detail='Gate rejected: %s.' % sizing['reject'])
         if a.get('strategyId'):
@@ -9675,7 +9836,7 @@ def paper_proposal_action(proposal_id: str, cmd: str, payload: dict = Body(defau
         result, err, code = _paper_core.apply_buy_atomic(
             paper_accounts_col, a['paperAccountId'], pid, a.get('version'),
             idem_key, proposal_id, sizing, canonical, base_currency=a.get('baseCurrency', 'USDC'),
-            asset=asset, price_q=prof['priceQ'],
+            asset=asset,
             strategy_version=bound['version'] if a.get('strategyId') else None,
             strategy_hash=bound['contractHash'] if a.get('strategyId') else None,
             required_mode='APPROVAL_REQUIRED' if a.get('strategyId') else None)
@@ -9691,20 +9852,24 @@ def paper_proposal_action(proposal_id: str, cmd: str, payload: dict = Body(defau
             if lot and prop.get('sizing') and prop['sizing'].get('qty'):
                 sell_qty = min(_paper_core.D(prop['sizing']['qty']), sell_qty)
             elif lot:
-                # Re-derive from the proposal's rule. Fall back to 50% of remaining.
-                sell_qty = _paper_core.q_qty(sell_qty * Decimal('0.5'))
+                # If the proposal doesn't carry explicit sizing, reject rather than guess.
+                raise HTTPException(status_code=409, detail='Partial target has no explicit quantity; cannot execute.')
             sell_qty = max(sell_qty, _paper_core.MIN_NOTIONAL / px) if px else sell_qty
-        sizing = _paper_core.size_sell(asset, sell_qty, px, profile=prof, price_q=prof['priceQ'])
+        # Direct-price fill at observed price.
+        sizing = _paper_core.ticket_sell_sizing(asset, sell_qty, px)
         if sizing.get('reject'):
             raise HTTPException(status_code=409, detail='Gate rejected: %s.' % sizing['reject'])
+        # Determine the ticket ID for ticket-centric sell.
+        _ticket_id = prop.get('ticketId') or (lot.get('lotId') if lot else None)
         result, err, code = _paper_core.apply_sell_atomic(
             paper_accounts_col, a['paperAccountId'], pid, sizing, source='approval_strategy_rule' if rule_proposal else 'approval',
             idem_key=idem_key, proposal_id=proposal_id, canonical=canonical,
-            asset=asset, price_q=prof['priceQ'],
+            asset=asset,
             strategy_version=bound['version'] if rule_proposal else None,
             strategy_hash=bound['contractHash'] if rule_proposal else None,
             required_mode='APPROVAL_REQUIRED' if rule_proposal else None,
-            completed_rule_id=prop.get('strategyRuleId') if rule_proposal and (prop.get('isPartialTarget') or prop.get('strategyRuleId')) else None)
+            completed_rule_id=prop.get('strategyRuleId') if rule_proposal and (prop.get('isPartialTarget') or prop.get('strategyRuleId')) else None,
+            ticket_id=_ticket_id)
     if err:
         raise HTTPException(status_code=code, detail='Could not execute: %s.' % err)
     # Mirror proposal status (non-authoritative; the account doc is the source of truth).
@@ -9736,13 +9901,13 @@ def paper_close_position(position_id: str, payload: dict = Body(default={}),
     if px is None or not fresh:
         raise HTTPException(status_code=409, detail='Market data for %s is stale — cannot value the exit.' % sym)
     prof = _paper_profiles.asset_profile(sym, market=(exit_obs or {}).get('execution'))
-    sizing = _paper_core.size_sell(sym, _paper_core.D(lot.get('qty')), px, profile=prof, price_q=prof['priceQ'])
+    sizing = _paper_core.ticket_sell_sizing(sym, _paper_core.D(lot.get('qty')), px)
     if sizing.get('reject'):
         raise HTTPException(status_code=409, detail='Could not close: %s.' % sizing['reject'])
     idem_key = str((payload or {}).get('idempotencyKey') or ('close_%s_%s' % (sym, position_id)))
     result, err, code = _paper_core.apply_sell_atomic(
         paper_accounts_col, a['paperAccountId'], pid, sizing, source='manual_close',
-        idem_key=idem_key, asset=sym, price_q=prof['priceQ'])
+        idem_key=idem_key, asset=sym, ticket_id=position_id)
     if err:
         raise HTTPException(status_code=code, detail='Could not close: %s.' % err)
     return {'status': 'ready', 'closed': result}
@@ -9806,12 +9971,11 @@ def paper_command(payload: dict = Body(...), user: dict = Depends(get_current_us
         prof = _paper_profiles.asset_profile(sym, market=(preview_obs or {}).get('execution'))
         preview = None
         if px is not None and fresh:
-            sizing = _paper_core.size_sell(sym, _paper_core.D(lot.get('qty')), px, profile=prof, price_q=prof['priceQ'])
+            sizing = _paper_core.ticket_sell_sizing(sym, _paper_core.D(lot.get('qty')), px)
             if not sizing.get('reject'):
                 preview = {'asset': sym, 'quantity': _paper_core.qty_dstr(sizing['qty']),
-                           'markPrice': _paper_core.dstr(px, prof['priceQ']),
-                           'estimatedProceeds': _paper_core.dstr(_paper_core.q_cash(sizing['qty'] * sizing['fillPx'])),
-                           'estimatedFees': _paper_core.dstr(sizing['fee'])}
+                           'markPrice': _paper_core.dstr(px),
+                           'estimatedProceeds': _paper_core.dstr(_paper_core.q_cash(sizing['qty'] * sizing['fillPx']))}
         return card('CLOSE_POSITION', f'Close your {sym} position',
                     f'Sells your entire {sym} paper position at the current mark. Only {sym} is affected.',
                     {'method': 'POST', 'path': f"/api/v1/albert/paper/positions/{lot.get('lotId')}/close",
@@ -13466,14 +13630,8 @@ def _studio_mode_blocker(approval):
             if age <= 180:
                 return None  # completed recently, even if delayed
         # If the worker started but never completed, it may be stuck on a slow
-        # network call. Allow starting after a grace period so the user isn't
-        # permanently blocked by a hung worker thread.
-        if last_run:
-            running_for = (datetime.datetime.utcnow() - datetime.datetime.fromisoformat(last_run)).total_seconds()
-            if running_for > 120 and state == 'running':
-                # Worker has been running for >2 minutes without completing —
-                # allow the user to proceed rather than block indefinitely.
-                return None
+        # The worker now has a 25-second budget and always completes its cycle.
+        # If it hasn't completed recently, it genuinely isn't running.
         if state in ('starting', None) and last_run:
             return None  # first cycle still in progress
         if not last and not last_run:
@@ -13541,6 +13699,29 @@ def _strategy_paper_public(doc, pid, acct=None):
     # Expose the recorded start_errors from the saved document for the UI to distinguish
     # "Needs changes — not trading" from structural save_errors.
     recorded_start_errors = doc.get('startErrors') or []
+    # ── Ticket-level position detail for the UI ──
+    tickets = []
+    total_unrealized = Decimal('0')
+    acct_cash = Decimal('0')
+    realized_pnl = Decimal('0')
+    if acct:
+        acct_cash = _paper_core.D(acct.get('cash')) or Decimal('0')
+        realized_pnl = _paper_core.D(acct.get('realizedPnl')) or Decimal('0')
+        for lot in (acct.get('lots') or []):
+            qty = _paper_core.D(lot.get('qty')) or Decimal('0')
+            if qty <= 0:
+                continue
+            entry = _paper_core.D(lot.get('avgEntry')) or Decimal('0')
+            cost = _paper_core.D(lot.get('costBasis')) or Decimal('0')
+            tickets.append({
+                'ticketId': lot.get('lotId'), 'asset': (lot.get('asset') or '').upper(),
+                'qty': str(qty), 'avgEntry': str(entry), 'costBasis': str(cost),
+                'openedAt': lot.get('openedAt'),
+                'rules': lot.get('rules'),
+                'invalidationPrice': str(_paper_core.D(lot.get('invalidationPrice')) or '') if lot.get('invalidationPrice') else None,
+                'completedTargets': lot.get('completedTargets') or [],
+            })
+    ap = _paper_autopilot_status(acct) if acct else {}
     return {'paperStatus': status, 'paperStatusLabel': PAPER_STATUS_LABEL.get(status, status),
             'canStart': not blockers and modes_ready and status != 'ARCHIVED',
             'entryBlockers': blockers, 'startErrors': _st_err, 'saveErrors': _sv_err,
@@ -13552,6 +13733,12 @@ def _strategy_paper_public(doc, pid, acct=None):
                              (doc.get('contract') or {}).get('startingCash')),
             'paperAccountId': (acct or {}).get('paperAccountId'),
             'isLive': bool(acct and acct.get('runtimeState') == 'RUNNING' and doc.get('status') == 'PAPER_ACTIVE'),
+            'tickets': tickets,
+            'cash': str(acct_cash) if acct else None,
+            'realizedPnl': str(realized_pnl) if acct else None,
+            'runtimeState': (acct or {}).get('runtimeState'),
+            'autopilot': ap,
+            'executionModel': 'direct_price',
             'paperOnly': True}
 
 
@@ -13693,28 +13880,12 @@ def studio_start_paper(sid: str, payload: dict = Body(default={}),
                                       {'$set': {'runtimeState': 'PAUSED_BY_USER'}, '$inc': {'version': 1}})
         raise HTTPException(status_code=409, detail='A newer version took over; wallet preserved and new entries stopped.')
     fresh = _studio_get(sid, pid)
-    # Evaluate the SAME leased worker path immediately on Start. Review creates a
-    # proposal requiring approval; Autopilot may fill if every exact condition and
-    # risk gate is met. A busy/failed evaluation stays WAIT, never a guessed fill.
-    lease = _autopilot_acquire_lease(acct['paperAccountId'])
-    if lease:
-        try:
-            current = _paper_get(acct['paperAccountId'], pid)
-            if current:
-                _autopilot_process_account_multi(current)
-        except Exception:  # noqa
-            traceback.print_exc()
-            paper_accounts_col.update_one({'paperAccountId': acct['paperAccountId'], 'ownerId': pid},
-                {'$set': {'strategyAssessment': {'state': 'WAIT', 'at': datetime.datetime.utcnow().isoformat(),
-                    'conditions': [{'symbol': '*', 'state': 'WAIT', 'reason': 'WAIT: initial assessment could not complete; the normal worker will retry.'}],
-                    'strategyVersion': fresh['version'], 'contractHash': fresh['contractHash']}}})
-        finally:
-            _autopilot_release_lease(acct['paperAccountId'], lease)
-    else:
-        paper_accounts_col.update_one({'paperAccountId': acct['paperAccountId'], 'ownerId': pid},
-            {'$set': {'strategyAssessment': {'state': 'WAIT', 'at': datetime.datetime.utcnow().isoformat(),
-                'conditions': [{'symbol': '*', 'state': 'WAIT', 'reason': 'WAIT: another paper evaluation is underway.'}],
-                'strategyVersion': fresh['version'], 'contractHash': fresh['contractHash']}}})
+    # The normal scheduler will process this account on its next 30-second cycle.
+    # Set a WAIT assessment so the frontend knows the worker hasn't reached it yet.
+    paper_accounts_col.update_one({'paperAccountId': acct['paperAccountId'], 'ownerId': pid},
+        {'$set': {'strategyAssessment': {'state': 'WAIT', 'at': datetime.datetime.utcnow().isoformat(),
+            'conditions': [{'symbol': '*', 'state': 'WAIT', 'reason': 'WAIT: strategy activated; first assessment pending.'}],
+            'strategyVersion': fresh['version'], 'contractHash': fresh['contractHash']}}})
     acct = _paper_get(acct['paperAccountId'], pid)
     result = {'status': 'ready', 'command': 'start-paper', **_studio_public(fresh),
               **_strategy_paper_public(fresh, pid, acct)}

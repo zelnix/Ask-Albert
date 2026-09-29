@@ -77,7 +77,8 @@ def compute_portfolio_equity(acct, marks):
         open_risk += risk_usd
         positions.append({'symbol': sym, 'qty': qty, 'avgEntry': avg, 'markPx': px,
                           'markFresh': True, 'value': val, 'unrealized': unreal,
-                          'stopDist': stop_dist, 'riskUsd': risk_usd, 'invalidation': inv})
+                          'stopDist': stop_dist, 'riskUsd': risk_usd, 'invalidation': inv,
+                          'ticketId': lot.get('lotId')})
 
     equity = cash + pos_val_total if all_marks_fresh else None
     hwm = stored_hwm
@@ -102,7 +103,7 @@ def compute_portfolio_equity(acct, marks):
         'equityStr': core.dstr(equity) if equity is not None else None,
         'positions': positions, 'positionValueTotal': pos_val_total,
         'altcoinValueTotal': alt_val_total, 'openRiskUsd': open_risk,
-        'openPositionsCount': sum(1 for p in positions if p['qty'] > 0),
+        'openPositionsCount': len([p for p in positions if p['qty'] > 0]),  # ticket count, not symbol count
         'drawdownPct': dd, 'highWater': hwm, 'protectedReserve': protected,
         'deployableCash': deployable, 'realizedPnl': realized, 'fees': fees,
     }

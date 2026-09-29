@@ -702,6 +702,46 @@ function PaperPanel({ sid, name, onChange }) {
         <p role="status" className="flex items-center gap-1.5 text-[11px] text-amber-300"><AlertTriangle className="h-3.5 w-3.5" />Waiting for a price. Your holdings stay as they are; Albert will try again on the next normal paper-trading cycle.</p>
       )}
 
+      {/* ---- Wallet Summary (cash, P&L, worker) ---- */}
+      {p.paperAccountId && p.isLive && (
+        <div className="rounded-lg border border-slate-700 bg-slate-950/60 p-3 text-[12px]">
+          <div className="flex items-center justify-between">
+            <p className="font-bold text-slate-300">Wallet</p>
+            {p.autopilot?.workerState && (
+              <span className={`text-[10px] font-medium ${p.autopilot.workerState === 'running' ? 'text-emerald-400' : p.autopilot.workerState === 'delayed' ? 'text-amber-400' : 'text-slate-500'}`}>
+                Worker: {p.autopilot.workerState}{p.autopilot.lastCycleSec != null ? ` · ${p.autopilot.lastCycleSec}s` : ''}
+                {p.autopilot.workerLastCompletedAt && <span className="ml-1 text-slate-500">({new Date(p.autopilot.workerLastCompletedAt + 'Z').toLocaleTimeString()})</span>}
+              </span>
+            )}
+          </div>
+          <div className="mt-1.5 grid grid-cols-3 gap-2">
+            <div><p className="text-[10px] text-slate-500">Cash</p><p className="font-semibold text-slate-100">{p.cash ? usd(parseFloat(p.cash)) : '—'}</p></div>
+            <div><p className="text-[10px] text-slate-500">Realized P&L</p><p className={`font-semibold ${parseFloat(p.realizedPnl || 0) >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>{p.realizedPnl ? signed(parseFloat(p.realizedPnl)) : '—'}</p></div>
+            <div><p className="text-[10px] text-slate-500">Execution</p><p className="font-semibold text-slate-300">{p.executionModel === 'direct_price' ? 'Direct price · 0 fees' : 'Legacy'}</p></div>
+          </div>
+        </div>
+      )}
+
+      {/* ---- Open Tickets ---- */}
+      {(p.tickets || []).length > 0 && (
+        <div>
+          <p className="mb-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-500">Open Tickets ({p.tickets.length})</p>
+          <div className="space-y-1">
+            {p.tickets.map((t) => (
+              <div key={t.ticketId} className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 text-[12px]">
+                <span className="font-semibold text-sky-300">{t.asset}</span>
+                <span className="text-slate-300">{parseFloat(t.qty).toFixed(6)}</span>
+                <span className="text-slate-500">@ {parseFloat(t.avgEntry).toFixed(2)}</span>
+                <span className="text-slate-500">cost {usd(parseFloat(t.costBasis))}</span>
+                {t.invalidationPrice && <span className="text-rose-400/70">stop {parseFloat(t.invalidationPrice).toFixed(2)}</span>}
+                {(t.completedTargets || []).length > 0 && <span className="text-emerald-400/70">✓ {t.completedTargets.length} target{t.completedTargets.length > 1 ? 's' : ''}</span>}
+                <span className="ml-auto text-[10px] text-slate-600">{t.ticketId}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* ---- Performance (this strategy's own money) ---- */}
       {p.paperAccountId && (
         <div>
