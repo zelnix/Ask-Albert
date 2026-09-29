@@ -91,6 +91,8 @@ const useOneScreenData = (enabled, focus = 'home', ownerId = null) => {
     const refreshOptional = setInterval(optional, 180000);
     const onFocus = () => { if (document.visibilityState === 'visible') core(); };
     const onEvent = () => core();
+    const onAnalysis = () => { core(); optional(); };
+    window.addEventListener('albert:analysis-updated', onAnalysis);
     window.addEventListener('focus', onFocus);
     window.addEventListener('albert:paper-updated', onEvent);
     window.addEventListener('albert:mandate-updated', onEvent);
@@ -98,6 +100,7 @@ const useOneScreenData = (enabled, focus = 'home', ownerId = null) => {
       mounted.current = false;
       clearTimeout(timer); clearInterval(refreshCore); clearInterval(refreshOptional);
       window.removeEventListener('focus', onFocus);
+      window.removeEventListener('albert:analysis-updated', onAnalysis);
       window.removeEventListener('albert:paper-updated', onEvent);
       window.removeEventListener('albert:mandate-updated', onEvent);
     };

@@ -2,9 +2,10 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { MessageCircle, Send, ShieldCheck, ArrowUpRight, Loader2 } from 'lucide-react';
+import AnalysisRefreshStatus, { announceAnalysis } from '../AnalysisRefreshStatus';
 import { API_BASE } from '../../lib/api';
 
-// The dashboard companion is deliberately read-only. This component only calls /ask;
+// The dashboard companion reads financial state and requests tracked analysis refreshes;
 // trading or strategy commands must be reviewed in the existing full Ask workspace.
 const DashboardAskPanel = ({ selected, onNav, onEvidence, stateId }) => {
   const [messages, setMessages] = useState([]);
@@ -26,6 +27,7 @@ const DashboardAskPanel = ({ selected, onNav, onEvidence, stateId }) => {
         headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: groundedQuestion, session_id: session.current, context }) });
       if (!r.ok) throw new Error('unavailable');
       const j = await r.json();
+      announceAnalysis(j.analysisJob);
       setMessages((m) => [...m, { role: 'albert', text: j.reply || 'There is no grounded answer available right now.', evidence: j.evidence || [], snapshotId: j.answerSnapshotId }]);
     } catch (e) {
       setMessages((m) => [...m, { role: 'albert', text: 'I cannot reach the evidence service right now. Please try again later.' }]);
@@ -36,6 +38,7 @@ const DashboardAskPanel = ({ selected, onNav, onEvidence, stateId }) => {
       <div className="flex min-w-0 items-center gap-2"><img src="/albert.png" alt="" className="h-8 w-8 rounded-full object-cover" /><div className="min-w-0"><h2 className="text-sm font-bold text-white">Ask Albert</h2><p className="truncate text-xs text-slate-400">Your evidence-aware companion</p></div></div>
       <a href="/?section=ask" onClick={(e) => { e.preventDefault(); onNav('ask'); }} aria-label="Open full Ask Albert workspace" className="rounded-md p-1.5 text-sky-300 hover:bg-slate-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"><ArrowUpRight className="h-4 w-4" /></a>
     </div>
+    <AnalysisRefreshStatus />
     <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3.5" aria-live="polite">
       {!messages.length && <>
         <div className="rounded-lg border border-sky-500/20 bg-sky-500/[0.06] p-3 text-sm leading-relaxed text-slate-200">Ask about the market, your paper account or a selected card. I use your evidence; I don’t place trades.</div>

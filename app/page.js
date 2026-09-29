@@ -1,5 +1,7 @@
 'use client';
 
+import AnalysisRefreshStatus, { announceAnalysis } from './components/AnalysisRefreshStatus';
+
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   ResponsiveContainer, ComposedChart, Line, LineChart, Area, Bar, BarChart,
@@ -2421,6 +2423,7 @@ function AskQuantSection({ d }) {
       // Track analysis job if Albert triggered one.
       if (j.analysisJob) {
         assistantMsg.analysisJob = j.analysisJob;
+        announceAnalysis(j.analysisJob);
       }
       setMessages((m) => [...m, assistantMsg]);
     } catch (e) {
@@ -2448,6 +2451,7 @@ function AskQuantSection({ d }) {
   return (
     <div className="space-y-5">
       <SectionHead icon={MessageCircle} title="Ask Albert" blurb={sec('ask').blurb} />
+      <AnalysisRefreshStatus />
       <Card className="flex h-[calc(100vh-8rem)] min-h-[520px] flex-col overflow-hidden border-0 bg-slate-900 p-0 ring-1 ring-slate-800">
         <div className="flex items-center gap-2.5 border-b border-slate-800 px-5 py-3">
           <img src="/albert.png" alt="Albert" className="h-11 w-11 rounded-full object-cover ring-2 ring-sky-500/40" />

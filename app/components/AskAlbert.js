@@ -1,5 +1,7 @@
 'use client';
 
+import AnalysisRefreshStatus, { announceAnalysis } from './AnalysisRefreshStatus';
+
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   Send, Loader2, ShieldCheck, ChevronDown, ChevronRight, Sparkles, MessageCircle, Info,
@@ -187,6 +189,7 @@ export default function AskAlbert({ onNav }) {
         setMessages((m) => [...m, { role: 'albert', text: 'Please sign in to talk with Albert.' }]);
       } else {
         const j = await r.json();
+        announceAnalysis(j.analysisJob);
         setMessages((m) => [...m, { role: 'albert', text: j.reply || 'No answer came back.',
           evidence: j.evidence, model: j.model, contextFunctions: j.contextFunctions,
           answerSnapshotId: j.answerSnapshotId }]);
@@ -214,6 +217,7 @@ export default function AskAlbert({ onNav }) {
 
   return (
     <div className="space-y-4">
+      <AnalysisRefreshStatus />
       <div className="flex items-center gap-2.5">
         <MessageCircle className="h-5 w-5 text-sky-400" />
         <h1 className="text-lg font-bold text-white">Ask Albert</h1>

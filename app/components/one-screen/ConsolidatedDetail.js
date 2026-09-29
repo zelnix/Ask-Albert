@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, ArrowRight, MessageCircle, ShieldCheck, RefreshCw } from 'lucide-react';
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, Legend } from 'recharts';
 import PaperTradingBot from '../PaperTradingBot';
+import AnalysisRefreshStatus, { analysisTime } from '../AnalysisRefreshStatus';
 import { BTCChart, MarketChart } from './OneScreenCharts';
 
 export const DASHBOARD_AREAS = {
@@ -23,7 +24,7 @@ const EXTRA_READS = {
   brief: { brief: '/api/v1/albert/brief' },
   portfolio: { leverage: '/api/v1/leverage?timeframe=4H' },
   intelligence: { analogs: '/api/v1/analogs?symbol=BTC', crossmarket: '/api/v1/markets?symbol=BTC&window=1y' },
-  evidence: { alerts: '/api/v1/alert-engine/recent?limit=5', checkup: '/api/v1/albert/diagnostics/latest' },
+  evidence: { alerts: '/api/v1/alert-engine/recent?limit=5', checkup: '/api/v1/albert/diagnostics/latest', audit: '/api/v1/data-audit', ledger: '/api/v1/scorecard' },
   flows: { whales: '/api/v1/whales', network: '/api/v1/network-health', sentiment: '/api/v1/fear-greed', history: '/api/v1/time-machine/analogs?k=3' },
 };
 const when = (iso) => {
@@ -61,7 +62,7 @@ const MarketSeries = ({ data }) => Array.isArray(data?.series) && data.series.le
 
 /* ── Area ── Render available facts, rows and charts during refresh/loading/error states.
    Show an initial loading state only when that section has NO data at all. */
-const Area = ({ title, route, facts = [], items = [], note, source, onNav, children, state = 'ready', symbol = 'BTC', commentary }) => {
+const Area = ({ title, route, facts = [], items = [], note, source, onNav, children, state = 'ready', symbol = 'BTC', commentary, execution }) => {
   const usable = facts.filter((f) => f?.[1] !== null && f?.[1] !== undefined && f?.[1] !== '');
   const shownItems = items.filter(Boolean);
   const hasContent = usable.length > 0 || shownItems.length > 0 || children || commentary;
@@ -71,6 +72,13 @@ const Area = ({ title, route, facts = [], items = [], note, source, onNav, child
       <span className={`rounded-md px-2 py-0.5 text-xs font-semibold ${['stale', 'error', 'unavailable', 'unverified', 'WAIT', 'Needs changes'].includes(state) ? 'bg-amber-500/15 text-amber-200' : 'bg-primary/10 text-primary'}`}>{state}</span>
     </div>
     {source && <p className="mt-0.5 text-[11px] text-muted-foreground">{source}</p>}
+    {execution && <div className="mt-2 border-t border-border pt-2 text-xs text-muted-foreground">
+      <p>Last refresh outcome: {execution.status === 'skipped' ? 'Not run' : execution.status || 'Not confirmed'}</p>
+      <p>Last attempted: {analysisTime(execution.lastAttemptedAt)}</p>
+      <p>Last successful run: {analysisTime(execution.lastSuccessfulAt)}</p>
+      <p>Data observed: {analysisTime(execution.dataObservedAt)}</p>
+      {execution.message && <p>{execution.message}</p>}
+    </div>}
     {commentary && <p className="mt-2 text-sm leading-relaxed text-foreground/90">{commentary}</p>}
     {state === 'stale' && <p role="status" className="mt-2 text-xs text-amber-200">Last published result only — freshness unavailable. Do not treat these figures as current.</p>}
     {usable.length > 0 && <dl className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -90,6 +98,7 @@ const Area = ({ title, route, facts = [], items = [], note, source, onNav, child
 };
 
 export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboardStatus = 'loading', news, newsStatus, onNav, onBack, symbol = 'BTC' }) {
+  const [engines, setEngines] = useState({});
   const [extra, setExtra] = useState({});
   const [loading, setLoading] = useState(false);
   const [readError, setReadError] = useState(null);
@@ -98,6 +107,11 @@ export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboar
   const entry = DASHBOARD_AREAS[kind];
   const readKey = kind === 'brief' ? `${kind}:${symbol}` : kind;
   const requests = useMemo(() => EXTRA_READS[kind] || EMPTY_READS, [kind]);
+  useEffect(() => {
+    const refreshed = () => { setPollAttempts(0); setReadRevision((n) => n + 1); };
+    window.addEventListener('albert:analysis-updated', refreshed);
+    return () => window.removeEventListener('albert:analysis-updated', refreshed);
+  }, []);
   useEffect(() => {
     if (loading || !Object.values(extra).some((v) => v?._readState === 'loading') || pollAttempts >= 8) return;
     const timer = setTimeout(() => { setPollAttempts((n) => n + 1); setReadRevision((n) => n + 1); }, 5000);
@@ -154,7 +168,8 @@ export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboar
   };
 
   const rows = [];
-  const area = (title, route, opts) => rows.push(<Area key={`${title}-${route}`} title={title} route={route} onNav={onNav} symbol={symbol} state={opts.state || healthOf('sop')} {...opts} />);
+  const engineIds = { 'Prediction Ledger': 'prediction_ledger', 'Paper Engine': 'paper_engine', 'Alert Engine': 'alert_engine', 'Scenario Evaluation': 'scenario_evaluation', 'Data Audit': 'data_audit', 'App Checkup': 'app_checkup' };
+  const area = (title, route, opts) => rows.push(<Area key={`${title}-${route}`} title={title} route={route} onNav={onNav} symbol={symbol} state={opts.state || healthOf('sop')} execution={kind === 'evidence' && engineIds[title] ? engines[engineIds[title]] || {} : null} {...opts} />);
 
   if (kind === 'brief') {
     const claims = sop?.briefing?.claims || [];
@@ -418,11 +433,12 @@ export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboar
     const evaluated = evaluation.evaluation || evaluation;
     const alerts = extra.alerts?.alerts || [];
     const checkup = extra.checkup?.checkup;
-    const ledger = d.prediction_ledger || {};
+    const ledger = extra.ledger || d.prediction_ledger || {};
+    const audit = extra.audit || {};
     const liveRecord = d.live_record || {};
     const scoreboard = d.scoreboard || {};
     const perf = d.performance || {};
-    area('Prediction Ledger', 'performance', { state: ledger.overall ? 'ready' : healthOf('sop'), source: sourceTime, facts: [
+    area('Prediction Ledger', 'performance', { state: extraState('ledger'), source: 'Recorded forecast outcomes · grading time shown below when confirmed', facts: [
       ['Overall accuracy', ledger.overall?.accuracy != null ? val(ledger.overall.accuracy, '%') : null],
       ['Graded forecasts', val(ledger.overall?.n)],
       ['Last graded', val(ledger.overall?.lastGradedAt)],
@@ -435,20 +451,20 @@ export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboar
       ['Realized P&L', amount(totals.realizedPnl)],
       ['Ledger status', val(paper.ledgerIntegrity?.status)],
     ], items: (paper.recentFills || []).slice(0, 3).map((x) => `${x.side === 'BUY' ? 'Bought' : 'Sold'} ${x.asset} · ${when(x.recordedAt || x.effectiveAt)}`) });
-    area('Alert Engine', 'alert-engine', { state: alerts.length ? 'ready' : extraState('alerts'), source: when(alerts[0]?.ts), facts: [
+    area('Alert Engine', 'alert-engine', { state: alerts.length ? 'ready' : extraState('alerts'), source: `Latest alert: ${when(alerts[0]?.ts).replace('Published ', '')}`, facts: [
       ['Alerts returned', val(alerts.length)],
       ['Latest', val(alerts[0]?.title || alerts[0]?.message)],
     ], items: alerts.slice(0, 4).map((x) => `${x.title || x.message || 'Alert'} · ${when(x.ts)} · ${x.severity || 'severity unavailable'}`) });
-    area('Scenario Evaluation', 'scenario-evaluation', { state: healthOf('outlook'), source: when(evaluated.lastEvaluatedAt), facts: [
+    area('Scenario Evaluation', 'scenario-evaluation', { state: healthOf('outlook'), source: `Last historical sample: ${evaluated.lastEvaluatedAt || 'unavailable'}`, facts: [
       ['Completed checks', val(evaluated.evaluationPoints)],
       ['Skill', val(evaluated.skillVsNoChange)],
       ['Validation', evaluation.predictiveValidation ? 'Validated' : 'Not validated'],
     ] });
-    area('Data Audit', 'dataaudit', { state: healthOf('sop'), source: sourceTime, facts: [
-      ['Status', val(d.data_health?.level || d.data_health?.status)],
-      ['Latest run', val(d.created_at)],
-      ['Issues', val(d.data_health?.issues?.length)],
-    ], items: (d.data_health?.issues || []).slice(0, 3).map((x) => `${x.source || x.type || 'Issue'} · ${x.detail || x.message || 'unavailable'}`) });
+    area('Data Audit', 'dataaudit', { state: extraState('audit'), source: `Audit checked: ${analysisTime(audit.checked_at)}`, facts: [
+      ['Data health', val(audit.level)],
+      ['Latest core model run', val(audit.last_run)],
+      ['Stale or unavailable core feeds', val(audit.stale)],
+    ], note: audit.note, items: (audit.feeds || []).map((x) => `${x.label}: ${x.status} · Cache updated ${analysisTime(x.updated)}`) });
     area('App Checkup', 'checkup', { state: checkup ? 'ready' : extraState('checkup'), source: when(checkup?.completed_at), facts: [
       ['Summary', val(checkup?.summary?.title)],
       ['Outcome', val(checkup?.summary?.outcome)],
@@ -535,6 +551,7 @@ export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboar
         {Object.keys(requests).length > 0 && <button type="button" onClick={() => { setPollAttempts(0); setReadRevision((v) => v + 1); }} disabled={loading} className="inline-flex items-center gap-1 rounded-md border border-border bg-card px-3 py-2 text-xs text-foreground disabled:opacity-50"><RefreshCw className="h-3.5 w-3.5" />Retry details</button>}</div>
     </div>
     {readError && <p role="status" className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">{readError}</p>}
+    {kind === 'evidence' && <AnalysisRefreshStatus allowStart onUpdate={(data) => setEngines(data.engines || {})} />}
     <div className="grid gap-3 lg:grid-cols-2">{rows}</div>
     {kind === 'paper' && <div className="rounded-lg border border-border bg-card p-4"><PaperTradingBot onNav={onNav} /></div>}
     <p className="flex items-center gap-1.5 text-xs text-muted-foreground"><ShieldCheck className="h-4 w-4" />Paper values are simulated; market data and assessments retain separate freshness states.</p>
