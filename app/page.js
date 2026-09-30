@@ -13,7 +13,7 @@ import {
   ArrowUpRight, ArrowDownRight, Cpu, Database, Trophy, Radio, History,
   Check, X, LayoutDashboard, Target, FlaskConical, Bell, MessageCircle,
   Sparkles, Info, Lock, Compass, CandlestickChart, Layers, Landmark, Globe, Newspaper,
-  Brain, Send, ShieldAlert, Scale, CalendarClock, ClipboardList, ShieldCheck,
+  Brain, Send, ShieldAlert, Scale, CalendarClock, ClipboardList, ShieldCheck, Wallet, Briefcase,
   Volume2, VolumeX, Maximize2, Minimize2, SlidersHorizontal, Magnet, Plus, Clock,
   ChevronDown, Coins, Fish, Zap, Loader2, LogOut, MessageSquarePlus, Copy, Search, Eye, EyeOff, Settings2,
 } from 'lucide-react';
@@ -3272,16 +3272,36 @@ let __notifCache = null;
 
 
 // ---- Account menu (avatar + user settings panel) shown in the top header ----
-function AccountMenu({ user, onSignOut }) {
+function AccountMenu({ user, onSignOut, onNav }) {
   const [open, setOpen] = useState(false);
-  const [tab, setTab] = useState('main'); // main | notifications | briefcoins | passcode
+  const [tab, setTab] = useState('main'); // main | notifications | briefcoins | passcode | mandate
   const [pass, setPass] = useState('');
   const [saved, setSaved] = useState(false);
   const [showPass, setShowPass] = useState(false);
+  const [mandate, setMandate] = useState(null);
+  const [mandateLoading, setMandateLoading] = useState(false);
+  const [mandateSaving, setMandateSaving] = useState(false);
   useEffect(() => {
     if (typeof window !== 'undefined') setPass(window.localStorage.getItem('btciq_admin_passcode') || '');
   }, []);
   const savePass = () => { if (typeof window !== 'undefined') { window.localStorage.setItem('btciq_admin_passcode', pass); setSaved(true); setTimeout(() => setSaved(false), 2000); } };
+  const loadMandate = async () => {
+    setMandateLoading(true);
+    try { const r = await fetch(`${API_BASE}/v1/albert/mandate`); const j = await r.json(); setMandate(j.mandate || j); } catch {}
+    setMandateLoading(false);
+  };
+  const saveMandate = async (updates) => {
+    setMandateSaving(true);
+    try {
+      await fetch(`${API_BASE}/v1/albert/mandate`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates),
+      });
+      setSaved(true); setTimeout(() => setSaved(false), 2000);
+      await loadMandate();
+    } catch {} finally { setMandateSaving(false); }
+  };
+  const goNav = (section) => { setOpen(false); onNav && onNav(section); };
   if (!user) return null;
   const initial = (user.name || user.email || '?').slice(0, 1).toUpperCase();
   return (
@@ -3313,27 +3333,47 @@ function AccountMenu({ user, onSignOut }) {
 
             {tab === 'main' && (
               <div className="p-1.5">
+                {/* Trading section */}
+                <div className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">Trading</div>
+                <button onClick={() => { setTab('mandate'); loadMandate(); }}
+                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm text-slate-300 transition-colors hover:bg-slate-800 hover:text-white">
+                  <Target className="h-4 w-4 text-emerald-400" /> Trading mandate
+                </button>
+                <button onClick={() => goNav('paper')}
+                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm text-slate-300 transition-colors hover:bg-slate-800 hover:text-white">
+                  <Briefcase className="h-4 w-4 text-sky-400" /> Paper trading
+                </button>
+                <button onClick={() => goNav('strategies')}
+                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm text-slate-300 transition-colors hover:bg-slate-800 hover:text-white">
+                  <Wallet className="h-4 w-4 text-amber-400" /> Wallets & strategies
+                </button>
+                <button onClick={() => goNav('home')}
+                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm text-slate-300 transition-colors hover:bg-slate-800 hover:text-white">
+                  <BarChart2 className="h-4 w-4 text-violet-400" /> Portfolio overview
+                </button>
+                {/* Settings section */}
+                <div className="px-3 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-wider text-slate-500">Settings</div>
                 <button onClick={() => setTab('notifications')}
-                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm text-slate-300 transition-colors hover:bg-slate-800 hover:text-white">
+                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm text-slate-300 transition-colors hover:bg-slate-800 hover:text-white">
                   <Bell className="h-4 w-4 text-sky-400" /> Notifications
                 </button>
                 <button onClick={() => setTab('briefcoins')}
-                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm text-slate-300 transition-colors hover:bg-slate-800 hover:text-white">
+                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm text-slate-300 transition-colors hover:bg-slate-800 hover:text-white">
                   <Coins className="h-4 w-4 text-amber-400" /> Daily brief coins
                 </button>
                 <button onClick={() => setTab('passcode')}
-                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm text-slate-300 transition-colors hover:bg-slate-800 hover:text-white">
+                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm text-slate-300 transition-colors hover:bg-slate-800 hover:text-white">
                   <Lock className="h-4 w-4 text-amber-400" /> Admin passcode
                 </button>
                 <div className="my-1 h-px bg-slate-800" />
                 <a href="https://askalbert.app" target="_blank" rel="noopener noreferrer"
-                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm text-slate-300 transition-colors hover:bg-slate-800 hover:text-white">
+                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm text-slate-300 transition-colors hover:bg-slate-800 hover:text-white">
                   <Globe className="h-4 w-4 text-slate-500" /> About Ask Albert
                 </a>
                 <div className="my-1 h-px bg-slate-800" />
                 <button
                   onClick={() => { setOpen(false); onSignOut && onSignOut(); }}
-                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm text-red-400 transition-colors hover:bg-red-500/10 hover:text-red-300"
+                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm text-red-400 transition-colors hover:bg-red-500/10 hover:text-red-300"
                 >
                   <LogOut className="h-4 w-4" /> Sign out
                 </button>

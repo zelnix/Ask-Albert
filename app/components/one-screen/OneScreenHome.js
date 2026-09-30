@@ -9,6 +9,7 @@ import ModalShell from './ModalShell';
 import DashboardAskPanel from './DashboardAskPanel';
 import { BTCChart, MarketChart, ExpandedChart, matchedMarketSeries } from './OneScreenCharts';
 import EvidenceDrawer from '../albert/EvidenceDrawer';
+import DraggableGrid from './DraggableGrid';
 
 const money = (v, decimals = 0) => v == null || v === '' || !Number.isFinite(Number(v)) ? 'unavailable'
   : `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}`;
@@ -469,10 +470,10 @@ const OneScreenHome = ({ d, dashboardStatus = 'loading', ticker, news, newsStatu
       <button type="button" onClick={snapshot.refresh} aria-label="Refresh" className="ml-auto rounded-md border border-slate-700 p-1.5 text-slate-300 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"><RefreshCw className="h-4 w-4" /></button>
     </div>
     <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,1fr)_280px] lg:items-start xl:grid-cols-[minmax(0,1fr)_320px] xl:items-stretch 2xl:grid-cols-[minmax(0,1fr)_350px]">
-      <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 xl:grid-rows-3">
-        {/* 1. Albert's Brief — spans three rows on the left */}
-        <article onClick={(e) => { if (!e.target.closest('button, a')) open('brief'); }}
-          className="flex min-w-0 cursor-pointer flex-col rounded-lg border border-slate-700/80 bg-slate-900/80 p-3 shadow-sm shadow-black/20 xl:row-span-3">
+      <DraggableGrid className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        {/* 1. Albert's Brief */}
+        <article data-card-id="brief" onClick={(e) => { if (!e.target.closest('button, a')) open('brief'); }}
+          className="flex min-w-0 cursor-pointer flex-col rounded-lg border border-slate-700/80 bg-slate-900/80 p-3 shadow-sm shadow-black/20">
           <div className="flex min-h-5 items-center gap-1.5">
             <Sparkles className="h-4 w-4 shrink-0 text-sky-300" />
             <h2 className="min-w-0 truncate text-[13px] font-bold text-white"><button id="home-card-brief" type="button" onClick={() => open('brief')} className="max-w-full truncate text-left hover:text-sky-200 focus-visible:rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400">Albert's Brief</button></h2>
@@ -544,7 +545,7 @@ const OneScreenHome = ({ d, dashboardStatus = 'loading', ticker, news, newsStatu
           <p className="line-clamp-1">ETF: {etf?.net_1d != null ? `${signed(etf.net_1d, 'm USD')} · ${etf.latest_date || ''}` : 'unavailable'}</p>
           {network?.hashrate_ehs != null && <p className="mt-0.5 line-clamp-1 text-slate-400">Hashrate: {network.hashrate_ehs} EH/s{sentiment?.value != null ? ` · sentiment ${sentiment.value}/100` : ''}</p>}
         </DashboardCard>
-      </div>
+      </DraggableGrid>
       <DashboardAskPanel selected={selected} onNav={onNav} onEvidence={setEvidenceId} stateId={sop?.stateId} />
     </div>
     {chart && <ExpandedChart type={chart} outlook={outlook} eth={eth} levels={availableLevels} runAsOf={when(d?.created_at)} onClose={() => setChart(null)} onNav={(id) => onNav(id === 'scenarios' ? 'dashboard-btc' : id === 'crossmarket' ? 'dashboard-intelligence' : id)} onEvidence={(sid) => { setChart(null); setEvidenceId(sid); }} />}
