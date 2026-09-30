@@ -449,6 +449,21 @@ def fetch_dominance(price_change_24h):
     try:
         g = _http_json('https://api.coingecko.com/api/v3/global')['data']
     except Exception:  # noqa
+        # Fallback: return last known dominance from DB so the ticker isn't blank
+        try:
+            latest = dominance_col.find_one({}, {'_id': 0}, sort=[('date', -1)])
+            if latest and latest.get('dominance') is not None:
+                dom_fb = latest['dominance']
+                hist_fb = list(dominance_col.find({}, {'_id': 0}).sort('date', -1).limit(40))
+                d7_fb = round(dom_fb - hist_fb[7]['dominance'], 2) if len(hist_fb) > 7 else None
+                total_fb = latest.get('total_mcap', 0)
+                history_fb = [{'date': h['date'], 'dominance': h['dominance']} for h in reversed(hist_fb)][-30:]
+                return {'dominance': dom_fb, 'total_mcap_t': round(total_fb / 1e12, 3) if total_fb else 0,
+                        'change_7d': d7_fb, 'change_30d': None, 'direction': 'Neutral',
+                        'interpretation': 'Using cached dominance — live CoinGecko data temporarily unavailable.',
+                        'history_points': len(hist_fb), 'history': history_fb, 'cached': True}
+        except Exception:
+            pass
         return None
     dom = round(float(g['market_cap_percentage']['btc']), 2)
     total = float(g['total_market_cap']['usd'])
@@ -7082,6 +7097,24 @@ def dashboard(symbol: str = 'BTC'):
     if not doc.get('prediction_ledger'):
         try:
             doc['prediction_ledger'] = compute_scorecard()
+        except Exception:  # noqa
+            traceback.print_exc()
+    # Overlay cached dominance when the run doc is missing it (CoinGecko rate-limited).
+    if not doc.get('dominance'):
+        try:
+            latest_dom = dominance_col.find_one({}, {'_id': 0}, sort=[('date', -1)])
+            if latest_dom and latest_dom.get('dominance') is not None:
+                hist = list(dominance_col.find({}, {'_id': 0}).sort('date', -1).limit(40))
+                dom_val = latest_dom['dominance']
+                d7 = round(dom_val - hist[7]['dominance'], 2) if len(hist) > 7 else None
+                total = latest_dom.get('total_mcap', 0)
+                history = [{'date': h['date'], 'dominance': h['dominance']} for h in reversed(hist)][-30:]
+                doc['dominance'] = {
+                    'dominance': dom_val, 'total_mcap_t': round(total / 1e12, 3) if total else 0,
+                    'change_7d': d7, 'change_30d': None, 'direction': 'Neutral',
+                    'interpretation': 'Cached dominance — live CoinGecko data was unavailable at analysis time.',
+                    'history_points': len(hist), 'history': history, 'cached': True,
+                }
         except Exception:  # noqa
             traceback.print_exc()
     # Admin demo: force the circuit breaker to trip live (no recompute needed).
@@ -16511,7 +16544,59 @@ def analysis_status_endpoint(job_id: str, user: dict = Depends(get_current_user)
 @app.get('/api/v1/albert/analysis/latest')
 def analysis_latest_endpoint(user: dict = Depends(get_current_user)):
     pid = owner_pid(user)
-    return {'status': 'ready', 'job': _analysis_jobs.latest(pid), 'engines': _analysis_jobs.engine_status(pid)}
+    job = _analysis_jobs.latest(pid)
+    # Patch: if the stored run has no dominance, fill from the dominance history cache
+    if job and isinstance(job.get('result'), dict) and not job['result'].get('dominance'):
+        try:
+            latest_dom = dominance_col.find_one({}, {'_id': 0}, sort=[('date', -1)])
+            if latest_dom and latest_dom.get('dominance') is not None:
+                hist = list(dominance_col.find({}, {'_id': 0}).sort('date', -1).limit(40))
+                dom_val = latest_dom['dominance']
+                d7 = round(dom_val - hist[7]['dominance'], 2) if len(hist) > 7 else None
+                total = latest_dom.get('total_mcap', 0)
+                history = [{'date': h['date'], 'dominance': h['dominance']} for h in reversed(hist)][-30:]
+                job['result']['dominance'] = {
+                    'dominance': dom_val, 'total_mcap_t': round(total / 1e12, 3) if total else 0,
+                    'change_7d': d7, 'change_30d': None, 'direction': 'Neutral',
+                    'interpretation': 'Cached dominance — live data was unavailable at analysis time.',
+                    'history_points': len(hist), 'history': history, 'cached': True,
+                }
+        except Exception:
+            pass
+    # Also patch at the top-level (some runs store dominance at job root, not inside result)
+    if job and not job.get('dominance') and not (isinstance(job.get('result'), dict) and job.get('result')):
+        try:
+            latest_dom = dominance_col.find_one({}, {'_id': 0}, sort=[('date', -1)])
+            if latest_dom and latest_dom.get('dominance') is not None:
+                job['dominance'] = {'dominance': latest_dom['dominance'], 'cached': True}
+        except Exception:
+            pass
+    return {'status': 'ready', 'job': job, 'engines': _analysis_jobs.engine_status(pid)}
+
+
+
+# ── Dashboard layout persistence (per-user card order) ──
+@app.get('/api/v1/user/dashboard-layout')
+def get_dashboard_layout(user: dict = Depends(get_current_user)):
+    pid = owner_pid(user)
+    doc = misc_col.find_one({'_id': f'dashboard_layout_{pid}'})
+    if doc and doc.get('cardOrder'):
+        return {'cardOrder': doc['cardOrder']}
+    return {'cardOrder': None}
+
+
+@app.put('/api/v1/user/dashboard-layout')
+def save_dashboard_layout(payload: dict = Body(...), user: dict = Depends(get_current_user)):
+    pid = owner_pid(user)
+    card_order = payload.get('cardOrder')
+    if not isinstance(card_order, list) or len(card_order) == 0:
+        return JSONResponse(status_code=400, content={'error': 'cardOrder must be a non-empty array'})
+    misc_col.update_one(
+        {'_id': f'dashboard_layout_{pid}'},
+        {'$set': {'cardOrder': card_order, 'updatedAt': datetime.datetime.utcnow().isoformat()}},
+        upsert=True,
+    )
+    return {'status': 'saved', 'cardOrder': card_order}
 
 
 @app.post('/api/v1/chat/prepare-proposal')

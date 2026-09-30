@@ -242,17 +242,22 @@ const Explanation = ({ item, onNav, onEvidence }) => <div className="space-y-4 t
   {item.to && <NavigateLink id={TICKER_DEST_MAP[item.to] || (item.to.startsWith('dashboard-') ? item.to : `dashboard-${item.to}`)} onNav={onNav} className="text-sm">Open detailed screen<ArrowUpRight className="h-3.5 w-3.5" /></NavigateLink>}
 </div>;
 
-const HomeTicker = ({ d, ticker, snapshot, onNav }) => {
+const HomeTicker = ({ d, ticker, snapshot, dashboardStatus, onNav }) => {
   const [item, setItem] = useState(null);
   const [evidenceId, setEvidenceId] = useState(null);
-  const items = TickerContent({ d, ticker, snapshot });
+  const isUpdating = dashboardStatus === 'loading' || dashboardStatus === 'computing';
+  const items = TickerContent({ d, ticker, snapshot }).map(entry =>
+    isUpdating && entry.value === 'Unavailable'
+      ? { ...entry, value: 'Updating\u2026' }
+      : entry
+  );
   const close = () => setItem(null);
   return <>
     <div aria-label="Market snapshot ticker" className="order-last flex w-full shrink-0 items-center justify-between gap-0 overflow-x-auto [scrollbar-width:thin] xl:order-none xl:min-w-0 xl:w-auto xl:flex-1 xl:shrink">
       {items.map((entry, index) => <button type="button" key={entry.title} onClick={() => setItem(index)} aria-label={`${entry.title}: ${entry.value}`}
         className="flex min-h-9 shrink-0 flex-col justify-center whitespace-nowrap rounded-md border border-transparent px-1 text-left hover:border-sky-500/40 hover:bg-slate-800/70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400">
         <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">{entry.title}</span>
-        <span className="text-xs font-bold text-white">{entry.value}</span>
+        <span className={`text-xs font-bold ${entry.value === 'Updating\u2026' ? 'animate-pulse text-slate-400' : 'text-white'}`}>{entry.value}</span>
       </button>)}
     </div>
     {item != null && <ModalShell title={items[item].title} onClose={close} className="max-w-xl">
@@ -265,7 +270,7 @@ const HomeTicker = ({ d, ticker, snapshot, onNav }) => {
 /* ── Card chrome ── */
 const DashboardCard = ({ cardId, title, icon: Icon, status, summary, freshness, children, onOpen, onAsk, detail }) => <article
   onClick={(e) => { if (!e.target.closest('button, a')) onOpen(); }}
-  className="flex min-w-0 cursor-pointer flex-col rounded-lg border border-slate-700/80 bg-slate-900/80 p-3 shadow-sm shadow-black/20 xl:min-h-[195px]">
+  className="flex h-full min-w-0 cursor-pointer flex-col rounded-lg border border-slate-700/80 bg-slate-900/80 p-3 shadow-sm shadow-black/20 xl:min-h-[195px]">
   <div className="flex min-h-5 items-center gap-1.5">
     <Icon className="h-4 w-4 shrink-0 text-sky-300" />
     <h2 className="min-w-0 truncate text-[13px] font-bold text-white" title={title}><button id={`home-card-${cardId}`} type="button" onClick={onOpen} className="max-w-full truncate text-left hover:text-sky-200 focus-visible:rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400">{title}</button></h2>
@@ -473,7 +478,7 @@ const OneScreenHome = ({ d, dashboardStatus = 'loading', ticker, news, newsStatu
       <DraggableGrid className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {/* 1. Albert's Brief */}
         <article data-card-id="brief" onClick={(e) => { if (!e.target.closest('button, a')) open('brief'); }}
-          className="flex min-w-0 cursor-pointer flex-col rounded-lg border border-slate-700/80 bg-slate-900/80 p-3 shadow-sm shadow-black/20">
+          className="flex h-full min-w-0 cursor-pointer flex-col rounded-lg border border-slate-700/80 bg-slate-900/80 p-3 shadow-sm shadow-black/20 max-h-[420px] overflow-y-auto [scrollbar-width:thin]">
           <div className="flex min-h-5 items-center gap-1.5">
             <Sparkles className="h-4 w-4 shrink-0 text-sky-300" />
             <h2 className="min-w-0 truncate text-[13px] font-bold text-white"><button id="home-card-brief" type="button" onClick={() => open('brief')} className="max-w-full truncate text-left hover:text-sky-200 focus-visible:rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400">Albert's Brief</button></h2>

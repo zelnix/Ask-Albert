@@ -1,12 +1,13 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, Children } from 'react';
+import React, { useState, useEffect, useCallback, useRef, Children } from 'react';
 import { DndContext, closestCenter, PointerSensor, KeyboardSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, useSortable, arrayMove, rectSortingStrategy, sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { GripVertical, RotateCcw } from 'lucide-react';
 
 const STORAGE_KEY = 'albert-dashboard-card-order';
+const API_URL = '/api/v1/user/dashboard-layout';
 
 /* ── Individual sortable item wrapper ── */
 const SortableItem = ({ id, children }) => {
@@ -30,7 +31,7 @@ const SortableItem = ({ id, children }) => {
   };
 
   return (
-    <div ref={setNodeRef} style={style} className={`relative group/drag ${isDragging ? 'ring-2 ring-sky-500/50 rounded-lg shadow-lg shadow-sky-500/10' : ''}`}>
+    <div ref={setNodeRef} style={style} className={`relative h-full group/drag ${isDragging ? 'ring-2 ring-sky-500/50 rounded-lg shadow-lg shadow-sky-500/10' : ''}`}>
       {/* Drag handle — visible on hover */}
       <button
         type="button"
@@ -51,6 +52,40 @@ const SortableItem = ({ id, children }) => {
 const getCardId = (child, i) =>
   child.props?.cardId || child.props?.['data-card-id'] || `card-${i}`;
 
+/* ── API helpers (fire-and-forget save, async load) ── */
+const loadLayoutFromApi = async () => {
+  try {
+    const res = await fetch(API_URL, { credentials: 'include' });
+    if (res.ok) {
+      const data = await res.json();
+      return data.cardOrder || null;
+    }
+  } catch (_) {}
+  return null;
+};
+
+const saveLayoutToApi = (order) => {
+  try {
+    fetch(API_URL, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ cardOrder: order }),
+    }).catch(() => {});
+  } catch (_) {}
+};
+
+const deleteLayoutFromApi = () => {
+  try {
+    fetch(API_URL, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ cardOrder: [] }),
+    }).catch(() => {});
+  } catch (_) {}
+};
+
 /* ── Main DraggableGrid component ── */
 const DraggableGrid = ({ children, className = '' }) => {
   const childArray = Children.toArray(children);
@@ -58,25 +93,40 @@ const DraggableGrid = ({ children, className = '' }) => {
 
   const [cardOrder, setCardOrder] = useState(defaultOrder);
   const [mounted, setMounted] = useState(false);
+  const initializedRef = useRef(false);
 
-  /* Load saved order from localStorage on mount */
+  /* Load saved order: localStorage first (instant), then API (authoritative) */
   useEffect(() => {
     setMounted(true);
+    if (initializedRef.current) return;
+    initializedRef.current = true;
+
+    const validateOrder = (parsed) => {
+      if (!Array.isArray(parsed) || parsed.length === 0) return null;
+      const valid = parsed.filter((id) => defaultOrder.includes(id));
+      const added = defaultOrder.filter((id) => !parsed.includes(id));
+      return valid.length > 0 ? [...valid, ...added] : null;
+    };
+
+    // 1. Instant load from localStorage
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          const valid = parsed.filter((id) => defaultOrder.includes(id));
-          const added = defaultOrder.filter((id) => !parsed.includes(id));
-          if (valid.length > 0) {
-            setCardOrder([...valid, ...added]);
-          }
+        const order = validateOrder(JSON.parse(saved));
+        if (order) setCardOrder(order);
+      }
+    } catch (_) {}
+
+    // 2. Async load from API (authoritative — overrides localStorage)
+    loadLayoutFromApi().then((apiOrder) => {
+      if (apiOrder) {
+        const order = validateOrder(apiOrder);
+        if (order) {
+          setCardOrder(order);
+          try { localStorage.setItem(STORAGE_KEY, JSON.stringify(order)); } catch (_) {}
         }
       }
-    } catch (_) {
-      /* ignore */
-    }
+    });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* DnD sensors with activation constraint to avoid accidental drags */
@@ -85,7 +135,7 @@ const DraggableGrid = ({ children, className = '' }) => {
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
-  /* Reorder on drag end + persist */
+  /* Reorder on drag end + persist to localStorage + API */
   const handleDragEnd = useCallback((event) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
@@ -94,19 +144,17 @@ const DraggableGrid = ({ children, className = '' }) => {
       const newIdx = prev.indexOf(String(over.id));
       if (oldIdx === -1 || newIdx === -1) return prev;
       const next = arrayMove(prev, oldIdx, newIdx);
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-      } catch (_) {}
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); } catch (_) {}
+      saveLayoutToApi(next);
       return next;
     });
   }, []);
 
-  /* Reset to default order */
+  /* Reset to default order — clear localStorage + API */
   const handleReset = useCallback(() => {
     setCardOrder(defaultOrder);
-    try {
-      localStorage.removeItem(STORAGE_KEY);
-    } catch (_) {}
+    try { localStorage.removeItem(STORAGE_KEY); } catch (_) {}
+    deleteLayoutFromApi();
   }, [defaultOrder]);
 
   const isCustom = JSON.stringify(cardOrder) !== JSON.stringify(defaultOrder);
