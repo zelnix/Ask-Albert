@@ -4,7 +4,6 @@ export const metadata = {
   title: 'Ask Albert — Hucentai Crypto IQ',
   description: 'Ask Albert: real-time crypto market intelligence — a unified decision engine, probability forecasts, news-linked odds and an AI analyst you can ask anything. Hucentai Crypto IQ.',
   applicationName: 'Ask Albert',
-  manifest: '/manifest.webmanifest',
   appleWebApp: {
     capable: true,
     title: 'Ask Albert',

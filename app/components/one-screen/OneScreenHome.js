@@ -52,26 +52,81 @@ const TickerContent = ({ d, ticker, snapshot }) => {
   const graded = num(ledger.n);
   const forecastPerf = accuracy != null && graded != null && graded > 0
     ? `${accuracy.toFixed(0)}% · ${graded} graded` : 'Unavailable';
+
+  // Extract institutional metrics from the dashboard overlay
+  const instItems = d?.institutional?.items || d?.institutional || [];
+  const findInst = (label) => (Array.isArray(instItems) ? instItems : []).find((i) => String(i?.label || '').toLowerCase().includes(label.toLowerCase()));
+  const fundingItem = findInst('Funding rate');
+  const takerItem = findInst('Taker');
+
+  // Volume vs normal from spot volume shares
+  const vol24 = streams?.spotVolumeShares?.windows?.['24h'];
+  const btcVolPct = num(vol24?.btcSharePct);
+  const volChange = num(vol24?.totalChangeVsAvg);
+
+  // Halving cycle
+  const cycle = d?.cycle;
+  const halvingPct = num(cycle?.cycle_progress_pct);
+
+  // Bear scenario from scenario band
+  const basePrice = num(ticker?.price);
+  const lowerPct = num(band?.lowerPct);
+  const bearPrice = basePrice && lowerPct != null ? basePrice * (1 + lowerPct / 100) : null;
+
+  // Downside zone from overview
+  const dsZone = d?.overview?.downside_zone;
+
   return [
+    // 1. BTC price + 24h change
     { title: 'BTC spot', value: ticker?.price ? `${money(ticker.price)} · ${change24 != null ? signed(change24) : ''}` : 'Unavailable', to: 'market-intel',
       what: ticker?.price ? `BTC/USD spot ${money(ticker.price)}; 24h change ${change24 != null ? signed(change24) : 'unavailable'}.` : 'Quote unavailable.',
       source: ticker?.source || 'ticker', asOf: ticker?.ts },
-    { title: 'BTC dominance', value: num(d?.dominance?.dominance) != null ? `${num(d.dominance.dominance).toFixed(1)}%${num(d.dominance.change_7d) != null ? ` · ${signed(d.dominance.change_7d, ' pts')}` : ''}` : 'Unavailable', to: 'crossmarket',
-      what: num(d?.dominance?.dominance) != null ? `BTC dominance ${num(d.dominance.dominance).toFixed(2)}%.` : 'Not reported.',
-      source: 'CoinGecko', asOf: d?.created_at },
-    { title: 'Altcoin breadth', value: breadth?.altsWithReturns > 0 ? `${breadth.altsBeatingBtc}/${breadth.altsWithReturns} beat BTC` : 'Unavailable', to: 'market-intel',
-      what: breadth?.altsWithReturns > 0 ? `${breadth.altsBeatingBtc} of ${breadth.altsWithReturns} altcoins beat BTC.` : 'Unavailable.',
-      source: 'phase assessment', asOf: phase?.assessedAt },
-    { title: 'ETF net flow', value: net == null ? 'Unavailable' : `${signed(net, 'm')} · ${etf?.latest_date ? etf.latest_date.slice(5) : ''}`, to: 'institutional',
+    // 2. 7d downside probability (from scenario band)
+    { title: '7d downside', value: band?.lowerPct != null ? `${signed(band.lowerPct)} to ${signed(band.upperPct)}` : 'Unavailable', to: 'scenarios',
+      what: band?.lowerPct != null ? `20th–80th pct 7d range: ${signed(band.lowerPct)} to ${signed(band.upperPct)}.` : band?.reasonText || 'Unavailable.',
+      source: 'scenario-outlooks/preview', asOf: outlook?.baseline?.observedAt },
+    // 3. Volume vs normal
+    { title: 'Volume', value: volChange != null ? `${volChange > 0 ? '+' : ''}${volChange.toFixed(0)}% vs avg` : btcVolPct != null ? `BTC ${btcVolPct.toFixed(1)}% share` : 'Unavailable', to: 'market-intel',
+      what: volChange != null ? `24h trading volume is ${volChange > 0 ? '+' : ''}${volChange.toFixed(0)}% vs 30d average.` : 'Volume data unavailable.',
+      source: 'spot volume shares', asOf: vol24?.asOf },
+    // 4. Taker buy/sell ratio
+    { title: 'Taker ratio', value: takerItem?.value || 'Unavailable', to: 'institutional',
+      what: takerItem ? `Taker buy/sell ratio: ${takerItem.value}. Signal: ${takerItem.signal || 'N/A'}.` : 'Unavailable.',
+      source: takerItem?.source || 'OKX derivatives', asOf: takerItem?.as_of || takerItem?.asOf },
+    // 5. Bear scenario price
+    { title: 'Bear scenario', value: bearPrice != null ? `${money(bearPrice)}` : band?.lowerPct != null ? signed(band.lowerPct) : 'Unavailable', to: 'scenarios',
+      what: bearPrice != null ? `7d bear scenario price: ${money(bearPrice)} (${signed(lowerPct)} from current).` : 'Unavailable.',
+      source: 'scenario-outlooks/preview', asOf: outlook?.baseline?.observedAt },
+    // 6. Invalidation level (nearest support)
+    { title: 'Support', value: dsZone?.price ? money(dsZone.price) + ` (${signed(-dsZone.distance_pct)})` : 'Unavailable', to: 'market-intel',
+      what: dsZone?.price ? `Nearest support: ${money(dsZone.price)}, ${dsZone.distance_pct}% below current price.` : 'Unavailable.',
+      source: 'chart analysis', asOf: d?.created_at },
+    // 7. ETF net flow
+    { title: 'ETF flow', value: net == null ? 'Unavailable' : `${signed(net, 'm')} · ${etf?.latest_date ? etf.latest_date.slice(5) : ''}`, to: 'institutional',
       what: net == null ? 'Unavailable.' : `Net flow ${signed(net, 'm USD')} for ${etf?.latest_date || ''}.`,
       source: etf?.source || 'ETF report', asOf: etf?.latest_date },
-    { title: 'Market stance', value: sop?.market?.regime ? titleCase(sop.market.regime) : 'Unavailable', to: 'briefing',
+    // 8. Funding rate
+    { title: 'Funding', value: fundingItem?.value || 'Unavailable', to: 'institutional',
+      what: fundingItem ? `Perpetual funding rate: ${fundingItem.value}. Signal: ${fundingItem.signal || 'N/A'}.` : 'Unavailable.',
+      source: fundingItem?.source || 'OKX derivatives', asOf: fundingItem?.as_of || fundingItem?.asOf },
+    // 9. Halving progress
+    { title: 'Halving', value: halvingPct != null ? `${halvingPct.toFixed(0)}% · ${cycle.phase}` : 'Unavailable', to: 'market-intel',
+      what: halvingPct != null ? `Halving cycle ${halvingPct.toFixed(1)}% complete. Phase: ${cycle.phase}. ${cycle.days_since_halving}d since halving.` : 'Unavailable.',
+      source: 'mempool.space', asOf: d?.created_at },
+    // 10. BTC dominance
+    { title: 'BTC dom.', value: num(d?.dominance?.dominance) != null ? `${num(d.dominance.dominance).toFixed(1)}%${num(d.dominance.change_7d) != null ? ` · ${signed(d.dominance.change_7d, ' pts')}` : ''}` : 'Unavailable', to: 'crossmarket',
+      what: num(d?.dominance?.dominance) != null ? `BTC dominance ${num(d.dominance.dominance).toFixed(2)}%.` : 'Not reported.',
+      source: 'CoinGecko', asOf: d?.created_at },
+    // 11. Altcoin breadth
+    { title: 'Alt breadth', value: breadth?.altsWithReturns > 0 ? `${breadth.altsBeatingBtc}/${breadth.altsWithReturns} beat BTC` : 'Unavailable', to: 'market-intel',
+      what: breadth?.altsWithReturns > 0 ? `${breadth.altsBeatingBtc} of ${breadth.altsWithReturns} altcoins beat BTC.` : 'Unavailable.',
+      source: 'phase assessment', asOf: phase?.assessedAt },
+    // 12. Market stance
+    { title: 'Stance', value: sop?.market?.regime ? titleCase(sop.market.regime) : 'Unavailable', to: 'briefing',
       what: claim?.text || (sop?.market?.regime ? `Regime: ${titleCase(sop.market.regime)}.` : 'Unavailable.'),
       source: 'canonical regime', asOf: sop?.market?.asOf || sop?.generatedAt },
-    { title: '7d historical range', value: band?.lowerPct != null && band?.upperPct != null ? `${signed(band.lowerPct)} to ${signed(band.upperPct)}` : 'Unavailable', to: 'scenarios',
-      what: band?.lowerPct != null ? `20th\u201380th pct: ${signed(band.lowerPct)} to ${signed(band.upperPct)}.` : band?.reasonText || 'Unavailable.',
-      source: 'scenario-outlooks/preview', asOf: outlook?.baseline?.observedAt },
-    { title: 'Forecast performance', value: forecastPerf, to: 'scenario-evaluation',
+    // 13. Forecast performance
+    { title: 'Forecasts', value: forecastPerf, to: 'scenario-evaluation',
       what: accuracy != null ? `${accuracy.toFixed(0)}% accuracy, ${graded} graded.` : 'Unavailable.',
       source: 'prediction_ledger', asOf: d?.prediction_ledger?.overall?.lastGradedAt },
   ];
@@ -123,7 +178,7 @@ const DashboardCard = ({ cardId, title, icon: Icon, status, summary, freshness, 
     <h2 className="min-w-0 truncate text-[13px] font-bold text-white" title={title}><button id={`home-card-${cardId}`} type="button" onClick={onOpen} className="max-w-full truncate text-left hover:text-sky-200 focus-visible:rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400">{title}</button></h2>
     {status && <span className={`ml-auto shrink-0 rounded-sm px-1.5 py-0.5 text-[10px] font-bold ${['stale', 'error', 'unavailable'].includes(String(status).toLowerCase()) ? 'bg-amber-500/15 text-amber-200' : 'bg-sky-500/10 text-sky-200'}`}>{titleCase(status)}</span>}
   </div>
-  <p className="mt-1 line-clamp-3 text-xs leading-snug text-slate-300">{summary}</p>
+  <p className="mt-1 text-xs leading-snug text-slate-300">{summary}</p>
   <div className="mt-1 min-h-0 flex-1 text-xs leading-snug text-slate-200">{children}</div>
   <div className="mt-1 flex shrink-0 items-center gap-2 border-t border-slate-800 pt-1.5 text-xs">
     <span className="min-w-0 flex-1 truncate text-[11px] text-slate-400" title={freshness}>{freshness || ''}</span>
@@ -180,9 +235,10 @@ const OneScreenHome = ({ d, dashboardStatus = 'loading', ticker, news, newsStatu
 
   /* ── Brief API data ── */
   const briefTake = brief?.take || brief?.brief?.take;
+  const isUpdating = dashboardStatus === 'computing' || dashboardStatus === 'loading';
 
   /* ── Commentary builders ── */
-  const briefCommentary = briefTake || directionClaim?.text || 'Market assessment is loading.';
+  const briefCommentary = isUpdating ? 'Albert is updating the market assessment…' : (briefTake || directionClaim?.text || 'Market assessment is loading.');
 
   const paperCommentary = (() => {
     if (!totals?.value) return 'Paper trading wallet is loading or unavailable.';
@@ -192,7 +248,7 @@ const OneScreenHome = ({ d, dashboardStatus = 'loading', ticker, news, newsStatu
     const pnlP = num(totals.pnlPct);
     if (start == null || current == null) return 'Portfolio summary unavailable.';
     const status = pnl == null ? 'flat' : Math.abs(pnl) < 0.01 ? 'flat' : pnl > 0 ? 'in profit' : 'at a loss';
-    const amt = pnl != null ? `, ${money(Math.abs(pnl), 2)} (${signed(pnlP)})` : '';
+    const amt = pnl != null ? `, ${pnl >= 0 ? '+' : ''}${money(pnl, 2)} (${signed(pnlP)})` : '';
     const realized = num(totals.realizedPnl);
     const unrealized = pnl != null && realized != null ? pnl - realized : null;
     let detail = '';
@@ -342,7 +398,7 @@ const OneScreenHome = ({ d, dashboardStatus = 'loading', ticker, news, newsStatu
             {/* Portfolio implication */}
             <div className="border-t border-slate-800 pt-1.5">
               <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Portfolio</p>
-              <p className="mt-0.5 line-clamp-2">{portfolioClaim?.text || (pnlVal != null ? `${pnlLabel}: ${money(Math.abs(pnlVal), 2)} (${signed(totals?.pnlPct)}) on ${money(totals?.value, 2)} portfolio` : 'Unavailable')}</p>
+              <p className="mt-0.5">{portfolioClaim?.text || (pnlVal != null ? `${pnlLabel}: ${pnlVal >= 0 ? '+' : ''}${money(pnlVal, 2)} (${signed(totals?.pnlPct)}) on ${money(totals?.value, 2)} portfolio` : 'Unavailable')}</p>
             </div>
             {/* Evidence & Engines */}
             <div className="border-t border-slate-800 pt-1.5">
@@ -368,7 +424,7 @@ const OneScreenHome = ({ d, dashboardStatus = 'loading', ticker, news, newsStatu
         </article>
         {/* 2. Paper Trading */}
         <DashboardCard cardId="paper" title="Paper Trading" icon={Wallet} status={health?.paper} summary={paperCommentary} freshness={last('Ledger', paper?.asOf)} onAsk={() => ask('paper', 'Paper Trading', paperCommentary, 'Paper ledger', paper?.asOf)} onOpen={() => open('paper')}>
-          <p className="line-clamp-1"><b>Value:</b> {money(totals?.value, 2)} · <b>P&L:</b> {pnlVal != null ? `${money(Math.abs(pnlVal), 2)} (${signed(totals?.pnlPct)})` : 'unavailable'}</p>
+          <p className="line-clamp-1"><b>Value:</b> {money(totals?.value, 2)} · <b>Total P&L:</b> {pnlVal != null ? `${pnlVal >= 0 ? '+' : ''}${money(pnlVal, 2)} (${signed(totals?.pnlPct)})` : 'unavailable'}</p>
           {entries.length ? entries.map((e, i) => <p key={e.ledgerEventId || i} className="mt-0.5 truncate">{e.side === 'BUY' ? 'Bought' : 'Sold'} {e.qty} {e.asset} @ {money(e.fillPx, 2)}</p>) : <p className="mt-1 text-slate-400">No completed trades</p>}
         </DashboardCard>
         {/* 3. Portfolio & Risk */}

@@ -230,9 +230,9 @@ export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboar
     let paperComm = null;
     if (pnlUsd != null && startCash != null) {
       const status = Math.abs(pnlUsd) < 0.01 ? 'flat' : pnlUsd > 0 ? 'in profit' : 'at a loss';
-      paperComm = `The portfolio is ${status}, ${amount(Math.abs(pnlUsd))} (${pnlPct != null ? `${pnlPct > 0 ? '+' : ''}${pnlPct.toFixed(1)}%` : ''}) relative to ${amount(startCash)} starting capital.`;
+      paperComm = `The portfolio is ${status}, ${pnlUsd >= 0 ? '+' : ''}${amount(pnlUsd)} (${pnlPct != null ? `${pnlPct > 0 ? '+' : ''}${pnlPct.toFixed(1)}%` : ''}) relative to ${amount(startCash)} starting capital.`;
       if (realised != null && unrealised != null && (Math.abs(realised) >= 0.01 || Math.abs(unrealised) >= 0.01)) {
-        paperComm += ` Realised results account for ${amount(Math.abs(realised))}; open holdings for ${amount(Math.abs(unrealised))}.`;
+        paperComm += ` Realised results: ${realised >= 0 ? '+' : ''}${amount(realised)}; unrealised: ${unrealised >= 0 ? '+' : ''}${amount(unrealised)}.`;
       }
     }
     area('Paper Trading', 'paper', { state: healthOf('paper'), commentary: paperComm, source: paperTime, facts: [
@@ -242,7 +242,7 @@ export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboar
       ['Current cash', paper.cashAvailable ? amount(paper.cashTotal) : null],
       ['Equity value', amount(totals.value)],
       ['Realized P&L', amount(totals.realizedPnl)],
-      ['Unrealized P&L', amount(totals.pnlUsd)],
+      ['Total P&L', amount(totals.pnlUsd)],
       ['Fees', amount(totals.fees)],
       ['Open positions', val(totals.openPositions)],
     ], children: (paper.positions || []).length > 0 ? <div className="mt-3 overflow-x-auto"><table className="w-full text-left text-xs"><caption className="mb-1 text-left text-muted-foreground">Holdings</caption><thead><tr><th className="py-1">Asset</th><th>Qty</th><th>Avg entry</th><th>Current</th><th>Value</th><th>Unrealized</th></tr></thead><tbody>{(paper.positions || []).slice(0, 10).map((p, i) => <tr className="border-t border-border" key={i}><td className="py-1">{p.asset}</td><td>{p.netQuantity}</td><td>{amount(p.averageEntryPrice)}</td><td>{amount(p.currentPrice)}</td><td>{amount(Number(p.currentPrice || 0) * Number(p.netQuantity || 0))}</td><td>{amount(p.unrealizedPnl)}</td></tr>)}</tbody></table></div> : null,
