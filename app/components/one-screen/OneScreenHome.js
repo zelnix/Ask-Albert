@@ -54,14 +54,21 @@ const TickerContent = ({ d, ticker, snapshot }) => {
     ? `${accuracy.toFixed(0)}% · ${graded} graded` : 'Unavailable';
 
   // Extract institutional metrics from the dashboard overlay
-  const instItems = d?.institutional?.items || d?.institutional || [];
-  const findInst = (label) => (Array.isArray(instItems) ? instItems : []).find((i) => String(i?.label || '').toLowerCase().includes(label.toLowerCase()));
-  const fundingItem = findInst('Funding rate');
+  const instMetrics = d?.institutional?.metrics || [];
+  const findInst = (label) => (Array.isArray(instMetrics) ? instMetrics : []).find((i) => String(i?.name || '').toLowerCase().includes(label.toLowerCase()));
+  const fundingInst = findInst('Funding rate');
+  // Fallback: use the leverage snapshot's funding if institutional panel is stale
+  const levSnap = d?.leverage_snapshot;
+  const fundingItem = (fundingInst?.value && fundingInst?.status === 'ready') ? fundingInst
+    : levSnap?.funding_rate != null && levSnap?.funding_source
+      ? { value: `${levSnap.funding_rate > 0 ? '+' : ''}${levSnap.funding_rate.toFixed(4)}%`, signal: levSnap.funding_bias || 'Neutral', source: levSnap.funding_source, as_of: levSnap.funding_as_of }
+      : fundingInst;
   const takerItem = findInst('Taker');
 
   // Volume vs normal from spot volume shares
   const vol24 = streams?.spotVolumeShares?.windows?.['24h'];
-  const btcVolPct = num(vol24?.btcSharePct);
+  const rawBtcShare = num(vol24?.btcShare);
+  const btcVolPct = rawBtcShare != null ? rawBtcShare * 100 : null;
   const volChange = num(vol24?.totalChangeVsAvg);
 
   // Halving cycle
@@ -73,8 +80,19 @@ const TickerContent = ({ d, ticker, snapshot }) => {
   const lowerPct = num(band?.lowerPct);
   const bearPrice = basePrice && lowerPct != null ? basePrice * (1 + lowerPct / 100) : null;
 
-  // Downside zone from overview
-  const dsZone = d?.overview?.downside_zone;
+  // Downside zone from risk engine (support/resistance), fallback to chart sr_levels
+  const dsZone = d?.risk?.downside_zone || (() => {
+    const refPrice = num(ticker?.price) || num(d?.last_close);
+    if (!refPrice) return null;
+    const sr = d?.chart?.sr_levels || [];
+    const supports = sr.filter((l) => l.type === 'support' && l.price < refPrice)
+      .sort((a, b) => b.price - a.price);
+    if (supports.length > 0) {
+      const nearest = supports[0];
+      return { price: nearest.price, distance_pct: +((refPrice - nearest.price) / refPrice * 100).toFixed(1), label: 'Primary support' };
+    }
+    return null;
+  })();
 
   return [
     // 1. BTC price + 24h change
@@ -96,9 +114,10 @@ const TickerContent = ({ d, ticker, snapshot }) => {
     // 3. Volume vs normal
     { title: 'Volume', value: volChange != null ? `${volChange > 0 ? '+' : ''}${volChange.toFixed(0)}% vs avg` : btcVolPct != null ? `BTC ${btcVolPct.toFixed(1)}% share` : 'Unavailable', to: 'market-intel',
       definition: 'How current 24-hour trading volume compares to the 30-day average. Higher-than-normal volume often signals conviction behind a price move; lower volume suggests weak participation.',
-      what: volChange != null ? `24h trading volume is ${volChange > 0 ? '+' : ''}${volChange.toFixed(0)}% vs 30d average.` : 'Volume data unavailable.',
+      what: volChange != null ? `24h trading volume is ${volChange > 0 ? '+' : ''}${volChange.toFixed(0)}% vs 30d average.` : btcVolPct != null ? `BTC accounts for ${btcVolPct.toFixed(1)}% of eligible spot turnover.` : 'Volume data unavailable.',
       commentary: volChange != null
         ? `Trading volume over the last 24 hours is ${volChange > 0 ? '+' : ''}${volChange.toFixed(0)}% relative to the 30-day average. ${volChange > 50 ? 'This is unusually high volume — often accompanies breakouts, capitulation events or major news. Price moves on high volume tend to be more sustained.' : volChange > 20 ? 'Above-average volume suggests genuine participation behind the current price action.' : volChange < -30 ? 'Volume is well below normal — price moves in thin conditions are less reliable and more prone to reversal.' : 'Volume is in a normal range — no unusual activity to flag.'}`
+        : btcVolPct != null ? `Bitcoin currently accounts for ${btcVolPct.toFixed(1)}% of eligible spot turnover across tracked exchanges. ${btcVolPct > 55 ? 'BTC dominates trading volume — capital is concentrated in Bitcoin rather than spread across altcoins.' : btcVolPct < 40 ? 'BTC share is below 40% — altcoin trading volume is relatively high, suggesting broad market participation.' : 'BTC share is in a normal range relative to altcoins.'} The volume-vs-average comparison is not yet available; it requires multiple daily snapshots.`
         : 'Volume data is not available. The market-streams engine has not produced a spot volume comparison for the last 24 hours. This feed is refreshed every 15 minutes; if it remains unavailable, the upstream exchange data source may be down.',
       source: 'spot volume shares', asOf: vol24?.asOf },
     // 4. Taker buy/sell ratio
@@ -106,7 +125,7 @@ const TickerContent = ({ d, ticker, snapshot }) => {
       definition: 'The ratio of aggressive buy orders to aggressive sell orders on derivatives exchanges. "Takers" are traders who hit the ask (buy) or bid (sell) with market orders. A ratio above 1.0 means buyers are more aggressive; below 1.0 means sellers dominate.',
       what: takerItem ? `Taker buy/sell ratio: ${takerItem.value}. Signal: ${takerItem.signal || 'N/A'}.` : 'Unavailable.',
       commentary: takerItem
-        ? `The taker buy/sell ratio measures aggressive market orders. ${takerItem.value} — ${takerItem.signal === 'bullish' ? 'buyers are dominating, which typically signals near-term upward pressure' : takerItem.signal === 'bearish' ? 'sellers are dominating, suggesting near-term downward pressure' : 'the ratio is balanced — neither side is clearly dominant'}. This is sourced from OKX derivatives data and reflects institutional-grade order flow.`
+        ? `The taker buy/sell ratio measures aggressive market orders. ${takerItem.value} — ${/bullish/i.test(takerItem.signal) ? 'buyers are dominating, which typically signals near-term upward pressure' : /bearish/i.test(takerItem.signal) ? 'sellers are dominating, suggesting near-term downward pressure' : 'the ratio is balanced — neither side is clearly dominant'}. This is sourced from OKX derivatives data and reflects institutional-grade order flow.`
         : 'Taker buy/sell ratio is not available. This metric is sourced from OKX derivatives data, which is fetched during the engine snapshot refresh. If the OKX API is unreachable or the engine snapshot has not run recently, this reading will be missing. Ask Albert to refresh or check the Engine & Evidence screen.',
       source: takerItem?.source || 'OKX derivatives', asOf: takerItem?.as_of || takerItem?.asOf },
     // 5. Bear scenario price
@@ -138,7 +157,7 @@ const TickerContent = ({ d, ticker, snapshot }) => {
       definition: 'The periodic payment between long and short holders of Bitcoin perpetual futures contracts. When positive, longs pay shorts (bullish crowding); when negative, shorts pay longs (bearish crowding). Extreme rates often precede mean-reversion moves.',
       what: fundingItem ? `Perpetual funding rate: ${fundingItem.value}. Signal: ${fundingItem.signal || 'N/A'}.` : 'Unavailable.',
       commentary: fundingItem
-        ? `The perpetual futures funding rate is ${fundingItem.value}. ${fundingItem.signal === 'bullish' ? 'A positive funding rate means longs are paying shorts — the market is net long and willing to pay for it.' : fundingItem.signal === 'bearish' ? 'A negative funding rate means shorts are paying longs — bearish positioning dominates.' : 'The rate is near neutral — no strong leverage bias.'} Extreme funding rates (above 0.05% or below -0.03%) often precede mean-reversion moves.`
+        ? `The perpetual futures funding rate is ${fundingItem.value}. ${/bullish/i.test(fundingItem.signal) ? 'A positive funding rate means longs are paying shorts — the market is net long and willing to pay for it.' : /bearish/i.test(fundingItem.signal) ? 'A negative funding rate means shorts are paying longs — bearish positioning dominates.' : 'The rate is near neutral — no strong leverage bias.'} Extreme funding rates (above 0.05% or below -0.03%) often precede mean-reversion moves.`
         : 'Funding rate data is not available. This is sourced from OKX perpetual futures during the engine snapshot refresh. If OKX is unreachable or the snapshot has not refreshed recently, this reading will be missing.',
       source: fundingItem?.source || 'OKX derivatives', asOf: fundingItem?.as_of || fundingItem?.asOf },
     // 9. Halving progress

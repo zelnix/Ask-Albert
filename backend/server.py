@@ -7052,6 +7052,34 @@ def dashboard(symbol: str = 'BTC'):
             doc['institutional'] = _live['institutional']
     except Exception:  # noqa
         traceback.print_exc()
+    # Overlay fresh leverage snapshot so funding/OI are current even when the
+    # run doc was saved without a source timestamp.
+    try:
+        _lev = get_leverage('4H') or {}
+        _lev_fu = _lev.get('funding') or {}
+        _lev_oi = _lev.get('open_interest') or {}
+        if _lev_fu.get('status') == 'ready' and _lev_fu.get('rate') is not None:
+            doc['leverage_snapshot'] = {
+                'realOnlyVersion': 1,
+                'funding_rate': _lev_fu.get('rate'),
+                'funding_bias': _lev_fu.get('bias'),
+                'funding_dir': _lev_fu.get('direction'),
+                'funding_source': _lev_fu.get('source'),
+                'funding_as_of': _lev_fu.get('as_of'),
+                'oi_change_tf_pct': _lev_oi.get('change_tf_pct'),
+                'oi_state': _lev_oi.get('state'),
+                'oi_source': _lev_oi.get('source'),
+                'oi_as_of': _lev_oi.get('as_of'),
+                'squeeze': None,
+            }
+    except Exception:  # noqa
+        traceback.print_exc()
+    # Overlay fresh prediction ledger when the run doc is missing it.
+    if not doc.get('prediction_ledger'):
+        try:
+            doc['prediction_ledger'] = compute_scorecard()
+        except Exception:  # noqa
+            traceback.print_exc()
     # Admin demo: force the circuit breaker to trip live (no recompute needed).
     if _breaker_sim_active():
         try:
