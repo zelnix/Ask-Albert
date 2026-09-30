@@ -3550,7 +3550,7 @@ export default function DashboardPage() {
     const coin = coins.find((c) => c.symbol === symbol);
     const name = (coin && coin.name) || (data && data.coin_name) || symbol;
     const price = ticker && ticker.price;
-    document.title = price ? `${symbol} ${fmtUsd(price)} · Ask Albert` : `${name} · Ask Albert`;
+    document.title = price ? `Ask Albert · ${symbol} ${fmtUsd(price)}` : `Ask Albert · ${name}`;
   }, [symbol, ticker, coins, data]);
 
 
