@@ -330,7 +330,7 @@ def evaluate(rules, side, symbol, mark, *, history=None, lot=None, peak=None, ch
         # ── Retired kinds: historical tickets may carry them; always return WAIT ──
         if kind in _RETIRED_KINDS:
             results.append({'ruleId': r['ruleId'], 'kind': kind, 'state': 'WAIT',
-                            'reason': f'WAIT: {kind} is retired. This ticket retains the rule for history but it will not trigger.'})
+                            'reason': f'WAIT: {kind} is retired. This rule kind is retired and will not trigger.'})
             continue
         if kind == 'PRICE':
             observed = px

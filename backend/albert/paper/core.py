@@ -1,26 +1,21 @@
-"""Trustworthy paper-trading core — exact accounting, canonical binding, ordered
-mandate/risk gates, single-document atomic idempotency, and honest equity/drawdown
-truth.
+"""Paper-trading core — exact accounting, combined positions, single-document
+atomic execution, and honest equity/drawdown truth.
 
-DESIGN NOTES
-------------
-* MONEY IS EXACT. Every monetary/quantity value uses `decimal.Decimal` in
-  calculations and `bson.Decimal128` in MongoDB. Binary floats are NEVER used
-  for cash, quantity, price, cost basis, P&L, reserve, allocation or drawdown.
-  Values cross the API boundary as decimal STRINGS.
+POSITION MODEL
+--------------
+* ONE COMBINED POSITION PER COIN. Multiple BUYs of SOL produce one SOL position
+  with aggregated quantity, cost basis and recalculated average entry price.
+* Each position carries ONE stop-loss and ONE take-profit.
+* SELLs operate on the combined position by symbol — no ticket ID required.
+* Partial sells reduce quantity and cost basis proportionally (average-cost).
 
-* SINGLE-DOCUMENT ATOMICITY. All economic effects for one paper account (cash,
-  lots, realised P&L, the append-only ledger, the account sequence and the
-  idempotency record) live INSIDE the account document and commit in ONE
-  conditional `find_one_and_update`. A CAS on `version` + guards on `idemKeys`
-  guarantee that retries and redelivery produce EXACTLY ONE economic effect.
-
-* CANONICAL DECISIONS ONLY. Actions come solely from an immutable canonical
-  decision snapshot. Market Driver Intelligence is evidence only and can never
-  manufacture a BUY/SELL. WAIT/HOLD never create entries. Anything unknown,
-  mutable, incomplete or stale fails CLOSED.
-
-* SIZING REDUCES, NEVER ENLARGES the canonical amount.
+ACCOUNTING
+----------
+* MONEY IS EXACT. Every value uses `decimal.Decimal` / `bson.Decimal128`.
+* SINGLE-DOCUMENT ATOMICITY. All economic effects commit in ONE conditional
+  `find_one_and_update` with CAS on `version` + idempotency on `idemKeys`.
+* No fees, slippage, spread or trading costs are simulated.
+* Execution price = latest observed market price (true-price execution).
 """
 import datetime
 import uuid
@@ -30,77 +25,18 @@ from bson.decimal128 import Decimal128
 
 getcontext().prec = 34
 
-# --- precision / rounding rules ------------------------------------------------
-CASH_Q = Decimal('0.01')          # money quantised to cents (ROUND_HALF_UP)
-PRICE_Q = Decimal('0.01')         # BTC/USD price tick
-QTY_Q = Decimal('0.000000000001')  # fractional simulated units; never an exchange step
+CASH_Q = Decimal('0.01')
+PRICE_Q = Decimal('0.01')
+QTY_Q = Decimal('0.000000000001')
 PCT_Q = Decimal('0.01')
-MIN_NOTIONAL = Decimal('10')      # minimum simulated order notional
+MIN_NOTIONAL = Decimal('10')
 
 SUPPORTED_ENGINE_VERSIONS = {'albert-decide-v2', 'albert-decide-v3', 'albert-decide-v4'}
 DECISION_TTL_MIN = 30
 
 
 # ============================ Decimal helpers ================================ #
-def ticket_buy_sizing(asset, notional, mark_px, *, price_q=None):
-    """Direct-price BUY sizing. No fee, no slippage — fill at the observed market
-    price. `price_q` preserves per-asset precision (e.g. Decimal('0.000001')
-    for small coins); when None the observed price's own scale is kept."""
-    mark = D(mark_px)
-    notional = q_cash(notional)
-    if notional is None or not notional.is_finite() or notional <= 0:
-        return {'reject': 'BELOW_MIN_NOTIONAL', 'trace': []}
-    if mark is None or not mark.is_finite() or mark <= 0:
-        return {'reject': 'NO_VALID_MARK', 'trace': []}
-    pq = price_q or _infer_price_q(mark)
-    fill_px = round_tick(mark, pq, ROUND_HALF_UP) if pq else mark
-    if fill_px is None or fill_px <= 0:
-        return {'reject': 'NO_VALID_MARK', 'trace': []}
-    qty = round_tick(notional / fill_px, QTY_Q) if fill_px > 0 else None
-    if qty is None or not qty.is_finite() or qty <= 0:
-        return {'reject': 'BELOW_MIN_NOTIONAL', 'trace': []}
-    exact_notional = q_cash(qty * fill_px)
-    return {'reject': None, 'trace': [], 'side': 'BUY', 'asset': (asset or '').upper(),
-            'notional': exact_notional, 'fillPx': fill_px, 'fee': Decimal('0'), 'qty': qty,
-            'priceQ': pq}
-
-
-def ticket_sell_sizing(asset, qty, mark_px, *, price_q=None):
-    """Direct-price SELL sizing. No fee, no slippage — fill at observed price.
-    `price_q` preserves per-asset precision; when None the observed price's
-    own scale is kept. Rejects zero/negative fills from over-rounding."""
-    mark = D(mark_px)
-    if mark is None or not mark.is_finite() or mark <= 0:
-        return {'reject': 'INVALID_EXIT_PRICE', 'trace': []}
-    qty = round_tick(qty, QTY_Q)
-    if qty is None or not qty.is_finite() or qty <= 0:
-        return {'reject': 'BELOW_MIN_NOTIONAL', 'trace': []}
-    pq = price_q or _infer_price_q(mark)
-    fill_px = round_tick(mark, pq, ROUND_HALF_UP) if pq else mark
-    if fill_px is None or fill_px <= 0:
-        return {'reject': 'ZERO_PRICE_AFTER_ROUNDING', 'trace': [
-            'observed=%s rounded with q=%s => %s' % (mark, pq, fill_px)]}
-    return {'reject': None, 'trace': [], 'side': 'SELL', 'asset': (asset or '').upper(),
-            'qty': qty, 'fillPx': fill_px, 'fee': Decimal('0'), 'priceQ': pq}
-
-
-def _infer_price_q(px):
-    """Infer the minimum price tick from the observed price's decimal places.
-    E.g. 0.004321 -> Decimal('0.000001'), 95432.50 -> Decimal('0.01')."""
-    if px is None or px <= 0:
-        return PRICE_Q
-    s = str(px)
-    if '.' in s:
-        decimals = len(s.rstrip('0').split('.')[1]) if s.split('.')[1].rstrip('0') else 0
-        decimals = max(decimals, 2)
-        return Decimal('1e-%d' % decimals)
-    return PRICE_Q
-
-
-# ============================ Decimal helpers ================================ #
 def D(x):
-    """Coerce a Decimal128 / float / int / str / Decimal / None -> Decimal|None.
-    Floats are stringified first so we never inherit binary-float error."""
     if x is None:
         return None
     if isinstance(x, Decimal):
@@ -120,20 +56,12 @@ def q_cash(x):
     return None if d is None else d.quantize(CASH_Q, rounding=ROUND_HALF_UP)
 
 
-def q_price(x):
-    d = D(x)
-    return None if d is None else d.quantize(PRICE_Q, rounding=ROUND_HALF_UP)
-
-
 def q_qty(x):
-    """Quantities always ROUND_DOWN — we never fabricate fractions of BTC."""
     d = D(x)
     return None if d is None else d.quantize(QTY_Q, rounding=ROUND_DOWN)
 
 
 def to128(x):
-    """Store as Decimal128 (quantised to cents for money-like magnitudes is left
-    to callers; here we store the exact Decimal)."""
     d = D(x)
     return None if d is None else Decimal128(d)
 
@@ -152,249 +80,179 @@ def qty_dstr(x):
     return str(d.quantize(QTY_Q, rounding=ROUND_DOWN))
 
 
-
 def round_tick(value, tick, mode=ROUND_DOWN):
-    """Conservative fractional-paper rounding, never an exchange order rule."""
     v, q = D(value), D(tick)
     if v is None or q is None or not v.is_finite() or not q.is_finite() or q <= 0:
         return None
     return (v / q).to_integral_value(rounding=mode) * q
 
 
+def _infer_price_q(px):
+    if px is None or px <= 0:
+        return PRICE_Q
+    s = str(px)
+    if '.' in s:
+        decimals = len(s.rstrip('0').split('.')[1]) if s.split('.')[1].rstrip('0') else 0
+        decimals = max(decimals, 2)
+        return Decimal('1e-%d' % decimals)
+    return PRICE_Q
+
+
+# ============================ sizing helpers ================================= #
+def buy_sizing(asset, notional, mark_px, *, price_q=None):
+    """Direct-price BUY sizing. No fees. Returns sizing dict or reject."""
+    mark = D(mark_px)
+    notional = q_cash(notional)
+    if notional is None or not notional.is_finite() or notional <= 0:
+        return {'reject': 'BELOW_MIN_NOTIONAL'}
+    if mark is None or not mark.is_finite() or mark <= 0:
+        return {'reject': 'NO_VALID_MARK'}
+    pq = price_q or _infer_price_q(mark)
+    fill_px = round_tick(mark, pq, ROUND_HALF_UP) if pq else mark
+    if fill_px is None or fill_px <= 0:
+        return {'reject': 'NO_VALID_MARK'}
+    qty = round_tick(notional / fill_px, QTY_Q) if fill_px > 0 else None
+    if qty is None or not qty.is_finite() or qty <= 0:
+        return {'reject': 'BELOW_MIN_NOTIONAL'}
+    exact_notional = q_cash(qty * fill_px)
+    return {'reject': None, 'side': 'BUY', 'asset': (asset or '').upper(),
+            'notional': exact_notional, 'fillPx': fill_px, 'qty': qty, 'priceQ': pq}
+
+
+def sell_sizing(asset, qty, mark_px, *, price_q=None):
+    """Direct-price SELL sizing. No fees. Fill at observed market price."""
+    mark = D(mark_px)
+    if mark is None or not mark.is_finite() or mark <= 0:
+        return {'reject': 'INVALID_EXIT_PRICE'}
+    qty = round_tick(qty, QTY_Q)
+    if qty is None or not qty.is_finite() or qty <= 0:
+        return {'reject': 'BELOW_MIN_NOTIONAL'}
+    pq = price_q or _infer_price_q(mark)
+    fill_px = round_tick(mark, pq, ROUND_HALF_UP) if pq else mark
+    if fill_px is None or fill_px <= 0:
+        return {'reject': 'ZERO_PRICE_AFTER_ROUNDING'}
+    return {'reject': None, 'side': 'SELL', 'asset': (asset or '').upper(),
+            'qty': qty, 'fillPx': fill_px, 'priceQ': pq}
 
 
 # ============================ account state ================================== #
 def new_account_economics(starting_cash, reserve_pct):
-    """Initial embedded economic sub-document (all money as Decimal128)."""
+    """Initial economic state — clean start with cash and no positions."""
     sc = q_cash(starting_cash) or Decimal('100000.00')
     return {
         'cash': to128(sc), 'startingCash': to128(sc),
         'realizedPnl': to128(Decimal('0')),
         'reservePct': to128(D(reserve_pct) or Decimal('0')),
         'highWaterEquity': to128(sc),
-        'lots': [], 'closedLots': [], 'ledger': [], 'idemKeys': [],
+        'positions': [], 'closedPositions': [], 'ledger': [], 'idemKeys': [],
         'accountSequence': 0,
     }
 
 
-def _lot_for(acct, sym):
-    """First open lot for a given asset symbol (legacy compat — prefer _ticket_by_id)."""
-    sym = (sym or '').upper()
-    for lot in (acct.get('lots') or []):
-        if (lot.get('asset') or '').upper() == sym:
-            return lot
+def position_for(acct, symbol):
+    """Get the one combined position for a coin, or None."""
+    symbol = (symbol or '').upper()
+    for pos in (acct.get('positions') or []):
+        if (pos.get('symbol') or '').upper() == symbol:
+            qty = D(pos.get('qty')) or Decimal('0')
+            if qty > 0:
+                return pos
     return None
 
 
-def _ticket_by_id(acct, ticket_id):
-    """Find a specific ticket (lot) by its lotId / ticketId."""
-    if not ticket_id:
-        return None
-    for lot in (acct.get('lots') or []):
-        if lot.get('lotId') == ticket_id:
-            return lot
-    return None
+def open_positions(acct):
+    """All open combined positions with qty > 0."""
+    return [p for p in (acct.get('positions') or [])
+            if (D(p.get('qty')) or Decimal('0')) > 0]
 
 
-def tickets_for(acct, sym):
-    """ALL open tickets for a given asset symbol."""
-    sym = (sym or '').upper()
-    return [l for l in (acct.get('lots') or [])
-            if (l.get('asset') or '').upper() == sym and (D(l.get('qty')) or Decimal('0')) > 0]
+def open_position_count(acct):
+    """Count of combined coin positions (not tickets)."""
+    return len(open_positions(acct))
 
 
 def position_qty(acct, sym='BTC'):
-    """Aggregate position quantity across ALL tickets for the symbol."""
-    return sum((D(l.get('qty')) or Decimal('0'))
-               for l in tickets_for(acct, sym))
-
-
-def _btc_lot(acct):
-    """Legacy BTC-only lot lookup (compat for single-asset reconciliation)."""
-    return _lot_for(acct, 'BTC')
-
-
-def account_position_qty(acct):
-    """BTC position quantity (M1-M4 compatibility)."""
-    return position_qty(acct, 'BTC')
+    """Total quantity held for a symbol (always from the one combined position)."""
+    pos = position_for(acct, sym)
+    return D(pos.get('qty')) or Decimal('0') if pos else Decimal('0')
 
 
 # ============================ equity / drawdown ============================== #
-def compute_equity(acct, mark_px, mark_fresh):
-    """HONEST valuation. A missing/stale BTC price for a HELD position yields an
-    explicitly UNAVAILABLE/STALE equity — never a zero and never a silent 0 mark.
-    A missing valuation must NOT move the high-water mark or reduce drawdown."""
+def compute_equity_multi(acct, marks):
+    """Multi-asset honest valuation using combined positions.
+    marks: {SYMBOL: (price, fresh)}. Returns equity info dict."""
     cash = D(acct.get('cash')) or Decimal('0')
-    qty = account_position_qty(acct)
-    lot = _btc_lot(acct)
     stored_hwm = D(acct.get('highWaterEquity'))
     realized = D(acct.get('realizedPnl')) or Decimal('0')
     reserve_pct = D(acct.get('reservePct')) or Decimal('0')
 
-    if qty > 0:
-        if mark_px is None or not mark_fresh:
-            status = 'STALE' if mark_px is not None else 'UNAVAILABLE'
-            return {'available': False, 'markStatus': status, 'equity': None,
-                    'equityStr': None, 'cash': cash, 'positionQty': qty,
-                    'unrealized': None, 'drawdownPct': None, 'highWater': stored_hwm,
-                    'protectedReserve': None, 'deployableCash': None,
-                    'realizedPnl': realized, 'markPx': mark_px}
-        mark_px = D(mark_px)
-        pos_val = (qty * mark_px)
-        equity = cash + pos_val
-        avg = D((lot or {}).get('avgEntry')) or Decimal('0')
-        unreal = qty * (mark_px - avg)
-        mark_status = 'CURRENT'
-    else:
-        equity = cash
-        unreal = Decimal('0')
-        mark_status = 'CURRENT' if (mark_px is not None and mark_fresh) else 'FLAT_PRICE_UNVERIFIED'
+    pos_details = []
+    pos_val_total = Decimal('0')
+    all_fresh = True
 
-    hwm = stored_hwm if stored_hwm is not None else equity
-    if equity > hwm:
-        hwm = equity
-    dd = ((equity / hwm) - Decimal('1')) * Decimal('100') if hwm and hwm > 0 else Decimal('0')
-    if dd > 0:
-        dd = Decimal('0')
-    reserve = (equity * reserve_pct / Decimal('100'))
-    deployable = cash - reserve
-    if deployable < 0:
-        deployable = Decimal('0')
-    return {'available': True, 'markStatus': mark_status, 'equity': equity,
-            'equityStr': dstr(equity), 'cash': cash, 'positionQty': qty,
-            'unrealized': unreal, 'drawdownPct': dd.quantize(PCT_Q, ROUND_HALF_UP),
-            'highWater': hwm, 'protectedReserve': reserve, 'deployableCash': deployable,
-            'realizedPnl': realized, 'markPx': mark_px}
+    for pos in open_positions(acct):
+        sym = (pos.get('symbol') or '').upper()
+        qty = D(pos.get('qty')) or Decimal('0')
+        avg_entry = D(pos.get('avgEntry')) or Decimal('0')
+        cost_basis = D(pos.get('costBasis')) or Decimal('0')
+        px, fresh = marks.get(sym, (None, False))
+        px = D(px)
+        if px is None or not fresh:
+            all_fresh = False
+            pos_details.append({
+                'symbol': sym, 'qty': qty, 'avgEntry': avg_entry,
+                'costBasis': cost_basis, 'markPx': px, 'markFresh': False,
+                'value': None, 'unrealizedPnl': None,
+                'stopLoss': D(pos.get('stopLoss')),
+                'takeProfit': D(pos.get('takeProfit')),
+            })
+            continue
+        value = qty * px
+        unrealized = value - cost_basis
+        pos_val_total += value
+        pos_details.append({
+            'symbol': sym, 'qty': qty, 'avgEntry': avg_entry,
+            'costBasis': cost_basis, 'markPx': px, 'markFresh': True,
+            'value': value, 'unrealizedPnl': unrealized,
+            'stopLoss': D(pos.get('stopLoss')),
+            'takeProfit': D(pos.get('takeProfit')),
+        })
 
+    equity = cash + pos_val_total if all_fresh else None
+    hwm = stored_hwm
+    dd = None
+    protected = None
+    deployable = None
+    if equity is not None:
+        if hwm is None:
+            hwm = equity
+        if equity > hwm:
+            hwm = equity
+        dd = ((equity / hwm) - Decimal('1')) * Decimal('100') if hwm and hwm > 0 else Decimal('0')
+        if dd > 0:
+            dd = Decimal('0')
+        dd = dd.quantize(PCT_Q, ROUND_HALF_UP)
+        protected = equity * reserve_pct / Decimal('100')
+        deployable = cash - protected
+        if deployable < 0:
+            deployable = Decimal('0')
 
-# ============================ ordered gates ================================== #
-def _rej(code, msg, trace):
-    return {'reject': code, 'message': msg, 'trace': trace}
+    total_unrealized = sum((p['unrealizedPnl'] or Decimal('0')) for p in pos_details
+                           if p['unrealizedPnl'] is not None)
 
-
-def run_entry_gates(*, acct, canonical, mark_px, mark_fresh, mandate, equity_info,
-                    has_open_intent=False):
-    """Ordered mandate + risk gates for a paper BUY. Returns a dict with either
-    'reject' set (with the failing gate in 'trace') or a sizing result. Sizing can
-    only REDUCE the canonical amount."""
-    trace = []
-
-    def g(name, ok, detail=''):
-        trace.append({'gate': name, 'ok': bool(ok), 'detail': str(detail)})
-        return bool(ok)
-
-    if not g('active_account', acct.get('runtimeState') == 'RUNNING' and not acct.get('archivedAt'),
-             acct.get('runtimeState')):
-        return _rej('ACCOUNT_NOT_ACTIVE', 'Account is not active.', trace)
-    if not g('btc_spot_capability', canonical.get('asset') == 'BTC'):
-        return _rej('UNSUPPORTED_ASSET', 'Only BTC spot is supported.', trace)
-    if not g('canonical_decision',
-             canonical.get('actionable') and canonical.get('action') == 'BUY'
-             and canonical.get('engineVersion') in SUPPORTED_ENGINE_VERSIONS):
-        return _rej('NO_ACTIONABLE_DECISION', 'No current BUY decision to act on.', trace)
-    if not g('freshness', canonical.get('fresh') and mark_fresh and mark_px is not None):
-        return _rej('STALE', 'Decision or market data is stale.', trace)
-    mc = canonical.get('mandateChecks') or {}
-    if not g('approved_not_excluded', (not mc.get('excluded')) and mc.get('inApprovedUniverse')):
-        return _rej('NOT_APPROVED', 'BTC is excluded or not in the approved universe.', trace)
-    if not g('mandate_complete', mc.get('mandateComplete')):
-        return _rej('MANDATE_INCOMPLETE', 'Trading Mandate is incomplete.', trace)
-    if not g('no_duplicate_intent', not has_open_intent):
-        return _rej('DUPLICATE_INTENT', 'An open intent already exists for this decision.', trace)
-
-    mark_px = D(mark_px)
-    equity = equity_info.get('equity')
-    if equity is None or not equity_info.get('available'):
-        return _rej('EQUITY_UNAVAILABLE', 'Equity could not be verified.', trace)
-    cash = equity_info['cash']
-    reserve = equity_info['protectedReserve']
-    deployable = equity_info['deployableCash']
-
-    if not g('cash_and_reserve', deployable >= MIN_NOTIONAL,
-             'deployable=%s reserve=%s' % (deployable, reserve)):
-        return _rej('INSUFFICIENT_DEPLOYABLE', 'No deployable cash after preserving the reserve.', trace)
-
-    rec = D(canonical.get('recommendedDeployNowUsd')) or Decimal('0')
-    if not g('canonical_amount', rec > 0, 'rec=%s' % rec):
-        return _rej('NO_DEPLOY_AMOUNT', 'Canonical decision recommends no deployment now.', trace)
-    notional = rec
-    notional = min(notional, deployable)
-
-    cap_pct = D((mandate.get('max_alloc_pct') or {}).get('BTC', 100))
-    if cap_pct is None:
-        cap_pct = Decimal('100')
-    max_pos_val = equity * cap_pct / Decimal('100')
-    cur_pos_val = equity_info['positionQty'] * mark_px
-    alloc_room = max_pos_val - cur_pos_val
-    if alloc_room < 0:
-        alloc_room = Decimal('0')
-    notional = min(notional, alloc_room)
-    g('max_allocation', True, 'capPct=%s room=%s' % (cap_pct, alloc_room))
-
-    inv = D(canonical.get('invalidationPrice'))
-    mtr = D(mandate.get('max_trade_risk_pct'))
-    if mtr is None:
-        mtr = Decimal('2')
-    risk_budget = equity * mtr / Decimal('100')
-    if inv is not None and inv > 0 and inv < mark_px:
-        stop_dist = (mark_px - inv) / mark_px
-        if stop_dist > 0:
-            max_by_risk = risk_budget / stop_dist
-            notional = min(notional, max_by_risk)
-    g('max_trade_risk', True, 'budget=%s inv=%s' % (risk_budget, inv))
-
-    dd = equity_info['drawdownPct']
-    max_dd = D(mandate.get('max_drawdown_pct'))
-    if max_dd is not None and not g('drawdown_breaker', dd > (-max_dd), 'dd=%s limit=-%s' % (dd, max_dd)):
-        return _rej('DRAWDOWN_BREAKER', 'Drawdown breaker is tripped — entries paused.', trace)
-    else:
-        g('drawdown_breaker', True, 'dd=%s' % dd)
-
-    notional = q_cash(notional)
-    if not g('min_notional', notional is not None and notional >= MIN_NOTIONAL, 'notional=%s' % notional):
-        return _rej('BELOW_MIN_NOTIONAL', 'Sized notional is below the minimum.', trace)
-    sized = ticket_buy_sizing('BTC', notional, mark_px)
-    sized['trace'] = trace
-    return sized
+    return {
+        'available': all_fresh, 'cash': cash, 'equity': equity,
+        'equityStr': dstr(equity) if equity is not None else None,
+        'positions': pos_details, 'positionValueTotal': pos_val_total,
+        'openPositionsCount': len(pos_details),
+        'drawdownPct': dd, 'highWater': hwm,
+        'protectedReserve': protected, 'deployableCash': deployable,
+        'realizedPnl': realized, 'unrealizedPnl': total_unrealized,
+        'totalPnl': q_cash(realized + total_unrealized) if all_fresh else None,
+    }
 
 
-def run_exit_gates(*, acct, mark_px, mark_fresh, canonical=None, full=False):
-    """Reduce-only paper SELL. `full`=True is a safe user-initiated exit that does
-    not require a canonical SELL; otherwise a canonical SELL decision drives it."""
-    trace = []
-
-    def g(name, ok, detail=''):
-        trace.append({'gate': name, 'ok': bool(ok), 'detail': str(detail)})
-        return bool(ok)
-
-    if not g('active_account', acct.get('runtimeState') in ('RUNNING', 'PAUSED_BY_USER',
-                                                            'PAUSED_RISK_BREAKER') and not acct.get('archivedAt')):
-        return _rej('ACCOUNT_NOT_ACTIVE', 'Account is not active.', trace)
-    qty_held = account_position_qty(acct)
-    if not g('has_position', qty_held > 0, 'held=%s' % qty_held):
-        return _rej('NO_POSITION', 'No open BTC position to reduce.', trace)
-    if not g('freshness', mark_fresh and mark_px is not None):
-        return _rej('STALE', 'Market data is stale — cannot value the exit.', trace)
-    mark_px = D(mark_px)
-    if full or canonical is None:
-        sell_qty = qty_held
-    else:
-        if not g('canonical_sell', canonical.get('actionable') and canonical.get('action') == 'SELL'):
-            return _rej('NO_ACTIONABLE_DECISION', 'No current SELL decision.', trace)
-        sp = canonical.get('sellPlan') or {}
-        delta = D(sp.get('recommendedDeltaUsd'))
-        sell_usd = abs(delta) if delta is not None else (qty_held * mark_px)
-        sell_qty = q_qty(min(qty_held, sell_usd / mark_px))
-    sell_qty = q_qty(min(qty_held, sell_qty))
-    if not g('positive_qty', sell_qty is not None and sell_qty > 0):
-        return _rej('BELOW_MIN_NOTIONAL', 'Nothing to sell.', trace)
-    gross = sell_qty * mark_px
-    sized = ticket_sell_sizing('BTC', sell_qty, mark_px)
-    sized['trace'] = trace
-    return sized
-
-
-# ==================== single-document atomic execution ======================= #
+# ============================ ledger ========================================= #
 def _ledger_entry(seq, event_type, entity_id, amount, note, extra=None):
     now = datetime.datetime.utcnow().isoformat()
     ev = {'ledgerEventId': 'ple_' + uuid.uuid4().hex[:14], 'accountSequence': seq,
@@ -410,63 +268,20 @@ LEDGER_SIZE_WARN = 5000
 
 
 def ledger_size_warning(acct):
-    """True when the embedded ledger is large enough to warrant external storage."""
     return len(acct.get('ledger') or []) >= LEDGER_SIZE_WARN
 
 
 def materialize_from_ledger(acct):
-    """Deterministically rebuild the economic projection from the account's
-    accepted, append-only economic FILL events (structured fields). Used to prove
-    the stored projection matches a pure replay of the ledger."""
+    """Rebuild economic state from the append-only ledger for reconciliation."""
     cash = D(acct.get('startingCash')) or Decimal('0')
-    qty = Decimal('0'); cost_basis = Decimal('0'); realized = Decimal('0')
+    realized = Decimal('0')
     seq = 0
+    per_sym = {}  # symbol -> {qty, costBasis}
     econ = [e for e in (acct.get('ledger') or []) if e.get('side') in ('BUY', 'SELL')]
     for e in sorted(econ, key=lambda x: x.get('accountSequence') or 0):
         seq = max(seq, e.get('accountSequence') or 0)
-        if e.get('side') == 'BUY':
-            cash = q_cash(cash - D(e.get('notional')))
-            qty = q_qty(qty + D(e.get('qty')))
-            cost_basis = q_cash(cost_basis + D(e.get('notional')))
-        else:  # SELL
-            cash = q_cash(cash + D(e.get('proceeds')))
-            realized = q_cash(realized + D(e.get('realized')))
-            cost_basis = q_cash(cost_basis - D(e.get('costPortion')))
-            qty = q_qty(qty - D(e.get('qty')))
-            if qty <= 0:
-                qty = Decimal('0'); cost_basis = Decimal('0')
-    return {'cash': cash, 'qty': qty, 'costBasis': cost_basis,
-            'realizedPnl': realized, 'accountSequence': seq}
-
-
-def reconcile(acct):
-    """Compare the stored projection against a pure ledger replay. Returns a dict
-    with match booleans; ANY mismatch means the caller must FAIL CLOSED."""
-    rep = materialize_from_ledger(acct)
-    lot = _btc_lot(acct)
-    proj_qty = D((lot or {}).get('qty')) or Decimal('0')
-    proj_cb = D((lot or {}).get('costBasis')) or Decimal('0')
-    checks = {
-        'cash': (D(acct.get('cash')) or Decimal('0')) == rep['cash'],
-        'qty': q_qty(proj_qty) == q_qty(rep['qty']),
-        'costBasis': q_cash(proj_cb) == q_cash(rep['costBasis']),
-        'realizedPnl': (D(acct.get('realizedPnl')) or Decimal('0')) == rep['realizedPnl'],
-        'accountSequence': (acct.get('accountSequence') or 0) >= rep['accountSequence'],
-    }
-    return {'ok': all(checks.values()), 'checks': checks, 'replay': rep}
-
-
-def materialize_multi_from_ledger(acct):
-    """M5 multi-asset ledger replay. Cash/realized are global; qty/costBasis
-    are tracked per asset. Returns per-asset projection + globals."""
-    cash = D(acct.get('startingCash')) or Decimal('0')
-    realized = Decimal('0'); seq = 0
-    per = {}   # asset -> {qty, costBasis}
-    econ = [e for e in (acct.get('ledger') or []) if e.get('side') in ('BUY', 'SELL')]
-    for e in sorted(econ, key=lambda x: x.get('accountSequence') or 0):
-        seq = max(seq, e.get('accountSequence') or 0)
-        asset = (e.get('asset') or 'BTC').upper()
-        st = per.setdefault(asset, {'qty': Decimal('0'), 'costBasis': Decimal('0')})
+        sym = (e.get('asset') or 'BTC').upper()
+        st = per_sym.setdefault(sym, {'qty': Decimal('0'), 'costBasis': Decimal('0')})
         if e.get('side') == 'BUY':
             cash = q_cash(cash - D(e.get('notional')))
             st['qty'] = q_qty(st['qty'] + D(e.get('qty')))
@@ -477,54 +292,46 @@ def materialize_multi_from_ledger(acct):
             st['costBasis'] = q_cash(st['costBasis'] - D(e.get('costPortion')))
             st['qty'] = q_qty(st['qty'] - D(e.get('qty')))
             if st['qty'] <= 0:
-                st['qty'] = Decimal('0'); st['costBasis'] = Decimal('0')
-    return {'cash': cash, 'realizedPnl': realized, 'accountSequence': seq, 'perAsset': per}
+                st['qty'] = Decimal('0')
+                st['costBasis'] = Decimal('0')
+    return {'cash': cash, 'realizedPnl': realized, 'accountSequence': seq, 'perAsset': per_sym}
 
 
-def reconcile_multi(acct):
-    """M5 multi-asset reconciliation: compare stored per-asset lots + globals
-    against a pure multi-asset ledger replay. ANY mismatch => caller FAILS CLOSED.
-
-    TICKET MODEL: multiple lots can exist for the same asset. Aggregate them
-    by symbol for comparison against the ledger replay (which is per-asset)."""
-    rep = materialize_multi_from_ledger(acct)
+def reconcile(acct):
+    """Compare stored projection against ledger replay. ANY mismatch => FAIL CLOSED."""
+    rep = materialize_from_ledger(acct)
     checks = {
         'cash': (D(acct.get('cash')) or Decimal('0')) == rep['cash'],
         'realizedPnl': (D(acct.get('realizedPnl')) or Decimal('0')) == rep['realizedPnl'],
         'accountSequence': (acct.get('accountSequence') or 0) >= rep['accountSequence'],
     }
-    lots_agg = {}
-    for l in (acct.get('lots') or []):
-        sym = (l.get('asset') or '').upper()
-        lq = D(l.get('qty')) or Decimal('0')
-        lcb = D(l.get('costBasis')) or Decimal('0')
-        if lq > 0:
-            if sym not in lots_agg:
-                lots_agg[sym] = {'qty': Decimal('0'), 'costBasis': Decimal('0')}
-            lots_agg[sym]['qty'] += lq
-            lots_agg[sym]['costBasis'] += lcb
-    all_syms = set(lots_agg) | {s for s, v in rep['perAsset'].items() if v['qty'] > 0}
+    # Aggregate positions by symbol for comparison.
+    pos_agg = {}
+    for p in open_positions(acct):
+        sym = (p.get('symbol') or '').upper()
+        pos_agg[sym] = {'qty': D(p.get('qty')) or Decimal('0'),
+                        'costBasis': D(p.get('costBasis')) or Decimal('0')}
+    all_syms = set(pos_agg) | {s for s, v in rep['perAsset'].items() if v['qty'] > 0}
     for sym in all_syms:
-        la = lots_agg.get(sym) or {'qty': Decimal('0'), 'costBasis': Decimal('0')}
+        pa = pos_agg.get(sym) or {'qty': Decimal('0'), 'costBasis': Decimal('0')}
         rs = rep['perAsset'].get(sym) or {'qty': Decimal('0'), 'costBasis': Decimal('0')}
-        checks['qty:%s' % sym] = q_qty(la['qty']) == q_qty(rs['qty'])
-        checks['cb:%s' % sym] = q_cash(la['costBasis']) == q_cash(rs['costBasis'])
+        checks['qty:%s' % sym] = q_qty(pa['qty']) == q_qty(rs['qty'])
+        checks['cb:%s' % sym] = q_cash(pa['costBasis']) == q_cash(rs['costBasis'])
     return {'ok': all(checks.values()), 'checks': checks, 'replay': rep}
 
 
+# ==================== single-document atomic BUY ============================= #
 def apply_buy_atomic(col, acct_id, pid, expected_version, idem_key,
-                     sizing, canonical, base_currency='USDC', asset=None, price_q=PRICE_Q,
+                     sizing, canonical, base_currency='USDC', asset=None,
                      strategy_version=None, strategy_hash=None,
-                     ticket_rules=None):
-    """Apply a BUY as ONE conditional update. Idempotent + concurrency-safe.
-
-    TICKET MODEL: every distinct BUY creates a NEW ticket (lot). Multiple tickets
-    for the same asset are separate entries with independent rules and accounting.
-    No merge-on-BUY. ticket_rules (optional) stores stop/target/trailing state.
-
+                     stop_loss=None, take_profit=None):
+    """Atomic BUY: merge into existing combined position or create a new one.
+    Two BUYs of SOL produce one combined SOL position with recalculated avg entry.
     Returns (result_dict, error_code, http_status)."""
     asset = (asset or sizing.get('asset') or canonical.get('asset') or 'BTC').upper()
-    pq = sizing.get('priceQ') or price_q or PRICE_Q
+    pq = sizing.get('priceQ') or PRICE_Q
+    now_iso = datetime.datetime.utcnow().isoformat()
+
     for _ in range(5):
         acct = col.find_one({'paperAccountId': acct_id, 'ownerId': pid})
         if not acct:
@@ -533,52 +340,72 @@ def apply_buy_atomic(col, acct_id, pid, expected_version, idem_key,
                                               acct.get('strategyVersion') != strategy_version or
                                               acct.get('strategyContractHash') != strategy_hash):
             return None, 'STRATEGY_CHANGED_OR_STOPPED', 409
-        # Idempotent replay?
         if idem_key in (acct.get('idemKeys') or []):
             return None, 'ALREADY_APPLIED', 409
         if acct.get('version') != expected_version:
             expected_version = acct.get('version')
 
         cash = D(acct.get('cash')) or Decimal('0')
-        notional = D(sizing['notional']); fill_px = D(sizing['fillPx'])
+        notional = D(sizing['notional'])
+        fill_px = D(sizing['fillPx'])
         qty = D(sizing['qty'])
         if notional > cash:
             return None, 'INSUFFICIENT_CASH', 409
         new_cash = q_cash(cash - notional)
 
-        lots = list(acct.get('lots') or [])
-        lot_id = 'pp_' + uuid.uuid4().hex[:12]
-        new_ticket = {
-            'lotId': lot_id, 'asset': asset, 'status': 'OPEN',
-            'qty': to128(qty), 'originalQty': to128(qty),
-            'avgEntry': to128(fill_px), 'costBasis': to128(notional),
-            'realizedPnl': to128(Decimal('0')),
-            'openedAt': datetime.datetime.utcnow().isoformat(),
-            'entryDecisionSnapshotId': canonical.get('decisionSnapshotId'),
-            'entryDecisionId': canonical.get('decisionId'),
-            'strategyVersion': strategy_version,
-            'completedTargets': [],
-            'positionVersion': 1,
-        }
-        if ticket_rules:
-            new_ticket['rules'] = ticket_rules
-        inv = canonical.get('invalidationPrice')
-        if inv is not None:
-            new_ticket['invalidationPrice'] = to128(round_tick(D(inv), pq))
-        lots.append(new_ticket)
+        # Merge into existing position or create new one.
+        positions = list(acct.get('positions') or [])
+        existing = None
+        for i, p in enumerate(positions):
+            if (p.get('symbol') or '').upper() == asset and (D(p.get('qty')) or Decimal('0')) > 0:
+                existing = (i, p)
+                break
+
+        if existing:
+            idx, ep = existing
+            old_qty = D(ep.get('qty')) or Decimal('0')
+            old_cb = D(ep.get('costBasis')) or Decimal('0')
+            new_qty = q_qty(old_qty + qty)
+            new_cb = q_cash(old_cb + notional)
+            new_avg = q_cash(new_cb / new_qty) if new_qty > 0 else Decimal('0')
+            positions[idx] = {**ep,
+                'qty': to128(new_qty), 'costBasis': to128(new_cb),
+                'avgEntry': to128(new_avg), 'updatedAt': now_iso}
+            # Update SL/TP only if explicitly provided (don't overwrite existing).
+            if stop_loss is not None:
+                positions[idx]['stopLoss'] = to128(D(stop_loss))
+                positions[idx]['stopLossReason'] = 'Set on additional BUY'
+            if take_profit is not None:
+                positions[idx]['takeProfit'] = to128(D(take_profit))
+                positions[idx]['takeProfitReason'] = 'Set on additional BUY'
+        else:
+            new_pos = {
+                'symbol': asset, 'qty': to128(qty), 'costBasis': to128(notional),
+                'avgEntry': to128(fill_px), 'openedAt': now_iso, 'updatedAt': now_iso,
+                'stopLoss': to128(D(stop_loss)) if stop_loss is not None else None,
+                'stopLossReason': 'Set at entry' if stop_loss is not None else None,
+                'stopLossHistory': [],
+                'takeProfit': to128(D(take_profit)) if take_profit is not None else None,
+                'takeProfitReason': 'Set at entry' if take_profit is not None else None,
+                'takeProfitHistory': [],
+                'entryDecisionSnapshotId': canonical.get('decisionSnapshotId'),
+                'strategyVersion': strategy_version,
+            }
+            positions.append(new_pos)
 
         seq = (acct.get('accountSequence') or 0) + 1
-        led = _ledger_entry(seq, 'FILL', lot_id, -notional,
-                            'BUY %s %s @ %s · ticket %s' % (qty_dstr(qty), asset, dstr(fill_px, pq), lot_id),
-                            extra={'side': 'BUY', 'asset': asset, 'qty': qty_dstr(qty), 'fillPx': dstr(fill_px, pq),
-                                   'notional': dstr(notional)})
-        result = {'side': 'BUY', 'asset': asset, 'qty': qty_dstr(qty), 'fillPrice': dstr(fill_px, pq),
-                  'notional': dstr(notional), 'positionId': lot_id, 'ticketId': lot_id,
-                  'decisionSnapshotId': canonical.get('decisionSnapshotId'), 'paperOnly': True}
+        led = _ledger_entry(seq, 'FILL', asset, -notional,
+                            'BUY %s %s @ %s' % (qty_dstr(qty), asset, dstr(fill_px, pq)),
+                            extra={'side': 'BUY', 'asset': asset, 'qty': qty_dstr(qty),
+                                   'fillPx': dstr(fill_px, pq), 'notional': dstr(notional)})
+        result = {'side': 'BUY', 'asset': asset, 'qty': qty_dstr(qty),
+                  'fillPrice': dstr(fill_px, pq), 'notional': dstr(notional),
+                  'decisionSnapshotId': canonical.get('decisionSnapshotId'),
+                  'merged': existing is not None, 'paperOnly': True}
         upd = col.find_one_and_update(
             {'paperAccountId': acct_id, 'ownerId': pid, 'version': expected_version,
              'idemKeys': {'$ne': idem_key}},
-            {'$set': {'cash': to128(new_cash), 'lots': lots},
+            {'$set': {'cash': to128(new_cash), 'positions': positions},
              '$push': {'ledger': led,
                        'idemKeys': {'$each': [idem_key], '$slice': -500}},
              '$inc': {'version': 1, 'accountSequence': 1}})
@@ -587,18 +414,27 @@ def apply_buy_atomic(col, acct_id, pid, expected_version, idem_key,
     return None, 'CONCURRENCY_RETRY_EXHAUSTED', 409
 
 
-def apply_sell_atomic(col, acct_id, pid, sizing, source='auto', idem_key=None,
-                      canonical=None, base_currency='USDC', asset=None, price_q=PRICE_Q,
-                      strategy_version=None, strategy_hash=None,
-                      completed_rule_id=None, ticket_id=None):
-    """Apply a reduce-only SELL as ONE conditional update.
+# ==================== single-document atomic SELL ============================ #
+def apply_sell_atomic(col, acct_id, pid, symbol, sell_mode, sell_value,
+                      mark_px, source='auto', idem_key=None,
+                      strategy_version=None, strategy_hash=None):
+    """Atomic SELL from the combined position for `symbol`.
 
-    TICKET MODEL: ticket_id is REQUIRED. Every SELL targets a specific ticket.
-    Other tickets for the same asset remain untouched.
+    sell_mode: 'FULL' | 'PERCENTAGE' | 'DOLLAR' | 'QTY'
+    sell_value: ignored for FULL, percentage (0-100), dollar amount, or quantity.
 
+    Partial sells reduce qty and cost basis proportionally (average-cost).
     Returns (result_dict, error_code, http_status)."""
-    asset = (asset or sizing.get('asset') or (canonical or {}).get('asset') or 'BTC').upper()
-    pq = sizing.get('priceQ') or price_q or PRICE_Q
+    symbol = (symbol or '').upper()
+    mark = D(mark_px)
+    if mark is None or not mark.is_finite() or mark <= 0:
+        return None, 'NO_VALID_MARK', 422
+    pq = _infer_price_q(mark)
+    fill_px = round_tick(mark, pq, ROUND_HALF_UP) if pq else mark
+    if fill_px is None or fill_px <= 0:
+        return None, 'NO_VALID_MARK', 422
+    now_iso = datetime.datetime.utcnow().isoformat()
+
     for _ in range(5):
         acct = col.find_one({'paperAccountId': acct_id, 'ownerId': pid})
         if not acct:
@@ -609,77 +445,191 @@ def apply_sell_atomic(col, acct_id, pid, sizing, source='auto', idem_key=None,
         if idem_key:
             if idem_key in (acct.get('idemKeys') or []):
                 return None, 'ALREADY_APPLIED', 200
-        if not ticket_id:
-            return None, 'TICKET_ID_REQUIRED', 422
-        lot = _ticket_by_id(acct, ticket_id)
-        if not lot or (D(lot.get('qty')) or Decimal('0')) <= 0:
+
+        # Find the combined position.
+        positions = list(acct.get('positions') or [])
+        pos_idx = None
+        pos = None
+        for i, p in enumerate(positions):
+            if (p.get('symbol') or '').upper() == symbol and (D(p.get('qty')) or Decimal('0')) > 0:
+                pos_idx = i
+                pos = p
+                break
+        if pos is None:
             return None, 'NO_POSITION', 404
-        target_lot_id = lot.get('lotId')
+
         expected_version = acct.get('version')
+        total_qty = D(pos.get('qty')) or Decimal('0')
+        total_cb = D(pos.get('costBasis')) or Decimal('0')
+
+        # Determine sell quantity based on mode.
+        if sell_mode == 'FULL':
+            sell_qty = total_qty
+        elif sell_mode == 'PERCENTAGE':
+            pct = D(sell_value) or Decimal('0')
+            if pct <= 0 or pct > Decimal('100'):
+                return None, 'INVALID_PERCENTAGE', 422
+            sell_qty = q_qty(total_qty * pct / Decimal('100'))
+        elif sell_mode == 'DOLLAR':
+            dollar_amount = D(sell_value) or Decimal('0')
+            if dollar_amount <= 0:
+                return None, 'INVALID_AMOUNT', 422
+            sell_qty = q_qty(dollar_amount / fill_px)
+            sell_qty = min(sell_qty, total_qty)
+        elif sell_mode == 'QTY':
+            sell_qty = q_qty(D(sell_value) or Decimal('0'))
+            sell_qty = min(sell_qty, total_qty)
+        else:
+            return None, 'INVALID_SELL_MODE', 422
+
+        if sell_qty is None or sell_qty <= 0:
+            return None, 'BELOW_MIN_NOTIONAL', 422
+
+        # Ensure we don't sell more than we hold.
+        sell_qty = min(sell_qty, total_qty)
+
+        # Average-cost accounting.
+        proceeds = q_cash(sell_qty * fill_px)
+        cost_portion = q_cash(total_cb * (sell_qty / total_qty)) if total_qty > 0 else Decimal('0')
+        realized = q_cash(proceeds - cost_portion)
+
         cash = D(acct.get('cash')) or Decimal('0')
         realized_acc = D(acct.get('realizedPnl')) or Decimal('0')
-        qty = sizing['qty']; fill_px = sizing['fillPx']
-        oq = D(lot.get('qty')); ocb = D(lot.get('costBasis'))
-        qty = q_qty(min(oq, qty))
-        proceeds = q_cash(qty * fill_px)
-        cost_portion = q_cash(ocb * (qty / oq)) if oq > 0 else Decimal('0')
-        realized = q_cash(proceeds - cost_portion)
         new_cash = q_cash(cash + proceeds)
         new_realized = q_cash(realized_acc + realized)
-        remaining = q_qty(oq - qty)
-        lots = list(acct.get('lots') or [])
-        closed = list(acct.get('closedLots') or [])
-        if remaining <= 0:
-            lots = [l for l in lots if l.get('lotId') != target_lot_id]
-            closed.append({'lotId': target_lot_id, 'asset': asset, 'status': 'CLOSED',
-                           'qty': to128(qty), 'originalQty': lot.get('originalQty'),
-                           'avgEntry': lot.get('avgEntry'), 'costBasis': lot.get('costBasis'),
-                           'exitPrice': to128(fill_px), 'realizedPnl': to128(realized),
-                           'openedAt': lot.get('openedAt'),
-                           'closedAt': datetime.datetime.utcnow().isoformat(),
-                           'entryDecisionSnapshotId': lot.get('entryDecisionSnapshotId'),
-                           'rules': lot.get('rules'),
-                           'completedTargets': lot.get('completedTargets')})
+
+        remaining_qty = q_qty(total_qty - sell_qty)
+        closed_positions = list(acct.get('closedPositions') or [])
+
+        is_full_close = remaining_qty <= 0
+        if is_full_close:
+            # Remove position entirely.
+            positions = [p for i, p in enumerate(positions) if i != pos_idx]
+            closed_positions.append({
+                'symbol': symbol, 'qty': to128(sell_qty),
+                'costBasis': to128(total_cb),
+                'avgEntry': pos.get('avgEntry'),
+                'exitPrice': to128(fill_px),
+                'realizedPnl': to128(realized),
+                'openedAt': pos.get('openedAt'),
+                'closedAt': now_iso,
+                'closeSource': source,
+            })
         else:
-            for l in lots:
-                if l.get('lotId') == target_lot_id:
-                    l['qty'] = to128(remaining)
-                    l['costBasis'] = to128(q_cash(ocb - cost_portion))
-                    l['positionVersion'] = (l.get('positionVersion') or 0) + 1
-                    if completed_rule_id:
-                        existing = set(l.get('completedTargets') or [])
-                        existing.add(completed_rule_id)
-                        l['completedTargets'] = list(existing)
+            # Partial: reduce qty and cost basis proportionally.
+            remaining_cb = q_cash(total_cb - cost_portion)
+            # avgEntry stays the same (it's total cost / total qty, proportional reduction preserves it).
+            positions[pos_idx] = {**pos,
+                'qty': to128(remaining_qty),
+                'costBasis': to128(remaining_cb),
+                'updatedAt': now_iso}
+
         seq = (acct.get('accountSequence') or 0) + 1
-        led = _ledger_entry(seq, 'FILL', target_lot_id, proceeds,
-                            'SELL %s %s @ %s (PnL %s) · %s · ticket %s'
-                            % (qty_dstr(qty), asset, dstr(fill_px, pq), dstr(realized), source, target_lot_id),
-                            extra={'side': 'SELL', 'asset': asset, 'qty': qty_dstr(qty), 'fillPx': dstr(fill_px, pq),
-                                   'proceeds': dstr(proceeds), 'realized': dstr(realized),
-                                   'costPortion': dstr(cost_portion),
-                                   'completedRuleId': completed_rule_id, 'ticketId': target_lot_id})
-        result = {'side': 'SELL', 'asset': asset, 'qty': qty_dstr(qty), 'fillPrice': dstr(fill_px, pq),
-                  'proceeds': dstr(proceeds), 'realized': dstr(realized),
-                  'ticketId': target_lot_id, 'paperOnly': True}
-        push = {'ledger': led}
-        setd = {'cash': to128(new_cash),
-                'realizedPnl': to128(new_realized), 'lots': lots, 'closedLots': closed}
+        led = _ledger_entry(seq, 'FILL', symbol, proceeds,
+                            '%s %s %s @ %s (PnL %s) · %s'
+                            % ('SELL' if is_full_close else 'PARTIAL_SELL',
+                               qty_dstr(sell_qty), symbol, dstr(fill_px, pq),
+                               dstr(realized), source),
+                            extra={'side': 'SELL', 'asset': symbol, 'qty': qty_dstr(sell_qty),
+                                   'fillPx': dstr(fill_px, pq), 'proceeds': dstr(proceeds),
+                                   'realized': dstr(realized), 'costPortion': dstr(cost_portion),
+                                   'fullClose': is_full_close, 'source': source})
+
+        result = {'side': 'SELL', 'asset': symbol, 'qty': qty_dstr(sell_qty),
+                  'fillPrice': dstr(fill_px, pq), 'proceeds': dstr(proceeds),
+                  'realized': dstr(realized), 'fullClose': is_full_close,
+                  'paperOnly': True}
+
+        setd = {'cash': to128(new_cash), 'realizedPnl': to128(new_realized),
+                'positions': positions, 'closedPositions': closed_positions}
         flt = {'paperAccountId': acct_id, 'ownerId': pid, 'version': expected_version}
+        push = {'ledger': led}
         if idem_key:
             push['idemKeys'] = {'$each': [idem_key], '$slice': -500}
             flt['idemKeys'] = {'$ne': idem_key}
         inc = {'version': 1, 'accountSequence': 1}
-        if remaining <= 0:
+        if is_full_close:
             inc['goalStatus.tradeCount'] = 1
+
         upd = col.find_one_and_update(flt, {'$set': setd, '$push': push, '$inc': inc})
         if upd is not None:
             return result, None, 200
     return None, 'CONCURRENCY_RETRY_EXHAUSTED', 409
 
 
+# ==================== stop-loss / take-profit updates ======================== #
+def update_stop_loss(col, acct_id, pid, symbol, new_value, reason=''):
+    """Atomically update the stop-loss on the combined position for `symbol`.
+    Records the change in the position's history."""
+    symbol = (symbol or '').upper()
+    now_iso = datetime.datetime.utcnow().isoformat()
+    acct = col.find_one({'paperAccountId': acct_id, 'ownerId': pid})
+    if not acct:
+        return None, 'NOT_FOUND'
+    positions = list(acct.get('positions') or [])
+    for i, p in enumerate(positions):
+        if (p.get('symbol') or '').upper() == symbol and (D(p.get('qty')) or Decimal('0')) > 0:
+            old_sl = D(p.get('stopLoss'))
+            history = list(p.get('stopLossHistory') or [])
+            history.append({'previous': dstr(old_sl) if old_sl else None,
+                            'new': dstr(D(new_value)) if new_value else None,
+                            'reason': reason, 'at': now_iso})
+            positions[i] = {**p,
+                'stopLoss': to128(D(new_value)) if new_value is not None else None,
+                'stopLossReason': reason or p.get('stopLossReason'),
+                'stopLossHistory': history, 'updatedAt': now_iso}
+            col.update_one({'paperAccountId': acct_id, 'ownerId': pid, 'version': acct['version']},
+                           {'$set': {'positions': positions}, '$inc': {'version': 1}})
+            return {'symbol': symbol, 'previousStopLoss': dstr(old_sl) if old_sl else None,
+                    'newStopLoss': dstr(D(new_value)) if new_value else None}, None
+    return None, 'NO_POSITION'
+
+
+def update_take_profit(col, acct_id, pid, symbol, new_value, reason=''):
+    """Atomically update the take-profit on the combined position for `symbol`."""
+    symbol = (symbol or '').upper()
+    now_iso = datetime.datetime.utcnow().isoformat()
+    acct = col.find_one({'paperAccountId': acct_id, 'ownerId': pid})
+    if not acct:
+        return None, 'NOT_FOUND'
+    positions = list(acct.get('positions') or [])
+    for i, p in enumerate(positions):
+        if (p.get('symbol') or '').upper() == symbol and (D(p.get('qty')) or Decimal('0')) > 0:
+            old_tp = D(p.get('takeProfit'))
+            history = list(p.get('takeProfitHistory') or [])
+            history.append({'previous': dstr(old_tp) if old_tp else None,
+                            'new': dstr(D(new_value)) if new_value else None,
+                            'reason': reason, 'at': now_iso})
+            positions[i] = {**p,
+                'takeProfit': to128(D(new_value)) if new_value is not None else None,
+                'takeProfitReason': reason or p.get('takeProfitReason'),
+                'takeProfitHistory': history, 'updatedAt': now_iso}
+            col.update_one({'paperAccountId': acct_id, 'ownerId': pid, 'version': acct['version']},
+                           {'$set': {'positions': positions}, '$inc': {'version': 1}})
+            return {'symbol': symbol, 'previousTakeProfit': dstr(old_tp) if old_tp else None,
+                    'newTakeProfit': dstr(D(new_value)) if new_value else None}, None
+    return None, 'NO_POSITION'
+
+
+def clear_take_profit(col, acct_id, pid, symbol):
+    """Clear the take-profit after it has been triggered (prevent repeat execution)."""
+    symbol = (symbol or '').upper()
+    now_iso = datetime.datetime.utcnow().isoformat()
+    acct = col.find_one({'paperAccountId': acct_id, 'ownerId': pid})
+    if not acct:
+        return
+    positions = list(acct.get('positions') or [])
+    for i, p in enumerate(positions):
+        if (p.get('symbol') or '').upper() == symbol and (D(p.get('qty')) or Decimal('0')) > 0:
+            positions[i] = {**p, 'takeProfit': None, 'takeProfitReason': None,
+                            'updatedAt': now_iso}
+            col.update_one({'paperAccountId': acct_id, 'ownerId': pid, 'version': acct['version']},
+                           {'$set': {'positions': positions}, '$inc': {'version': 1}})
+            return
+
+
 def update_high_water(col, acct_id, pid, equity):
-    """Persist the high-water equity with an atomic $max (only ever grows).
-    Called ONLY with a complete, verified valuation."""
+    """Persist the high-water equity with an atomic $max."""
     if equity is None:
         return
     col.update_one({'paperAccountId': acct_id, 'ownerId': pid},
@@ -687,8 +637,7 @@ def update_high_water(col, acct_id, pid, equity):
 
 
 def revalidate_ok(canonical, side, snapshot_id):
-    """True only if the CURRENT canonical decision still authorises this exact
-    action (same immutable snapshot id, same actionable side, still fresh)."""
+    """True only if the CURRENT canonical decision still authorises this action."""
     if not canonical:
         return False
     if canonical.get('decisionSnapshotId') != snapshot_id:

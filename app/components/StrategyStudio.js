@@ -146,7 +146,7 @@ const PAPER_STATUS = {
   UNAVAILABLE: { label: 'Paper worker unavailable', color: 'text-amber-300', dot: 'bg-amber-400' },
   HALTED_GOAL_CLOSED: { label: 'Goal reached — all closed', color: 'text-emerald-300', dot: 'bg-emerald-400' },
   HALTED_GOAL_ENTRIES: { label: 'Goal reached — managing exits', color: 'text-teal-300', dot: 'bg-teal-400' },
-  GOAL_CLOSE_PENDING: { label: 'Goal reached — closing remaining tickets', color: 'text-amber-300', dot: 'bg-amber-400' },
+  GOAL_CLOSE_PENDING: { label: 'Goal reached — closing remaining positions', color: 'text-amber-300', dot: 'bg-amber-400' },
   RESTRICTED_IN_WALLET: { label: 'Restricted in this wallet · exits preserved', color: 'text-amber-300', dot: 'bg-amber-400' },
   NEEDS_CHANGES: { label: 'Needs changes · exits only', color: 'text-amber-300', dot: 'bg-amber-400' },
   HALTED_RISK: { label: 'Halted — drawdown limit', color: 'text-rose-300', dot: 'bg-rose-400' },
@@ -301,7 +301,7 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
         <h3 className="text-sm font-bold text-white">{revisionId ? 'Review a new version' : initialDraft?.fromProposal ? 'Review chat strategy proposal' : 'Build a strategy with Albert'}</h3>
         <button onClick={onCancel} className="ml-auto rounded p-1 text-slate-400 hover:text-white"><X className="h-4 w-4" /></button>
       </div>
-      {revisionId && <p className="mb-3 text-[12px] text-amber-200">Saving a reviewed version stops new entries under the old version. It keeps this strategy’s existing wallet, cash, holdings, exits and history; Existing tickets retain their entry-time exit rules. Start Auto Run for the new version when ready.</p>}
+      {revisionId && <p className="mb-3 text-[12px] text-amber-200">Saving a reviewed version stops new entries under the old version. It keeps this strategy’s existing wallet, cash, holdings, and history. Start Auto Run for the new version when ready.</p>}
       {!draft && (
         <div>
           <p className="mb-2 text-[13px] text-slate-400">Describe the exact simulated plan: coins, weights, wallet name and starting cash, optional price or 24-hour percentage conditions, RSI/SMA/EMA/MACD indicators, and stop-loss or take-profit percentages, portfolio profit targets and equity floors. Albert checks each rule before Save. Macro and tokenomics inform assessment, never automatic trade triggers.</p>
@@ -382,7 +382,7 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
           </div>
           {/* ── Entry Sizing ── */}
           <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-[12px] text-slate-300">
-            <p className="font-semibold text-white">Entry sizing · how much per BUY ticket</p>
+            <p className="font-semibold text-white">Entry sizing · how much per BUY</p>
             <div className="mt-2 flex flex-wrap items-center gap-3">
               <select value={(draft.entrySizing?.method) || ''}
                 onChange={(e) => updateDraft({ ...draft, entrySizing: e.target.value ? { method: e.target.value, ...(e.target.value === 'FIXED_USD' ? { amount: draft.entrySizing?.amount || '' } : { pct: draft.entrySizing?.pct || '' }) } : undefined })}
@@ -543,9 +543,12 @@ function PaperPanel({ sid, name, onChange }) {
     finally { setBusy(false); setArming(false); }
   };
 
-  const closePos = async (posId) => {
+  const closePos = async (symbol) => {
     setBusy(true);
-    try { await post(`/v1/albert/paper/positions/${posId}/close`, { confirm: true, idempotencyKey: idem() }); } catch (e) { /* noop */ }
+    try {
+      const acctId = p.paperAccountId;
+      await post(`/v1/albert/paper/accounts/${acctId}/close-position`, { symbol, confirm: true, idempotencyKey: idem() });
+    } catch (e) { /* noop */ }
     await load(); setBusy(false);
   };
 
@@ -695,39 +698,44 @@ function PaperPanel({ sid, name, onChange }) {
         </div>
       )}
 
-      {/* ---- Open Tickets ---- */}
-      {(p.tickets || []).length > 0 && (
+      {/* ---- Open Positions (combined per coin) ---- */}
+      {(p.positions || []).length > 0 && (
         <div>
-          <p className="mb-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-500">Open Tickets ({p.tickets.length})</p>
+          <p className="mb-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-500">Open Positions ({p.positions.length})</p>
           <div className="space-y-1">
-            {p.tickets.map((t) => (
-              <div key={t.ticketId} className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 text-[12px]">
-                <span className="font-semibold text-sky-300">{t.asset}</span>
-                <span className="text-slate-300">{parseFloat(t.qty).toFixed(6)}</span>
-                <span className="text-slate-500">@ {parseFloat(t.avgEntry).toFixed(2)}</span>
-                <span className="text-slate-500">cost {usd(parseFloat(t.costBasis))}</span>
-                {t.invalidationPrice && <span className="text-rose-400/70">stop {parseFloat(t.invalidationPrice).toFixed(2)}</span>}
-                {(t.completedTargets || []).length > 0 && <span className="text-emerald-400/70">✓ {t.completedTargets.length} target{t.completedTargets.length > 1 ? 's' : ''}</span>}
-                <span className="ml-auto text-[10px] text-slate-600">{t.ticketId}</span>
+            {p.positions.map((pos) => (
+              <div key={pos.symbol} className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 text-[12px]">
+                <span className="font-semibold text-sky-300">{pos.symbol}</span>
+                <span className="text-slate-300">{parseFloat(pos.qty).toFixed(6)}</span>
+                <span className="text-slate-500">avg {usd(parseFloat(pos.avgEntry))}</span>
+                <span className="text-slate-500">cost {usd(parseFloat(pos.costBasis))}</span>
+                {pos.stopLoss && <span className="text-rose-400/70">SL {usd(parseFloat(pos.stopLoss))}</span>}
+                {pos.takeProfit && <span className="text-emerald-400/70">TP {usd(parseFloat(pos.takeProfit))}</span>}
+                {pos.currentPrice && <span className="text-slate-400">now {usd(parseFloat(pos.currentPrice))}</span>}
+                {pos.unrealizedPnl && <span className={parseFloat(pos.unrealizedPnl) >= 0 ? 'text-emerald-400' : 'text-rose-400'}>{signed(parseFloat(pos.unrealizedPnl))}</span>}
               </div>
             ))}
           </div>
         </div>
       )}
 
-      {/* ---- Performance (this strategy's own money) ---- */}
+      {/* ---- Performance ---- */}
       {p.paperAccountId && (
         <div>
           <p className="mb-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-500">Performance</p>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            {[['Value', perf.valueAvailable === false ? 'unavailable' : usd(perf.value)],
-              ['Profit / loss', signed(perf.pnlUsd) + (perf.pnlPct != null ? ` · ${perf.pnlPct}%` : '')],
-              ['Free to invest', usd(perf.deployableCash)],
+            {[['Starting cash', usd(p.startingCash)],
+              ['Current cash', p.cash ? usd(parseFloat(p.cash)) : '—'],
+              ['Position value', p.totalPortfolioValue ? usd(parseFloat(p.totalPortfolioValue) - parseFloat(p.cash || 0)) : '—'],
+              ['Total portfolio', p.totalPortfolioValue ? usd(parseFloat(p.totalPortfolioValue)) : '—'],
+              ['Realized P&L', p.realizedPnl ? signed(parseFloat(p.realizedPnl)) : '—'],
+              ['Unrealized P&L', p.unrealizedPnl ? signed(parseFloat(p.unrealizedPnl)) : '—'],
+              ['Total P&L', p.totalPnl ? signed(parseFloat(p.totalPnl)) : '—'],
+              ['Total return', p.totalReturnPct ? `${p.totalReturnPct}%` : '—'],
               ['Open positions', String(positions.length)],
               ['Closed trades', String(perf.closedTrades ?? 0)],
               ['Win rate', perf.winRatePct != null ? `${perf.winRatePct}%` : '—'],
-              ['Worst dip', perf.drawdownPct != null ? `${perf.drawdownPct}%` : '—'],
-              ['Started with', usd(perf.startingCash)]].map(([k, v]) => (
+              ['Worst dip', perf.drawdownPct != null ? `${perf.drawdownPct}%` : '—']].map(([k, v]) => (
               <div key={k} className="min-w-0 rounded-lg border border-slate-800 bg-slate-950/60 p-2">
                 <p className="text-[10px] uppercase tracking-wide text-slate-500">{k}</p>
                 <p className="truncate text-[12.5px] font-semibold text-slate-100" title={String(v)}>{v}</p>

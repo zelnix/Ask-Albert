@@ -29,7 +29,7 @@ const STATUS = {
   HALTED_RISK: { label: 'Halted — drawdown limit', color: 'text-rose-300', dot: 'bg-rose-400' },
   HALTED_GOAL_CLOSED: { label: 'Goal reached — all closed', color: 'text-emerald-300', dot: 'bg-emerald-400' },
   HALTED_GOAL_ENTRIES: { label: 'Goal reached — managing exits', color: 'text-teal-300', dot: 'bg-teal-400' },
-  GOAL_CLOSE_PENDING: { label: 'Goal reached — closing remaining tickets', color: 'text-amber-300', dot: 'bg-amber-400' },
+  GOAL_CLOSE_PENDING: { label: 'Goal reached — closing remaining positions', color: 'text-amber-300', dot: 'bg-amber-400' },
   ARCHIVED: { label: 'Archived', color: 'text-slate-500', dot: 'bg-slate-600' },
 };
 const st = (s) => STATUS[s] || STATUS.SAVED;
