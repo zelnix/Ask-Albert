@@ -8664,7 +8664,7 @@ def _autopilot_process_account_multi(acct):
 
     paused = acct.get('runtimeState') not in ('RUNNING',)
     alloc_candidates = [c for c in candidates if c['action'] == 'SELL' or not paused]
-    alloc = _paper_portfolio.allocate(acct=acct, equity_info=equity_info,
+    alloc = _paper_portfolio.allocate(equity_info=equity_info,
                                       candidates=alloc_candidates, marks=marks)
     funded = {i['symbol'] for i in alloc['intents'] if i.get('action') == 'BUY'}
     for c in alloc_candidates:
@@ -9220,11 +9220,16 @@ def paper_trade_log(acct_id: str, user: dict = Depends(get_current_user)):
 
 
 @app.get('/api/v1/albert/paper/trades/{symbol}/evidence')
-def paper_trade_evidence(symbol: str, user: dict = Depends(get_current_user)):
+def paper_trade_evidence(symbol: str, acct_id: str = None, user: dict = Depends(get_current_user)):
     pid = owner_pid(user)
     symbol = symbol.upper()
-    a = paper_accounts_col.find_one({'ownerId': pid,
-                                     '$or': [{'positions.symbol': symbol}, {'closedPositions.symbol': symbol}]})
+    if acct_id:
+        a = paper_accounts_col.find_one({'paperAccountId': acct_id, 'ownerId': pid})
+        if not a:
+            raise HTTPException(status_code=404, detail='No such paper account.')
+    else:
+        a = paper_accounts_col.find_one({'ownerId': pid,
+                                         '$or': [{'positions.symbol': symbol}, {'closedPositions.symbol': symbol}]})
     if not a:
         raise HTTPException(status_code=404, detail='No such trade.')
     pos = _paper_core.position_for(a, symbol)
@@ -12364,7 +12369,7 @@ def _studio_summary(c):
     return (f"A paper strategy across {legs}, checked on the normal paper cycle. "
             f"At most {c['riskLimits']['maxPositions']} positions; entry sizing: {sizing_desc}; "
             f"protected reserve {c['reservePct']:g}%. Canonical BUY and risk gates still apply. "
-            f"Executable additional conditions: {terms or 'none'}. SELL triggers close the targeted position; "
+            f"Executable additional conditions: {terms or 'none'}. SELL triggers reduce or close the combined position; "
             f"Auto Run executes paper trades after the reviewed rules and risk gates pass.{wallet}{goals_desc} "
             f"Macro and tokenomics are advisory context only.")
 
@@ -12814,7 +12819,7 @@ STUDIO_REVISE_SYSTEM = (
     "entrySizing, reservePct, riskLimits, portfolioGoals, unsupportedInstructions. "
     "If the user adds or removes coins, update assets accordingly. "
     "If the user changes entry sizing, update entrySizing. "
-    "If the user changes exit rules, only new positions will use them — existing positions keep their entry-time rules. "
+    "If the user changes exit rules, the updated rules apply to the combined position going forward. "
     "Return the COMPLETE revised strategy JSON, not a partial diff."
 )
 
@@ -12891,7 +12896,7 @@ def studio_revise_draft(payload: dict = Body(...), user: dict = Depends(get_curr
             'originalStrategyId': sid,
             'originalVersion': doc.get('version'),
             'note': 'Review the revised strategy. Save it to apply the changes. '
-                    'Existing positions retain their entry-time exit rules.'}
+                    'Updated exit rules apply to the combined position going forward.'}
 
 
 

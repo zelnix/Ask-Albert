@@ -40,7 +40,7 @@ function KV({ rows }) {
   );
 }
 
-function EvidenceChain({ symbol }) {
+function EvidenceChain({ symbol, acctId }) {
   const [open, setOpen] = React.useState(false);
   const [ev, setEv] = React.useState(null);
   const [err, setErr] = React.useState('');
@@ -48,7 +48,8 @@ function EvidenceChain({ symbol }) {
     setOpen((o) => !o);
     if (ev || !symbol) return;
     try {
-      const r = await fetch(`${API_BASE}/v1/albert/paper/trades/${symbol}/evidence`, { cache: 'no-store' });
+      const qs = acctId ? `?acct_id=${encodeURIComponent(acctId)}` : '';
+      const r = await fetch(`${API_BASE}/v1/albert/paper/trades/${symbol}/evidence${qs}`, { cache: 'no-store' });
       if (!r.ok) { setErr('Evidence unavailable for this position.'); return; }
       setEv(await r.json());
     } catch (e) { setErr('Evidence could not be loaded.'); }
@@ -157,9 +158,8 @@ export default function PaperEngineTechnical({ onNav }) {
         <>
           <Panel title="Engine state & safety" icon={ShieldCheck}>
             <KV rows={[
-              ['Account', acct.name], ['Mode', acct.mode], ['Runtime state', acct.runtimeState],
-              ['Execution enabled', String(integ.executionEnabled)], ['Autopilot enabled', String(integ.autopilotEnabled)],
-              ['Multi-asset enabled', String(ap.multiAssetEnabled)], ['Trading profile', ap.tradingProfile],
+              ['Account', acct.name], ['Runtime state', acct.runtimeState],
+              ['Execution enabled', String(integ.executionEnabled)],
               ['Reconciliation', integ.reconciliation], ['Market data', integ.marketData],
               ['Equity available', String(integ.equityAvailable)], ['Primary pause reason', integ.primaryPauseReason || 'none'],
               ['Ledger size warning', String(integ.ledgerSizeWarning)], ['Last reconciled', fmtTs(integ.lastReconciledAt)],
@@ -221,7 +221,7 @@ export default function PaperEngineTechnical({ onNav }) {
                       {p.currentPrice && <span className="text-slate-400">now {usd(p.currentPrice)}</span>}
                       {p.unrealizedPnl != null && <span className={Number(p.unrealizedPnl) >= 0 ? 'text-emerald-400' : 'text-rose-400'}>{usd(p.unrealizedPnl)}</span>}
                     </div>
-                    <EvidenceChain symbol={p.symbol} />
+                    <EvidenceChain symbol={p.symbol} acctId={acctId} />
                   </div>
                 ))}
               </div>

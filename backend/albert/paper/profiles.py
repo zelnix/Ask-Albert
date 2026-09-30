@@ -31,7 +31,7 @@ def is_stable(symbol):
     return (symbol or '').upper() in STABLES
 
 
-def eligible_for_trading(symbol, *, rank=None, data_ok=True, excluded=None, approved=None,
+def eligible_for_trading(symbol, *, data_ok=True, excluded=None, approved=None,
                          mandate_complete=True):
     """Return (eligible: bool, reason: str|None). First failing rule wins.
     `approved` empty/None means 'no whitelist -> all non-excluded allowed'.

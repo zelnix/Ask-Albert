@@ -28,12 +28,11 @@ def rank_opportunities(candidates):
     return sorted(candidates, key=key)
 
 
-def allocate(*, acct, equity_info, candidates, marks):
+def allocate(*, equity_info, candidates, marks):
     """Produce per-asset trade intents from ranked canonical opportunities.
 
     The reviewed strategy sizing is authoritative. This allocator ranks and
-    passes through without hidden caps. Max open positions is enforced by
-    counting combined coin positions (not tickets).
+    passes through without hidden caps.
 
     Returns {'intents': [...], 'diagnostics': {...}}.
     """
