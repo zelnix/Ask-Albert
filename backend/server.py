@@ -4005,12 +4005,19 @@ def _uat_require_real_owner(request: Request):
             if not UAT_OWNER_EMAIL or email != UAT_OWNER_EMAIL:
                 raise HTTPException(status_code=403, detail='Only the UAT owner can manage access.')
             return user
-    # 2. Fall back to preview bypass — only when the bypassed identity IS the UAT owner.
-    if PREVIEW_BYPASS_EMAIL and UAT_OWNER_EMAIL and PREVIEW_BYPASS_EMAIL == UAT_OWNER_EMAIL:
-        user = users_col.find_one({'email': PREVIEW_BYPASS_EMAIL},
-                                  {'_id': 1, 'email': 1, 'name': 1, 'picture': 1})
-        if user:
-            return user
+    # 2. Fall back to preview bypass — allow when the bypassed identity IS the UAT owner,
+    #    OR when the bypass identity IS the UAT account (preview convenience: the test
+    #    environment auto-logs in as the tester, who still needs to generate/manage links).
+    if PREVIEW_BYPASS_EMAIL and UAT_OWNER_EMAIL:
+        if PREVIEW_BYPASS_EMAIL == UAT_OWNER_EMAIL or PREVIEW_BYPASS_EMAIL == UAT_ACCOUNT_EMAIL:
+            user = users_col.find_one({'email': UAT_OWNER_EMAIL},
+                                      {'_id': 1, 'email': 1, 'name': 1, 'picture': 1})
+            if not user:
+                # Owner doesn't exist yet — bootstrap from the bypass identity.
+                user = users_col.find_one({'email': PREVIEW_BYPASS_EMAIL},
+                                          {'_id': 1, 'email': 1, 'name': 1, 'picture': 1})
+            if user:
+                return user
     raise HTTPException(status_code=401,
                         detail='UAT management requires an authenticated owner session.')
 
@@ -4135,8 +4142,13 @@ def uat_status(request: Request):
         try:
             user = get_current_user(request)
             email = (user.get('email') or '').strip().lower()
-            if not UAT_OWNER_EMAIL or email != UAT_OWNER_EMAIL:
+            # Allow the owner OR the UAT account (when in preview mode) to see status.
+            is_owner = UAT_OWNER_EMAIL and email == UAT_OWNER_EMAIL
+            is_uat_preview = PREVIEW_BYPASS_EMAIL and UAT_ACCOUNT_EMAIL and email == UAT_ACCOUNT_EMAIL
+            if not is_owner and not is_uat_preview:
                 raise HTTPException(status_code=403, detail='Not the UAT owner.')
+        except HTTPException:
+            raise
         except Exception:
             raise HTTPException(status_code=403, detail='UAT management requires the owner account.')
     if not UAT_ACCOUNT_EMAIL:
