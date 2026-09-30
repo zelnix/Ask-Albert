@@ -54,6 +54,7 @@ const ENGINE_INVENTORY = [
 function StepRow({ step }) {
   const cfg = STATUS_CONFIG[step.status] || STATUS_CONFIG.queued;
   const { Icon } = cfg;
+  const showMessage = step.message && step.status !== 'queued';
   return (
     <div className={`flex items-start gap-2.5 rounded-md px-3 py-2 ${cfg.bg}`}>
       <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${cfg.color} ${cfg.spin ? 'animate-spin' : ''}`} />
@@ -62,7 +63,11 @@ function StepRow({ step }) {
           <p className="text-xs font-medium text-slate-200">{step.label}</p>
           <span className={`shrink-0 text-[10px] font-semibold ${cfg.color}`}>{cfg.label}</span>
         </div>
-        {step.message && <p className="mt-0.5 text-[11px] leading-snug text-slate-400">{step.message}</p>}
+        {showMessage && (
+          <p className={`mt-0.5 text-[11px] leading-snug ${step.status === 'failed' ? 'text-red-300 font-medium' : step.status === 'partial' || step.status === 'partially_succeeded' ? 'text-amber-300/90' : 'text-slate-400'}`}>
+            {step.message}
+          </p>
+        )}
         <div className="mt-0.5 flex flex-wrap gap-x-3 text-[10px] text-slate-500">
           {step.startedAt && <span>Exec: {analysisTime(step.startedAt) || '—'}</span>}
           {step.dataObservedAt && <span>Observed: {analysisTime(step.dataObservedAt) || '—'}</span>}

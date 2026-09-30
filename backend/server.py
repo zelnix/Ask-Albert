@@ -6468,18 +6468,35 @@ def _current_scenario_work():
         for horizon in ('P7D', 'P14D', 'P30D'):
             try:
                 band = _scenario_band_summary('BTC', horizon)
-                available = bool(band and band.get('available'))
-                results.append({'horizon': horizon, 'available': available,
-                                'bear': band.get('bear') if available else None,
-                                'base': band.get('base') if available else None,
-                                'bull': band.get('bull') if available else None})
+                has_data = bool(band and (band.get('lowerPct') is not None or band.get('upperPct') is not None))
+                calibrated = bool(band and band.get('available'))
+                results.append({'horizon': horizon, 'available': calibrated, 'hasData': has_data,
+                                'bear': band.get('lowerPct') if has_data else None,
+                                'bull': band.get('upperPct') if has_data else None,
+                                'reason': band.get('reasonCode') if not calibrated and has_data else None,
+                                'statement': band.get('statement') if has_data else None})
             except Exception:
-                results.append({'horizon': horizon, 'available': False})
-        published = [r for r in results if r['available']]
-        return {'status': 'succeeded' if published else 'partial',
-                'publishedAt': datetime.datetime.utcnow().isoformat(),
-                'message': f'{len(published)}/{len(results)} scenario horizons published.' +
-                           (' Bands: ' + ', '.join(f"{r['horizon']}" for r in published) + '.' if published else '')}
+                results.append({'horizon': horizon, 'available': False, 'hasData': False})
+        calibrated = [r for r in results if r['available']]
+        with_data = [r for r in results if r.get('hasData')]
+        if calibrated:
+            return {'status': 'succeeded',
+                    'publishedAt': datetime.datetime.utcnow().isoformat(),
+                    'message': f'{len(calibrated)}/{len(results)} scenario horizons calibrated. ' +
+                               ' | '.join(r['statement'] for r in calibrated if r.get('statement')) + '.'}
+        elif with_data:
+            summaries = []
+            for r in with_data:
+                summaries.append(f"{r['horizon']}: {r['bear']:+.1f}% to {r['bull']:+.1f}%"
+                                 if r['bear'] is not None else r['horizon'])
+            reason = with_data[0].get('reason', 'validation pending')
+            return {'status': 'succeeded',
+                    'publishedAt': datetime.datetime.utcnow().isoformat(),
+                    'message': f'{len(with_data)}/{len(results)} scenario bands computed (uncalibrated — {reason}). '
+                               + ' | '.join(summaries) + '.'}
+        return {'status': 'partial',
+                'message': f'0/{len(results)} scenario horizons could be computed. '
+                           'No historical analog data available for any horizon.'}
     except Exception:
         traceback.print_exc()
         return {'status': 'failed', 'message': 'Current scenario outlook could not be published.'}
