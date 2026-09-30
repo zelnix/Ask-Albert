@@ -18,7 +18,7 @@ const post = (path, body) => fetch(`${API_BASE}${path}`, {
 const STUDIO_EXEC_RULES = {
   entryRules: 'CANONICAL_BUY_ONLY', exitRules: 'CANONICAL_SELL_OR_INVALIDATION',
   profitTaking: 'CANONICAL_SELL_ONLY', invalidation: 'CANONICAL_INVALIDATION_ONLY',
-  sizing: 'MAX_REVIEWED_ASSET_WEIGHT',
+  sizing: 'STRATEGY_DEFINED',
 };
 
 const get = (path, signal) => fetch(`${API_BASE}${path}`, { credentials: 'include', cache: 'no-store', signal });
@@ -51,7 +51,8 @@ function proposalToDraft(proposal) {
     const entry = Number(l.entry_price) || 0;
     const isShort = /short/i.test(l.position || l.direction || 'long');
 
-    // Translate targets[] into TAKE_PROFIT_PCT or PARTIAL_TAKE_PROFIT_PCT rules.
+    // Translate targets[] into TAKE_PROFIT_PCT rules.
+    // PARTIAL_TAKE_PROFIT_PCT is retired — all targets become full TAKE_PROFIT_PCT.
     (Array.isArray(l.targets) ? l.targets : []).forEach((t, ti) => {
       if (!t) return;
       // Prefer explicit exit_pct; otherwise compute from absolute price vs entry.
@@ -61,15 +62,8 @@ function proposalToDraft(proposal) {
         pctVal = Math.round(diff / entry * 10000) / 100; // two-decimal %
       }
       if (pctVal == null || pctVal <= 0) return;
-      const portion = t.pct_of_position || t.pctOfPosition || 100;
-      const kind = Number(portion) < 100 ? 'PARTIAL_TAKE_PROFIT_PCT' : 'TAKE_PROFIT_PCT';
-      const rule = { kind, side: 'SELL', symbol: sym, value: String(pctVal),
-        _fromTarget: true, _label: t.label || `TP${ti + 1}` };
-      if (kind === 'PARTIAL_TAKE_PROFIT_PCT') {
-        rule.portionPct = String(portion);
-        rule.portionOf = 'original';
-      }
-      rules.push(rule);
+      rules.push({ kind: 'TAKE_PROFIT_PCT', side: 'SELL', symbol: sym, value: String(pctVal),
+        _fromTarget: true, _label: t.label || `TP${ti + 1}` });
     });
     // Translate stop into STOP_LOSS_PCT rule — value is a percentage.
     let stopPctVal = l.stop_pct != null ? Number(l.stop_pct) : (l.stop?.stop_pct != null ? Number(l.stop.stop_pct) : null);
@@ -119,6 +113,10 @@ function proposalToDraft(proposal) {
     walletName: proposal.walletName || undefined,
     // Canonical execution gates — supply standard values so validation passes
     ...STUDIO_EXEC_RULES,
+    // Default entry sizing — 25% of available cash per trade
+    entrySizing: proposal.entrySizing || { method: 'PCT_AVAILABLE_CASH', pct: 25 },
+    // Portfolio goals from proposal
+    portfolioGoals: proposal.portfolioGoals || undefined,
   };
 }
 
@@ -148,11 +146,12 @@ const signed = (v) => (v == null ? '\u2014' : (Number(v) >= 0 ? '+' : '') + usd(
 const PAPER_STATUS = {
   SAVED: { label: 'Saved · not trading', color: 'text-slate-300', dot: 'bg-slate-500' },
   STOPPED: { label: 'Stopped', color: 'text-amber-300', dot: 'bg-amber-400' },
-  LIVE: { label: 'Paper trading', color: 'text-emerald-300', dot: 'bg-emerald-400' },
+  LIVE: { label: 'Auto Run active', color: 'text-emerald-300', dot: 'bg-emerald-400' },
   WAIT: { label: 'WAIT · awaiting conditions', color: 'text-amber-300', dot: 'bg-amber-400' },
   UNAVAILABLE: { label: 'Paper worker unavailable', color: 'text-amber-300', dot: 'bg-amber-400' },
   HALTED_GOAL_CLOSED: { label: 'Goal reached — all closed', color: 'text-emerald-300', dot: 'bg-emerald-400' },
   HALTED_GOAL_ENTRIES: { label: 'Goal reached — managing exits', color: 'text-teal-300', dot: 'bg-teal-400' },
+  GOAL_CLOSE_PENDING: { label: 'Goal reached — closing remaining tickets', color: 'text-amber-300', dot: 'bg-amber-400' },
   RESTRICTED_IN_WALLET: { label: 'Restricted in this wallet · exits preserved', color: 'text-amber-300', dot: 'bg-amber-400' },
   NEEDS_CHANGES: { label: 'Needs changes · exits only', color: 'text-amber-300', dot: 'bg-amber-400' },
   HALTED_RISK: { label: 'Halted — drawdown limit', color: 'text-rose-300', dot: 'bg-rose-400' },
@@ -308,7 +307,7 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
         <h3 className="text-sm font-bold text-white">{revisionId ? 'Review a new version' : initialDraft?.fromProposal ? 'Review chat strategy proposal' : 'Build a strategy with Albert'}</h3>
         <button onClick={onCancel} className="ml-auto rounded p-1 text-slate-400 hover:text-white"><X className="h-4 w-4" /></button>
       </div>
-      {revisionId && <p className="mb-3 text-[12px] text-amber-200">Saving a reviewed version stops new entries under the old version. It keeps this strategy’s existing wallet, cash, holdings, exits and history; select a mode and Start the new version when ready.</p>}
+      {revisionId && <p className="mb-3 text-[12px] text-amber-200">Saving a reviewed version stops new entries under the old version. It keeps this strategy’s existing wallet, cash, holdings, exits and history; Existing tickets retain their entry-time exit rules. Start Auto Run for the new version when ready.</p>}
       {!draft && (
         <div>
           <p className="mb-2 text-[13px] text-slate-400">Describe the exact simulated plan: coins, weights, wallet name and starting cash, optional price or 24-hour percentage conditions, RSI/SMA/EMA/MACD indicators, and stop-loss or take-profit percentages, portfolio profit targets and equity floors. Albert checks each rule before Save. Macro and tokenomics inform assessment, never automatic trade triggers.</p>
@@ -353,7 +352,7 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
           </div>
           <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-[12px] text-slate-300">
             <p className="font-semibold text-white">Executable strategy rules · checked every paper cycle</p>
-            <p className="mt-1">BUY: all of that coin’s triggers and canonical BUY must pass. SELL: any reviewed exit trigger may reduce that coin’s holding. Missing indicator or price data means WAIT, not a substitute. Autopilot uses only your reviewed strategy rules.</p>
+            <p className="mt-1">BUY: all of that coin’s triggers and canonical BUY must pass. SELL: any reviewed exit trigger closes that coin’s holding. Missing indicator or price data means WAIT, not a substitute. Auto Run uses only your reviewed strategy rules.</p>
             <label className="mt-2 block text-slate-400">Maximum open positions
               <input type="number" min="1" max="8" value={draft.riskLimits?.maxPositions ?? draft.assets?.length ?? 1}
                 onChange={(e) => updateDraft({ ...draft, riskLimits: { ...(draft.riskLimits || {}), maxPositions: Number(e.target.value) } })}
@@ -367,27 +366,19 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
                   <option value="BUY">BUY</option><option value="SELL">SELL</option>
                 </select>
                 <select aria-label={`Rule ${i + 1} kind`} value={rule.kind || 'PRICE'}
-                  onChange={(e) => setRule(i, { kind: e.target.value, side: ['STOP_LOSS_PCT', 'TAKE_PROFIT_PCT', 'TIME_EXIT'].includes(e.target.value) ? 'SELL' : rule.side,
-                    operator: ['STOP_LOSS_PCT', 'TAKE_PROFIT_PCT', 'TIME_EXIT'].includes(e.target.value) ? '' : (rule.operator || 'BELOW'), indicator: e.target.value === 'INDICATOR' ? 'RSI_14' : '' })}
+                  onChange={(e) => setRule(i, { kind: e.target.value, side: ['STOP_LOSS_PCT', 'TAKE_PROFIT_PCT'].includes(e.target.value) ? 'SELL' : rule.side,
+                    operator: ['STOP_LOSS_PCT', 'TAKE_PROFIT_PCT'].includes(e.target.value) ? '' : (rule.operator || 'BELOW'), indicator: e.target.value === 'INDICATOR' ? 'RSI_14' : '' })}
                   className="rounded-md bg-slate-800 p-1 text-white">
                   <option value="PRICE">Price (USD)</option><option value="CHANGE_PCT_24H">Rolling 24h change (%)</option>
                   <option value="INDICATOR">Indicator (closed daily)</option><option value="STOP_LOSS_PCT">Stop-loss from entry (%)</option>
                   <option value="TAKE_PROFIT_PCT">Take-profit from entry (%)</option>
-                  <option value="TIME_EXIT">Time-based exit</option>
                 </select>
                 {rule.kind === 'INDICATOR' && <select aria-label={`Rule ${i + 1} indicator`} value={rule.indicator || 'RSI_14'} onChange={(e) => setRule(i, { indicator: e.target.value })} className="rounded-md bg-slate-800 p-1 text-white">
                   <option value="RSI_14">RSI 14</option><option value="SMA_20">SMA 20</option><option value="EMA_20">EMA 20</option><option value="MACD_HIST">MACD histogram</option>
                 </select>}
                 {['PRICE', 'CHANGE_PCT_24H', 'INDICATOR'].includes(rule.kind) && <select aria-label={`Rule ${i + 1} comparison`} value={rule.operator || 'BELOW'} onChange={(e) => setRule(i, { operator: e.target.value })} className="rounded-md bg-slate-800 p-1 text-white"><option value="BELOW">Below</option><option value="ABOVE">Above</option></select>}
-                {rule.kind !== 'TIME_EXIT' && <input type="number" aria-label={`Rule ${i + 1} threshold`} value={rule.value ?? ''} onChange={(e) => setRule(i, { value: e.target.value })} placeholder="threshold" className="w-24 rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-white" />}
-                {rule.kind === 'PARTIAL_TAKE_PROFIT_PCT' && <>
-                  <input type="number" aria-label={`Rule ${i + 1} portion %`} min="1" max="100" value={rule.portionPct ?? ''} onChange={(e) => setRule(i, { portionPct: e.target.value })} placeholder="sell %" className="w-20 rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-white" />
-                  <select aria-label={`Rule ${i + 1} portion of`} value={rule.portionOf || 'original'} onChange={(e) => setRule(i, { portionOf: e.target.value })} className="rounded-md bg-slate-800 p-1 text-white"><option value="original">of original</option><option value="remaining">of remaining</option></select>
-                </>}
-                {rule.kind === 'TIME_EXIT' && <input type="datetime-local" aria-label={`Rule ${i + 1} deadline`}
-                  value={rule.deadline ? (() => { try { const d = new Date(rule.deadline); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); } catch { return ''; } })() : ''}
-                  onChange={(e) => setRule(i, { deadline: e.target.value ? new Date(e.target.value).toISOString() : '' })}
-                  className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-white" />}
+                {rule.kind !== 'STOP_LOSS_PCT' && rule.kind !== 'TAKE_PROFIT_PCT' && <input type="number" aria-label={`Rule ${i + 1} threshold`} value={rule.value ?? ''} onChange={(e) => setRule(i, { value: e.target.value })} placeholder="threshold" className="w-24 rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-white" />}
+                {(rule.kind === 'STOP_LOSS_PCT' || rule.kind === 'TAKE_PROFIT_PCT') && <input type="number" aria-label={`Rule ${i + 1} threshold`} value={rule.value ?? ''} onChange={(e) => setRule(i, { value: e.target.value })} placeholder="%" className="w-24 rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-white" />}
                 <button type="button" onClick={() => updateDraft({ ...draft, rules: draft.rules.filter((_, ix) => ix !== i) })} aria-label={`Remove rule ${i + 1}`} className="rounded p-1 text-rose-300"><X className="h-4 w-4" /></button>
               </div>)}
               <button type="button" onClick={addRule} className="inline-flex items-center gap-1 font-semibold text-sky-300"><Plus className="h-3.5 w-3.5" />Add executable rule</button>
@@ -395,6 +386,54 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
             {Object.entries(STUDIO_EXEC_RULES).some(([k, v]) => draft[k] !== v) &&
               <p role="alert" className="mt-1 text-amber-300">Needs changes — the canonical base gates were altered. Use the typed triggers above; nothing will be silently substituted.</p>}
           </div>
+          {/* ── Entry Sizing ── */}
+          <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-[12px] text-slate-300">
+            <p className="font-semibold text-white">Entry sizing · how much per BUY ticket</p>
+            <div className="mt-2 flex flex-wrap items-center gap-3">
+              <select value={(draft.entrySizing?.method) || 'PCT_AVAILABLE_CASH'}
+                onChange={(e) => updateDraft({ ...draft, entrySizing: { method: e.target.value, ...(e.target.value === 'FIXED_USD' ? { amount: draft.entrySizing?.amount || '' } : { pct: draft.entrySizing?.pct || 25 }) } })}
+                className="rounded-md bg-slate-800 p-1.5 text-white">
+                <option value="FIXED_USD">Fixed USD per trade</option>
+                <option value="PCT_AVAILABLE_CASH">% of available cash</option>
+              </select>
+              {(draft.entrySizing?.method || 'PCT_AVAILABLE_CASH') === 'FIXED_USD' && (
+                <label className="flex items-center gap-1 text-slate-400">$
+                  <input type="number" min="1" step="1" value={draft.entrySizing?.amount ?? ''} onChange={(e) => updateDraft({ ...draft, entrySizing: { ...draft.entrySizing, amount: e.target.value ? Number(e.target.value) : '' } })}
+                    placeholder="500" className="w-28 rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-white" />
+                </label>
+              )}
+              {(draft.entrySizing?.method || 'PCT_AVAILABLE_CASH') === 'PCT_AVAILABLE_CASH' && (
+                <label className="flex items-center gap-1 text-slate-400">
+                  <input type="number" min="1" max="100" value={draft.entrySizing?.pct ?? 25} onChange={(e) => updateDraft({ ...draft, entrySizing: { ...draft.entrySizing, pct: e.target.value ? Number(e.target.value) : '' } })}
+                    className="w-20 rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-white" /> % of cash
+                </label>
+              )}
+            </div>
+          </div>
+          {/* ── Portfolio Goals (optional) ── */}
+          <details className="rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-[12px] text-slate-300">
+            <summary className="cursor-pointer font-semibold text-white">Portfolio goals (optional) · profit target, equity floor, max trades</summary>
+            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <label className="text-slate-400">Profit target (%)
+                <input type="number" min="0" step="0.1" value={draft.portfolioGoals?.profitTargetPct ?? ''} onChange={(e) => updateDraft({ ...draft, portfolioGoals: { ...(draft.portfolioGoals || {}), profitTargetPct: e.target.value ? Number(e.target.value) : undefined } })}
+                  placeholder="e.g. 20" className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-white" /></label>
+              <label className="text-slate-400">Equity floor (USD)
+                <input type="number" min="0" step="1" value={draft.portfolioGoals?.equityFloorUsd ?? ''} onChange={(e) => updateDraft({ ...draft, portfolioGoals: { ...(draft.portfolioGoals || {}), equityFloorUsd: e.target.value ? Number(e.target.value) : undefined } })}
+                  placeholder="e.g. 90000" className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-white" /></label>
+              <label className="text-slate-400">Max drawdown (%)
+                <input type="number" min="0" max="100" step="0.1" value={draft.portfolioGoals?.maxDrawdownPct ?? ''} onChange={(e) => updateDraft({ ...draft, portfolioGoals: { ...(draft.portfolioGoals || {}), maxDrawdownPct: e.target.value ? Number(e.target.value) : undefined } })}
+                  placeholder="e.g. 15" className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-white" /></label>
+              <label className="text-slate-400">Max trades (completed)
+                <input type="number" min="1" step="1" value={draft.portfolioGoals?.maxTrades ?? ''} onChange={(e) => updateDraft({ ...draft, portfolioGoals: { ...(draft.portfolioGoals || {}), maxTrades: e.target.value ? Number(e.target.value) : undefined } })}
+                  placeholder="e.g. 50" className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-white" /></label>
+              <label className="text-slate-400">End action
+                <select value={draft.portfolioGoals?.endAction || 'CLOSE_ALL_AND_STOP'} onChange={(e) => updateDraft({ ...draft, portfolioGoals: { ...(draft.portfolioGoals || {}), endAction: e.target.value } })}
+                  className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1.5 text-white">
+                  <option value="CLOSE_ALL_AND_STOP">Close all positions and stop</option>
+                  <option value="STOP_ENTRIES_MANAGE_OPEN">Stop new entries, manage open</option>
+                </select></label>
+            </div>
+          </details>
           {draft.requestedPlan && <details className="text-[12px] text-slate-400"><summary className="cursor-pointer">Original request being reviewed</summary><p className="mt-1 whitespace-pre-wrap">{draft.requestedPlan}</p></details>}
           <button type="button" onClick={() => { setGoal(draft.requestedPlan || goal); setDraft(null); setReview(null); setErr(''); }} className="text-[12px] font-semibold text-sky-400 hover:text-sky-300">Edit request &amp; redraft</button>
           {review && (
@@ -462,9 +501,9 @@ function Methodology({ bt, contractHash }) {
 }
 
 /* ===================================================================
-   Paper trading, ON the strategy (M-G)
+   Auto Run, ON the strategy (M-G)
    -------------------------------------------------------------------
-   Build -> save -> start paper trading. No separate setup, no Observe
+   Build -> save -> start Auto Run. No separate setup, no Observe
    mode, no account picker: the strategy owns its own paper wallet and
    its own Status, Activity and Performance.
    =================================================================== */
@@ -485,7 +524,7 @@ function PaperPanel({ sid, name, onChange }) {
       setP(j);
     } catch (error) {
       setP(null);
-      setLoadError(readError('Paper trading status', error));
+      setLoadError(readError('Auto Run status', error));
     }
   }, [sid]);
   useEffect(() => { setP(null); setLoadError(''); setArming(false); setMsg(null); load(); }, [load]);
@@ -543,7 +582,7 @@ function PaperPanel({ sid, name, onChange }) {
       {/* ---- Status + start/stop ---- */}
       <div className="flex flex-wrap items-center gap-2">
         <span className="flex items-center gap-1.5 text-[12px] font-semibold uppercase tracking-wider text-slate-400">
-          <FlaskConical className="h-3.5 w-3.5" />Paper trading
+          <FlaskConical className="h-3.5 w-3.5" />Auto Run
         </span>
         <span className={`inline-flex items-center gap-1.5 rounded-full bg-slate-950/70 px-2 py-0.5 text-[11px] font-semibold ${meta.color}`}>
           <span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />{meta.label}
@@ -560,13 +599,13 @@ function PaperPanel({ sid, name, onChange }) {
               </>
             ) : (
               <Button size="sm" variant="outline" onClick={() => setArming(true)} className="h-7 gap-1 border-slate-700 px-2.5 text-[12px] text-slate-200 hover:bg-slate-800">
-                <Square className="h-3.5 w-3.5" />Stop paper trading
+                <Square className="h-3.5 w-3.5" />Stop Auto Run
               </Button>
             )
           ) : (
             arming ? (
               <>
-                <Button size="sm" disabled={busy || !p.canStart} onClick={() => cmd('start-paper', { approvalMode: 'AUTOPILOT' })} className="h-7 gap-1 bg-emerald-600 px-2.5 text-[12px] hover:bg-emerald-500">
+                <Button size="sm" disabled={busy || !p.canStart} onClick={() => cmd('start-paper', { executionMode: 'AUTO_RUN' })} className="h-7 gap-1 bg-emerald-600 px-2.5 text-[12px] hover:bg-emerald-500">
                   {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
                   Confirm start · Autopilot
                 </Button>
@@ -574,7 +613,7 @@ function PaperPanel({ sid, name, onChange }) {
               </>
             ) : (
               <Button size="sm" disabled={p.paperStatus === 'ARCHIVED' || !p.canStart} onClick={() => setArming(true)} className="h-7 gap-1 bg-emerald-600 px-2.5 text-[12px] hover:bg-emerald-500">
-                <Play className="h-3.5 w-3.5" />{p.paperStatus === 'STOPPED' ? 'Resume paper trading' : 'Start paper trading'}
+                <Play className="h-3.5 w-3.5" />{p.paperStatus === 'STOPPED' ? 'Resume Auto Run' : 'Start Auto Run'}
               </Button>
             )
           )}
@@ -873,7 +912,7 @@ function Detail({ sid, onChange, onRevise }) {
         {bt && bt.error && <p role="alert" className="mt-2 text-[12px] text-amber-400">{bt.message || 'Historical data is incomplete.'}{(bt.missingAssets || []).length ? ` Missing: ${bt.missingAssets.map((a) => `${a.symbol} (${a.reason})`).join(', ')}.` : ''} No weights were changed and no return was calculated.</p>}
       </div>
 
-      {/* Paper trading lives HERE, on the strategy — one journey, no separate setup. */}
+      {/* Auto Run lives HERE, on the strategy — one journey, no separate setup. */}
       <PaperPanel sid={sid} name={s.name} onChange={() => { load(); onChange && onChange(); }} />
 
       {/* Archive is only offered when the strategy is not trading. */}
@@ -953,10 +992,10 @@ export default function StrategyStudio({ chatGoal = '', chatDraftKey = null, cha
       <div className="flex flex-wrap items-center gap-2.5">
         <Crosshair className="h-5 w-5 text-violet-400" />
         <h1 className="text-lg font-bold text-white">Strategies</h1>
-        <span className="text-[12px] text-slate-500">Build with Albert &rarr; save &rarr; start paper trading</span>
+        <span className="text-[12px] text-slate-500">Build with Albert &rarr; save &rarr; start Auto Run</span>
         {liveCount > 0 && (
           <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-300">
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />{liveCount} paper trading
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />{liveCount} Auto Run
           </span>
         )}
         <Button size="sm" onClick={() => { onChatDismiss?.(); setRevision(null); setBuilding(true); setSel(null); }} className="ml-auto gap-1.5 bg-violet-600 hover:bg-violet-500"><Plus className="h-4 w-4" />New with Albert</Button>
@@ -991,7 +1030,7 @@ export default function StrategyStudio({ chatGoal = '', chatDraftKey = null, cha
                 </div>
                 <p className="mt-1 truncate text-[12px] text-slate-500">
                   {(s.contract?.assets || []).map((a) => a.symbol).join(' · ')} · v{s.version}
-                  {s.approvalMode ? ` · ${s.approvalMode === 'AUTOPILOT' ? 'Autopilot' : s.approvalMode}` : ''}
+                  {''  /* mode retired */}
                 </p>
               </button>
             );
@@ -1012,7 +1051,7 @@ export default function StrategyStudio({ chatGoal = '', chatDraftKey = null, cha
       </div>
       <p className="flex items-start justify-center gap-1.5 pt-1 text-center text-[11px] text-slate-600">
         <ShieldCheck className="mt-0.5 h-3 w-3 shrink-0 text-emerald-500/70" />
-        Paper trading only — virtual money, no exchange keys, and it can never place a real order. Saving stores the exact reviewed plan as an immutable, hashed version; starting binds that exact version to the strategy&rsquo;s own paper wallet.
+        Auto Run only — virtual money, no exchange keys, and it can never place a real order. Saving stores the exact reviewed plan as an immutable, hashed version; starting binds that exact version to the strategy&rsquo;s own paper wallet.
       </p>
     </div>
   );

@@ -11,8 +11,10 @@ import re
 from decimal import Decimal, InvalidOperation
 
 SUPPORTED_KINDS = {'PRICE', 'CHANGE_PCT_24H', 'INDICATOR', 'STOP_LOSS_PCT',
-                   'TRAILING_STOP_PCT', 'TAKE_PROFIT_PCT',
-                   'PARTIAL_TAKE_PROFIT_PCT', 'TIME_EXIT'}
+                   'TAKE_PROFIT_PCT'}
+# Retired rule types kept only for historical ledger readability — never accepted
+# in normalize() or requested_triggers() for new strategies.
+_RETIRED_KINDS = {'TRAILING_STOP_PCT', 'PARTIAL_TAKE_PROFIT_PCT', 'TIME_EXIT'}
 INDICATORS = {'RSI_14', 'SMA_20', 'EMA_20', 'MACD_HIST'}
 COMPARISONS = {'ABOVE', 'BELOW'}
 MAX_RULES = 24
@@ -47,28 +49,13 @@ def normalize(raw, symbols):
         value = decimal(row.get('value'))
         if kind not in SUPPORTED_KINDS or side not in ('BUY', 'SELL') or symbol not in symbols:
             errors.append(f'{label}: Needs changes: unsupported rule, side or coin {symbol}.'); continue
-        if kind in ('STOP_LOSS_PCT', 'TRAILING_STOP_PCT', 'TAKE_PROFIT_PCT'):
+        if kind in ('STOP_LOSS_PCT', 'TAKE_PROFIT_PCT'):
             if side != 'SELL' or value is None or not 0 < value < 100:
                 errors.append(f'{label}: Needs changes: a {kind} must be a SELL percentage between 0 and 100.'); continue
             if op or indicator:
                 errors.append(f'{label}: Needs changes: {kind} does not accept an operator or indicator.'); continue
-        elif kind == 'PARTIAL_TAKE_PROFIT_PCT':
-            if side != 'SELL' or value is None or not 0 < value < 100:
-                errors.append(f'{label}: Needs changes: PARTIAL_TAKE_PROFIT_PCT must be a SELL percentage between 0 and 100.'); continue
-            portion_pct = decimal(row.get('portionPct'))
-            portion_of = str(row.get('portionOf') or 'original').lower()
-            if portion_pct is None or not 0 < portion_pct <= 100:
-                errors.append(f'{label}: Needs changes: portionPct (how much of the position to sell) is required, 1–100.'); continue
-            if portion_of not in ('original', 'remaining'):
-                errors.append(f'{label}: Needs changes: portionOf must be "original" or "remaining".'); continue
-        elif kind == 'TIME_EXIT':
-            if side != 'SELL':
-                errors.append(f'{label}: Needs changes: TIME_EXIT must be a SELL rule.'); continue
-            deadline = str(row.get('deadline') or '').strip()
-            try:
-                datetime.datetime.fromisoformat(deadline.replace('Z', '+00:00'))
-            except (ValueError, TypeError):
-                errors.append(f'{label}: Needs changes: TIME_EXIT requires a valid ISO datetime deadline.'); continue
+        elif kind in _RETIRED_KINDS:
+            errors.append(f'{label}: Needs changes: {kind} is no longer supported. Use STOP_LOSS_PCT or TAKE_PROFIT_PCT.'); continue
         elif kind in ('PRICE', 'CHANGE_PCT_24H', 'INDICATOR'):
             if op not in COMPARISONS or value is None or abs(value) > Decimal('1e12') or (kind == 'PRICE' and value <= 0):
                 errors.append(f'{label}: Needs changes: enter an ABOVE/BELOW comparator and a finite threshold within $1 trillion.'); continue
@@ -82,12 +69,6 @@ def normalize(raw, symbols):
         rule = {'kind': kind, 'side': side, 'symbol': symbol, 'operator': op if kind in ('PRICE', 'CHANGE_PCT_24H', 'INDICATOR') else None,
                 'indicator': indicator if kind == 'INDICATOR' else None,
                 'value': str(value.normalize()) if value is not None else None}
-        if kind == 'PARTIAL_TAKE_PROFIT_PCT':
-            rule['portionPct'] = str(decimal(row.get('portionPct')).normalize())
-            rule['portionOf'] = str(row.get('portionOf') or 'original').lower()
-        if kind == 'TIME_EXIT':
-            rule['deadline'] = str(row.get('deadline') or '').strip()
-            rule['value'] = None  # time exits have no price value
         sig = json.dumps(rule, sort_keys=True)
         if sig in seen:
             errors.append(f'{label}: Needs changes: duplicate trigger.'); continue
@@ -128,8 +109,7 @@ def requested_triggers(text, assets):
             raw.append({'kind': kind, 'side': side, 'symbol': sym,
                         'value': value, 'operator': operator, 'indicator': indicator})
             if span: covered.append(span)
-        for match in re.finditer(r'\b(?:trailing\s+stop|trail(?:ing)?\s+by)\s*(?:of\s*)?' + numeric + r'\s*%', clause, re.I):
-            add('TRAILING_STOP_PCT', 'SELL', match.group(1), span=match.span())
+        # Trailing stops are retired — skip parsing them.
         for match in re.finditer(r'\b(?:stop[ -]?loss|stop\s+out)\s*(?:at|of|by)?\s*' + numeric + r'\s*%', clause, re.I):
             add('STOP_LOSS_PCT', 'SELL', match.group(1), span=match.span())
         # Reverse order: "5% stop-loss"
@@ -171,8 +151,7 @@ def requested_triggers(text, assets):
         if raw and not sym and len(named) > 1:
             # Only expand generic percentage exits (TP/SL/trailing) that are
             # coin-agnostic — price/indicator rules require an explicit coin.
-            expandable_kinds = {'STOP_LOSS_PCT', 'TAKE_PROFIT_PCT', 'CHANGE_PCT_24H',
-                                'TRAILING_STOP_PCT', 'PARTIAL_TAKE_PROFIT_PCT'}
+            expandable_kinds = {'STOP_LOSS_PCT', 'TAKE_PROFIT_PCT', 'CHANGE_PCT_24H'}
             if all(r['kind'] in expandable_kinds for r in raw):
                 expanded = []
                 for r in raw:
@@ -188,8 +167,7 @@ def requested_triggers(text, assets):
         if raw and not sym and not named and symbols:
             all_positions = bool(re.search(
                 r'\b(?:all|every|each|per)[\s-]+(?:position|asset|coin)s?\b', clause, re.I))
-            expandable_kinds = {'STOP_LOSS_PCT', 'TAKE_PROFIT_PCT', 'CHANGE_PCT_24H',
-                                'TRAILING_STOP_PCT', 'PARTIAL_TAKE_PROFIT_PCT'}
+            expandable_kinds = {'STOP_LOSS_PCT', 'TAKE_PROFIT_PCT', 'CHANGE_PCT_24H'}
             if all_positions and all(r['kind'] in expandable_kinds for r in raw):
                 expanded = []
                 for r in raw:
@@ -204,8 +182,7 @@ def requested_triggers(text, assets):
         # additional instructions, expand it to all strategy symbols. This handles
         # LLM-fragmented unresolved instructions that are actually valid.
         if raw and not sym and not named and symbols and not expanded_multi:
-            expandable_kinds = {'STOP_LOSS_PCT', 'TAKE_PROFIT_PCT', 'CHANGE_PCT_24H',
-                                'TRAILING_STOP_PCT', 'PARTIAL_TAKE_PROFIT_PCT'}
+            expandable_kinds = {'STOP_LOSS_PCT', 'TAKE_PROFIT_PCT', 'CHANGE_PCT_24H'}
             residual_check = clause
             for start, end in covered:
                 residual_check = residual_check[:start] + ' ' * (end - start) + residual_check[end:]
@@ -350,18 +327,10 @@ def evaluate(rules, side, symbol, mark, *, history=None, lot=None, peak=None, ch
     results = []
     for r in selected:
         kind = r['kind']; threshold = decimal(r['value']); observed = None
-        # ── TIME_EXIT: compare current time against saved deadline ──
-        if kind == 'TIME_EXIT':
-            try:
-                deadline = datetime.datetime.fromisoformat(r['deadline'].replace('Z', '+00:00'))
-                now = datetime.datetime.now(datetime.timezone.utc)
-                meets = now >= deadline
-                results.append({'ruleId': r['ruleId'], 'kind': kind, 'state': 'MET' if meets else 'WAIT',
-                                'observed': now.isoformat(), 'threshold': r['deadline'],
-                                'reason': None if meets else f'WAIT: time exit at {r["deadline"]}, current {now.isoformat()[:16]}.'})
-            except (ValueError, TypeError):
-                results.append({'ruleId': r['ruleId'], 'kind': kind, 'state': 'WAIT',
-                                'reason': f'WAIT: invalid deadline {r.get("deadline")}'})
+        # ── Retired kinds: historical tickets may carry them; always return WAIT ──
+        if kind in _RETIRED_KINDS:
+            results.append({'ruleId': r['ruleId'], 'kind': kind, 'state': 'WAIT',
+                            'reason': f'WAIT: {kind} is retired. This ticket retains the rule for history but it will not trigger.'})
             continue
         if kind == 'PRICE':
             observed = px
@@ -371,18 +340,10 @@ def evaluate(rules, side, symbol, mark, *, history=None, lot=None, peak=None, ch
                 observed = None
         elif kind == 'INDICATOR':
             observed = _indicator(r['indicator'], closes) if closes and all(x is not None and x > 0 for x in closes) else None
-        elif kind == 'PARTIAL_TAKE_PROFIT_PCT':
-            # Partial take profit: same as TAKE_PROFIT_PCT but affects only a portion.
-            if lot and decimal(lot.get('avgEntry')):
-                entry = decimal(lot['avgEntry'])
-                observed = (px - entry) / entry * 100
         elif lot and decimal(lot.get('avgEntry')):
             entry = decimal(lot['avgEntry'])
             if kind == 'STOP_LOSS_PCT': observed = (entry - px) / entry * 100
             elif kind == 'TAKE_PROFIT_PCT': observed = (px - entry) / entry * 100
-            elif kind == 'TRAILING_STOP_PCT':
-                high = max(entry, decimal(peak) or entry, px)
-                observed = (high - px) / high * 100
         if observed is None:
             data_need = ("the asset's rolling 24-hour percentage change" if kind == 'CHANGE_PCT_24H' else
                          'complete, current closed daily candles' if kind == 'INDICATOR' else 'an open position')
@@ -393,20 +354,13 @@ def evaluate(rules, side, symbol, mark, *, history=None, lot=None, peak=None, ch
         result_row = {'ruleId': r['ruleId'], 'kind': kind, 'state': 'MET' if meets else 'WAIT',
                       'observed': str(observed.quantize(Decimal('0.0001'))), 'threshold': str(threshold) if threshold is not None else None,
                       'reason': None if meets else f'WAIT: {symbol} {kind} is {observed:.4f}; waiting for {r.get("operator") or "at least"} {threshold}.'}
-        # Attach partial info so the caller knows how much to sell.
-        if kind == 'PARTIAL_TAKE_PROFIT_PCT' and meets:
-            result_row['portionPct'] = r.get('portionPct')
-            result_row['portionOf'] = r.get('portionOf', 'original')
         results.append(result_row)
     matching = next((r for r in results if r['state'] == 'MET'), None)
     missing = next((r for r in results if r['state'] != 'MET'), None)
     ready = bool(matching) if side == 'SELL' else missing is None
-    partial = None
-    if ready and matching and matching['kind'] == 'PARTIAL_TAKE_PROFIT_PCT':
-        partial = {'portionPct': matching.get('portionPct'), 'portionOf': matching.get('portionOf', 'original')}
     return {'ready': ready, 'reason': None if ready else (missing or results[0])['reason'],
             'results': results, 'matchedRuleId': matching['ruleId'] if ready and matching else None,
-            'partial': partial}
+            'partial': None}
 
 
 # ── Portfolio-level goal extraction ─────────────────────────────────────── #
@@ -449,6 +403,48 @@ def is_portfolio_goal_clause(clause):
     Used to suppress 'unresolved instruction' errors for portfolio goals."""
     clause = str(clause or '').strip()
     for pattern, _field in _PORTFOLIO_GOAL_PATTERNS:
+        if re.search(pattern, clause, re.I):
+            return True
+    return False
+
+
+
+# ── Entry sizing extraction ─────────────────────────────────────────────── #
+_ENTRY_SIZING_PATTERNS = [
+    # "$500 per trade" / "buy $500 worth" / "entry size $500"
+    (r'\b(?:(?:entry|trade|buy|position)\s+(?:size|amount)?\s*(?:of|:)?\s*|(?:invest|deploy|buy)\s+)\$\s*([\d,]+(?:\.\d+)?)\s*(?:per\s+(?:trade|entry|position)|worth|each|usd)?',
+     'FIXED_USD'),
+    # "invest 10% of available cash" / "10% per trade" / "entry size 10%"
+    (r'\b(\d+(?:\.\d+)?)\s*%\s*(?:of\s+(?:available|deployable|free)\s+cash|per\s+(?:trade|entry|position)|(?:entry|trade|position)\s+size)',
+     'PCT_AVAILABLE_CASH'),
+    # "entry size 10% of cash" / "trade 10% of cash"
+    (r'\b(?:entry|trade|position|buy)\s+(?:size\s+)?(\d+(?:\.\d+)?)\s*%\s*(?:of\s+(?:available\s+)?cash)?',
+     'PCT_AVAILABLE_CASH'),
+]
+
+
+def extract_entry_sizing(text):
+    """Parse entry sizing instructions from free text. Returns a dict with
+    method (FIXED_USD or PCT_AVAILABLE_CASH) and amount/pct, or empty dict."""
+    text = str(text or '')
+    for pattern, method in _ENTRY_SIZING_PATTERNS:
+        m = re.search(pattern, text, re.I)
+        if m:
+            try:
+                val = Decimal(m.group(1).replace(',', ''))
+                if method == 'FIXED_USD' and val > 0:
+                    return {'method': 'FIXED_USD', 'amount': str(val)}
+                elif method == 'PCT_AVAILABLE_CASH' and 0 < val <= 100:
+                    return {'method': 'PCT_AVAILABLE_CASH', 'pct': str(val)}
+            except (InvalidOperation, IndexError):
+                pass
+    return {}
+
+
+def is_entry_sizing_clause(clause):
+    """Return True if the clause is ONLY an entry sizing instruction."""
+    clause = str(clause or '').strip()
+    for pattern, _method in _ENTRY_SIZING_PATTERNS:
         if re.search(pattern, clause, re.I):
             return True
     return False

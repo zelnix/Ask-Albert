@@ -3,7 +3,7 @@
 //
 // This screen is review-only. There is NO setup here and no separate "Observe"
 // mode: a strategy is started from the strategy itself (Strategies → pick one →
-// Start paper trading), and it trades its own ring-fenced virtual wallet. Here we
+// Start Auto Run), and it trades its own ring-fenced virtual wallet. Here we
 // simply add it all up so you can see how the whole programme is doing.
 //
 // No real money, no exchange keys — ever.
@@ -11,7 +11,7 @@ import React from 'react';
 import { API_BASE } from '../lib/api';
 import {
   Loader2, FlaskConical, Crosshair, ShieldCheck, TrendingUp, Info, ArrowRight,
-  Bot, AlertTriangle, Wallet,
+  AlertTriangle, Wallet,
 } from 'lucide-react';
 
 const usd = (v) => (v == null ? '\u2014' : '$' + Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 }));
@@ -21,16 +21,18 @@ const pnlColor = (v) => (v == null ? 'text-slate-200' : Number(v) >= 0 ? 'text-e
 const STATUS = {
   SAVED: { label: 'Saved · not trading', color: 'text-slate-300', dot: 'bg-slate-500' },
   STOPPED: { label: 'Stopped', color: 'text-amber-300', dot: 'bg-amber-400' },
-  LIVE: { label: 'Paper trading', color: 'text-emerald-300', dot: 'bg-emerald-400' },
+  LIVE: { label: 'Auto Run active', color: 'text-emerald-300', dot: 'bg-emerald-400' },
   WAIT: { label: 'WAIT · awaiting conditions or data', color: 'text-amber-300', dot: 'bg-amber-400' },
   RESTRICTED_IN_WALLET: { label: 'Restricted in this wallet', color: 'text-amber-300', dot: 'bg-amber-400' },
   NEEDS_CHANGES: { label: 'Needs changes', color: 'text-amber-300', dot: 'bg-amber-400' },
   UNAVAILABLE: { label: 'Worker unavailable', color: 'text-amber-300', dot: 'bg-amber-400' },
   HALTED_RISK: { label: 'Halted — drawdown limit', color: 'text-rose-300', dot: 'bg-rose-400' },
+  HALTED_GOAL_CLOSED: { label: 'Goal reached — all closed', color: 'text-emerald-300', dot: 'bg-emerald-400' },
+  HALTED_GOAL_ENTRIES: { label: 'Goal reached — managing exits', color: 'text-teal-300', dot: 'bg-teal-400' },
+  GOAL_CLOSE_PENDING: { label: 'Goal reached — closing remaining tickets', color: 'text-amber-300', dot: 'bg-amber-400' },
   ARCHIVED: { label: 'Archived', color: 'text-slate-500', dot: 'bg-slate-600' },
 };
 const st = (s) => STATUS[s] || STATUS.SAVED;
-const approvalLabel = (m) => (m === 'AUTOPILOT' ? 'Autopilot' : m === 'OBSERVE' ? 'Observe' : '—');
 
 function PaperBadge() {
   return <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-300"><FlaskConical className="h-3 w-3" />Paper only</span>;
@@ -167,8 +169,8 @@ export default function PaperTradingBot({ onNav }) {
           <p className="mt-2 text-[14px] font-semibold text-white">No strategy is paper trading yet</p>
           <p className="mx-auto mt-1 max-w-[52ch] text-[12.5px] leading-relaxed text-slate-400">
             {rows.length
-              ? `You have ${rows.length} saved ${rows.length === 1 ? 'strategy' : 'strategies'}. Open one and tap “Start paper trading” — it gets its own virtual wallet, and its results appear here.`
-              : 'Build a strategy with Albert, save it, then tap “Start paper trading” on it. Each strategy gets its own virtual wallet, and its results appear here.'}
+              ? `You have ${rows.length} saved ${rows.length === 1 ? 'strategy' : 'strategies'}. Open one and tap “Start Auto Run” — it gets its own virtual wallet, and its results appear here.`
+              : 'Build a strategy with Albert, save it, then tap “Start Auto Run” on it. Each strategy gets its own virtual wallet, and its results appear here.'}
           </p>
           <button onClick={goStrategies} className="mx-auto mt-3 inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-3.5 py-2 text-[13px] font-semibold text-white hover:bg-violet-500">
             <Crosshair className="h-4 w-4" />{rows.length ? 'Go to your strategies' : 'Build a strategy'}
@@ -185,7 +187,7 @@ export default function PaperTradingBot({ onNav }) {
   const summary = !accountsResolved ? 'The owner wallet list is unavailable; no zero balance or empty history is inferred.'
     : [
         live.length
-          ? `${live.length} of your ${rows.length} ${rows.length === 1 ? 'strategy is' : 'strategies are'} paper trading right now${t.autopilotStrategies ? ` (${t.autopilotStrategies} on autopilot)` : ''}.`
+          ? `${live.length} of your ${rows.length} ${rows.length === 1 ? 'strategy is' : 'strategies are'} paper trading right now${t.liveAutoRunStrategies ? ` (${t.liveAutoRunStrategies} on Auto Run)` : ''}.`
           : `None of your strategies are trading right now — ${traded.length} ${traded.length === 1 ? 'has' : 'have'} a wallet with history you can pick back up.`,
         t.value != null
           ? `Together they hold ${usd(t.value)} of the ${usd(t.startingCash)} they started with, so you are ${Number(t.pnlUsd) >= 0 ? 'up' : 'down'} ${signed(t.pnlUsd).replace('+', '')}${t.pnlPct != null ? ` (${t.pnlPct}%)` : ''}.`
@@ -228,8 +230,7 @@ export default function PaperTradingBot({ onNav }) {
             ['Closed trades', String(t.closedTrades ?? 0)],
             ['Win rate', t.winRatePct != null ? `${t.winRatePct}%` : '\u2014'],
             ['Booked profit', signed(t.realizedPnl)],
-            ['Costs paid', usd(t.fees)],
-            ['Awaiting you', '\u2014']].map(([k, v]) => (
+            ['Auto Run strategies', String(t.liveAutoRunStrategies ?? 0)]].map(([k, v]) => (
             <div key={k} className="min-w-0 rounded-lg border border-slate-800 bg-slate-950/60 p-2">
               <p className="text-[10px] uppercase tracking-wide text-slate-500">{k}</p>
               <p className="truncate font-semibold text-slate-200" title={String(v)}>{v}</p>
@@ -261,8 +262,6 @@ export default function PaperTradingBot({ onNav }) {
               ['Marked equity', walletDetail.equity?.value != null ? usd(walletDetail.equity?.value) : 'Unavailable'],
               ['Open positions', String((walletDetail.positions || []).length)],
               ['Realized P/L', signed(walletDetail.performance?.realizedPnl)],
-              ['Fees paid', usd(walletDetail.performance?.fees)],
-              ['Pending proposals', String((walletDetail.pendingProposals || []).length)],
               ['Ledger reconciliation', walletDetail.integrity?.ok === true ? 'MATCH' : walletDetail.integrity?.ok === false ? 'MISMATCH' : 'Unavailable']
             ].map(([label, value]) => <div key={label} className="rounded-md border border-slate-700 bg-slate-950/50 p-2"><p className="text-[10px] uppercase text-slate-500">{label}</p><p className="mt-0.5 break-words font-semibold text-slate-100">{value}</p></div>)}
           </div>
@@ -271,7 +270,7 @@ export default function PaperTradingBot({ onNav }) {
               {(walletDetail.positions || []).length ? (walletDetail.positions || []).map((p) => <p key={p.paperPositionId || p.asset} className="mt-1.5">{p.asset} · {p.netQuantity} units · entry {usd(p.averageEntryPrice)} · {p.currentPrice ? `mark ${usd(p.currentPrice)}` : 'mark unavailable'} · unrealized {p.unrealizedPnl != null ? signed(p.unrealizedPnl) : 'unavailable'}</p>) : <p className="mt-1.5 text-slate-400">No open holdings in this wallet.</p>}
             </div>
             <div className="rounded-md border border-slate-700 p-3"><p className="font-semibold text-white">Completed trade log</p>
-              {(walletDetail.recentActivity || []).filter((e) => e.eventType === 'FILL').length ? (walletDetail.recentActivity || []).filter((e) => e.eventType === 'FILL').slice(0, 10).map((e, i) => <p key={e.ledgerEventId || i} className="mt-1.5">{e.side} {e.asset} · {e.qty} @ {usd(e.fillPx)} · fee {usd(e.fee)} · {relative(e.recordedAt || e.effectiveAt)}</p>) : <p className="mt-1.5 text-slate-400">No completed fills in this wallet’s recent ledger. Proposals are not fills.</p>}
+              {(walletDetail.recentActivity || []).filter((e) => e.eventType === 'FILL').length ? (walletDetail.recentActivity || []).filter((e) => e.eventType === 'FILL').slice(0, 10).map((e, i) => <p key={e.ledgerEventId || i} className="mt-1.5">{e.side} {e.asset} · {e.qty} @ {usd(e.fillPx)} · {relative(e.recordedAt || e.effectiveAt)}</p>) : <p className="mt-1.5 text-slate-400">No completed fills in this wallet’s recent ledger. </p>}
               {(walletDetail.recentActivity || []).length >= 20 && <p className="mt-2 text-amber-200">Latest 20 ledger entries shown. Open Paper Engine for the full audit.</p>}
             </div>
           </div>
@@ -295,12 +294,6 @@ export default function PaperTradingBot({ onNav }) {
                   <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${m.dot}`} />
                   <span className="truncate text-[13px] font-bold text-white">{r.name}</span>
                   <span className={`text-[11px] font-semibold ${m.color}`}>{m.label}</span>
-                  {r.approvalMode && (
-                    <span className="inline-flex items-center gap-1 rounded bg-slate-800/80 px-1.5 py-0.5 text-[10px] font-semibold text-slate-300">
-                      <Bot className="h-3 w-3" />
-                      {approvalLabel(r.approvalMode)}
-                    </span>
-                  )}
                   <span className="ml-auto text-[11px] text-slate-500">{(r.assets || []).join(' · ')}</span>
                 </div>
                 {r.paperAccountId ? (

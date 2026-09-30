@@ -41,7 +41,6 @@ def compute_portfolio_equity(acct, marks):
     cash = _d(acct.get('cash')) or Decimal('0')
     stored_hwm = _d(acct.get('highWaterEquity'))
     realized = _d(acct.get('realizedPnl')) or Decimal('0')
-    fees = _d(acct.get('feesPaid')) or Decimal('0')
     reserve_pct = _d(acct.get('reservePct')) or Decimal('0')
 
     positions = []
@@ -105,7 +104,7 @@ def compute_portfolio_equity(acct, marks):
         'altcoinValueTotal': alt_val_total, 'openRiskUsd': open_risk,
         'openPositionsCount': len([p for p in positions if p['qty'] > 0]),  # ticket count, not symbol count
         'drawdownPct': dd, 'highWater': hwm, 'protectedReserve': protected,
-        'deployableCash': deployable, 'realizedPnl': realized, 'fees': fees,
+        'deployableCash': deployable, 'realizedPnl': realized,
     }
 
 
@@ -172,19 +171,13 @@ def allocate(*, acct, equity_info, candidates, regime, marks,
         pos = held_map.get(sym)
         if not pos or pos['qty'] <= 0:
             continue
-        sp = c.get('sellPlan') or {}
-        delta = _d(sp.get('recommendedDeltaUsd'))
         px, fresh = marks.get(sym, (None, False))
         px = _d(px)
         if px is None or not fresh:
             continue
-        if delta is not None and abs(delta) < (pos['qty'] * px):
-            frac = min(Decimal('1'), (abs(delta) / (pos['qty'] * px)) if px else Decimal('1'))
-            action = 'TRIM'
-        else:
-            frac = Decimal('1'); action = 'EXIT'
-        intents.append({'symbol': sym, 'action': action, 'fraction': frac,
-                        'reason': sp.get('reasonCode') or 'CANONICAL_SELL',
+        # Always EXIT (full close of the ticket). No partial TRIM.
+        intents.append({'symbol': sym, 'action': 'EXIT', 'fraction': Decimal('1'),
+                        'reason': 'CANONICAL_SELL',
                         'canonical': c})
 
     if equity is None or not equity_info.get('available'):
@@ -218,7 +211,6 @@ def allocate(*, acct, equity_info, candidates, regime, marks,
     open_count = equity_info.get('positionCount') or equity_info.get('openPositionsCount') or 0
 
     ranked = rank_opportunities([c for c in candidates if c.get('action') == 'BUY'])
-    unfunded_strong = []   # strong BUYs blocked purely by slot/exposure limits (rotation inputs)
 
     for c in ranked:
         sym = (c.get('symbol') or '').upper()
@@ -236,7 +228,7 @@ def allocate(*, acct, equity_info, candidates, regime, marks,
         # concurrent-position ceiling (only blocks NEW positions)
         if is_new and open_count >= profile['maxConcurrentPositions']:
             entry['skip'] = 'MAX_CONCURRENT_POSITIONS'
-            unfunded_strong.append(c); diag['skipped'].append(entry); continue
+            diag['skipped'].append(entry); continue
 
         tier = c.get('tier') or P.cap_tier(sym, c.get('rank'))
         cap_pct = P.per_asset_cap_pct(sym, c.get('rank'), profile, tier=tier)
@@ -252,10 +244,7 @@ def allocate(*, acct, equity_info, candidates, regime, marks,
         remaining_combined_risk = combined_risk_budget - cur_open_risk
         max_by_combined_risk = (remaining_combined_risk / stop_dist) if stop_dist > 0 else Decimal('0')
 
-        prof = P.asset_profile(sym, c.get('rank'), tier=tier)
-        liq_scale = prof['liquidityScale']
-
-        # find the BINDING limit (M5.1: surfaced on the intent for the rotation record)
+        # find the BINDING limit — no hidden liquidity scaling
         cap_labels = [('PER_ASSET_CAP', room_cap), ('REGIME_DEPLOY_CEILING', room_deploy),
                       ('ALTCOIN_EXPOSURE_CAP', room_alt), ('PER_TRADE_RISK', max_by_trade_risk),
                       ('COMBINED_OPEN_RISK', max_by_combined_risk), ('FREE_USDC', deployable),
@@ -264,22 +253,21 @@ def allocate(*, acct, equity_info, candidates, regime, marks,
         for label, cap in cap_labels:
             if cap is not None and cap < notional:
                 notional = cap; bound_by = label
-        notional = notional * liq_scale
+        # No liquidity scaling — the strategy's reviewed entry sizing governs.
         notional = core.q_cash(notional)
 
         blocked_by_limit = (room_cap <= 0 or room_deploy <= 0 or room_alt <= 0)
         if notional is None or notional < MIN_NOTIONAL:
             entry['skip'] = 'BELOW_MIN_OR_NO_ROOM'
             entry['notional'] = str(notional)
-            if blocked_by_limit and is_new:
-                unfunded_strong.append(c)
             diag['skipped'].append(entry); continue
 
-        action = 'ADD' if not is_new else 'BUY'
+        # Always BUY — a repeated buy for a held coin creates another ticket.
+        action = 'BUY'
         added_risk = notional * stop_dist
         intents.append({'symbol': sym, 'action': action, 'notional': notional,
                         'markPx': px, 'stopDist': stop_dist, 'riskPct': risk_pct,
-                        'tier': tier, 'boundBy': bound_by, 'profile': prof, 'canonical': c,
+                        'tier': tier, 'boundBy': bound_by, 'canonical': c,
                         'invalidationPrice': _d(c.get('invalidationPrice'))})
         # decrement running budgets
         cur_deployed += notional
@@ -292,53 +280,12 @@ def allocate(*, acct, equity_info, candidates, regime, marks,
         entry['funded'] = str(notional); entry['tier'] = tier
         diag['ranked'].append(entry)
 
-    # ---- deterministic rotation: free a slot/exposure for a stronger opportunity ----
-    rot = plan_rotation(equity_info=equity_info, unfunded_strong=unfunded_strong,
-                        candidates=candidates, marks=marks, profile=profile,
-                        existing_intents=intents, holding_scores=holding_scores)
-    if rot:
-        intents.append(rot)
-        diag['rotation'] = {'exit': rot['symbol'], 'for': rot.get('rotateFor'),
-                            'reducedScore': str(rot.get('reducedScore')),
-                            'targetScore': str(rot.get('targetScore'))}
+    # Rotation is retired — no EXIT-to-fund-BUY logic.
     return {'intents': intents, 'diagnostics': diag}
 
 
-def plan_rotation(*, equity_info, unfunded_strong, candidates, marks, profile,
-                  existing_intents, holding_scores=None):
-    """If a strong approved BUY was blocked ONLY by slot/exposure limits, and a
-    weaker HELD asset lags it by at least the rotation margin, emit a single EXIT
-    of the weakest laggard to free capital/slot for the next tick. Deterministic
-    and self-funding: it only sells; the freed cash is used on a subsequent tick,
-    so it can never exceed available cash or the open-risk budget."""
-    if not unfunded_strong:
-        return None
-    best = rank_opportunities(unfunded_strong)[0]
-    best_score = _d(best.get('score')) or Decimal('0')
-
-    # scores of held assets: prefer the full holding_scores map (covers HOLD decisions),
-    # fall back to the actionable candidates.
-    score_by_sym = {(c.get('symbol') or '').upper(): (_d(c.get('score')) or Decimal('0'))
-                    for c in candidates}
-    if holding_scores:
-        for k, v in holding_scores.items():
-            score_by_sym[(k or '').upper()] = _d(v) or Decimal('0')
-    already = {i['symbol'] for i in existing_intents if i.get('action') in ('EXIT', 'TRIM', 'SELL')}
-    laggards = []
-    for p in equity_info.get('positions', []):
-        sym = p['symbol']
-        if p['qty'] <= 0 or sym in already or not p.get('markFresh'):
-            continue
-        if sym == (best.get('symbol') or '').upper():
-            continue
-        hs = score_by_sym.get(sym, Decimal('0'))
-        laggards.append((hs, sym, p))
-    if not laggards:
-        return None
-    laggards.sort(key=lambda t: (t[0], t[1]))   # weakest score, then symbol
-    hs, sym, pos = laggards[0]
-    if (best_score - hs) < profile['rotationMargin']:
-        return None
-    return {'symbol': sym, 'action': 'EXIT', 'fraction': Decimal('1'),
-            'reason': 'ROTATION', 'rotateFor': (best.get('symbol') or '').upper(),
-            'reducedScore': hs, 'targetScore': best_score}
+def plan_rotation(*, equity_info=None, unfunded_strong=None, candidates=None,
+                  marks=None, profile=None, existing_intents=None, holding_scores=None):
+    """RETIRED — rotation is no longer part of the execution model.
+    Returns None unconditionally. Kept as a stub so legacy callers don't error."""
+    return None

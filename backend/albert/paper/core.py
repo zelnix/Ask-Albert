@@ -41,7 +41,8 @@ MIN_NOTIONAL = Decimal('10')      # minimum simulated order notional
 
 SUPPORTED_ENGINE_VERSIONS = {'albert-decide-v2', 'albert-decide-v3', 'albert-decide-v4'}
 DECISION_TTL_MIN = 30
-PROPOSAL_TTL_MIN = 30
+# Legacy constant — retained only so historical code references don't error.
+PROPOSAL_TTL_MIN = 30  # unused
 
 
 # ============================ Decimal helpers ================================ #
@@ -173,7 +174,7 @@ def new_account_economics(starting_cash, reserve_pct):
     sc = q_cash(starting_cash) or Decimal('100000.00')
     return {
         'cash': to128(sc), 'startingCash': to128(sc),
-        'realizedPnl': to128(Decimal('0')), 'feesPaid': to128(Decimal('0')),
+        'realizedPnl': to128(Decimal('0')),
         'reservePct': to128(D(reserve_pct) or Decimal('0')),
         'highWaterEquity': to128(sc),  # HWM starts at opening equity (fully in cash)
         'lots': [], 'closedLots': [], 'ledger': [], 'idemKeys': [],
@@ -546,7 +547,7 @@ def reconcile_multi(acct):
 
 def apply_buy_atomic(col, acct_id, pid, expected_version, idem_key, proposal_id,
                      sizing, canonical, base_currency='USDC', asset=None, price_q=PRICE_Q,
-                     strategy_version=None, strategy_hash=None, required_mode=None,
+                     strategy_version=None, strategy_hash=None,
                      ticket_rules=None):
     """Apply a BUY as ONE conditional update. Idempotent + concurrency-safe.
 
@@ -564,8 +565,7 @@ def apply_buy_atomic(col, acct_id, pid, expected_version, idem_key, proposal_id,
             return None, 'NOT_FOUND', 404
         if strategy_version is not None and (acct.get('runtimeState') != 'RUNNING' or
                                               acct.get('strategyVersion') != strategy_version or
-                                              acct.get('strategyContractHash') != strategy_hash or
-                                              (required_mode is not None and acct.get('mode') != required_mode)):
+                                              acct.get('strategyContractHash') != strategy_hash):
             return None, 'STRATEGY_CHANGED_OR_STOPPED', 409
         # Idempotent replay?
         for ap in (acct.get('appliedApprovals') or []):
@@ -577,14 +577,12 @@ def apply_buy_atomic(col, acct_id, pid, expected_version, idem_key, proposal_id,
             expected_version = acct.get('version')
 
         cash = D(acct.get('cash')) or Decimal('0')
-        fees = D(acct.get('feesPaid')) or Decimal('0')
         notional = D(sizing['notional']); fill_px = D(sizing['fillPx'])
-        fee = D(sizing.get('fee')) or Decimal('0'); qty = D(sizing['qty'])
+        qty = D(sizing['qty'])
         # Enforce cash sufficiency at the moment of write (not at sizing time).
         if notional > cash:
             return None, 'INSUFFICIENT_CASH', 409
         new_cash = q_cash(cash - notional)
-        new_fees = q_cash(fees + fee)
 
         # ── ALWAYS create a new ticket — never merge into an existing lot ──
         lots = list(acct.get('lots') or [])
@@ -593,7 +591,7 @@ def apply_buy_atomic(col, acct_id, pid, expected_version, idem_key, proposal_id,
             'lotId': lot_id, 'asset': asset, 'status': 'OPEN',
             'qty': to128(qty), 'originalQty': to128(qty),
             'avgEntry': to128(fill_px), 'costBasis': to128(notional),
-            'realizedPnl': to128(Decimal('0')), 'feesPaid': to128(fee),
+            'realizedPnl': to128(Decimal('0')),
             'openedAt': datetime.datetime.utcnow().isoformat(),
             'entryDecisionSnapshotId': canonical.get('decisionSnapshotId'),
             'entryDecisionId': canonical.get('decisionId'),
@@ -614,16 +612,16 @@ def apply_buy_atomic(col, acct_id, pid, expected_version, idem_key, proposal_id,
         led = _ledger_entry(seq, 'FILL', lot_id, -notional,
                             'BUY %s %s @ %s · ticket %s' % (qty_dstr(qty), asset, dstr(fill_px, pq), lot_id),
                             extra={'side': 'BUY', 'asset': asset, 'qty': qty_dstr(qty), 'fillPx': dstr(fill_px, pq),
-                                   'fee': dstr(fee), 'notional': dstr(notional), 'proposalId': proposal_id})
+                                   'notional': dstr(notional)})
         result = {'side': 'BUY', 'asset': asset, 'qty': qty_dstr(qty), 'fillPrice': dstr(fill_px, pq),
-                  'fee': dstr(fee), 'notional': dstr(notional), 'positionId': lot_id, 'ticketId': lot_id,
+                  'notional': dstr(notional), 'positionId': lot_id, 'ticketId': lot_id,
                   'decisionSnapshotId': canonical.get('decisionSnapshotId'), 'paperOnly': True}
         applied = {'idemKey': idem_key, 'proposalId': proposal_id, 'result': result,
                    'at': datetime.datetime.utcnow().isoformat()}
         upd = col.find_one_and_update(
             {'paperAccountId': acct_id, 'ownerId': pid, 'version': expected_version,
              'idemKeys': {'$ne': idem_key}, 'consumedProposals': {'$ne': proposal_id}},
-            {'$set': {'cash': to128(new_cash), 'feesPaid': to128(new_fees), 'lots': lots},
+            {'$set': {'cash': to128(new_cash), 'lots': lots},
              '$push': {'ledger': led,
                        'idemKeys': {'$each': [idem_key], '$slice': -500},
                        'consumedProposals': {'$each': [proposal_id], '$slice': -500},
@@ -634,15 +632,14 @@ def apply_buy_atomic(col, acct_id, pid, expected_version, idem_key, proposal_id,
     return None, 'CONCURRENCY_RETRY_EXHAUSTED', 409
 
 
-def apply_sell_atomic(col, acct_id, pid, sizing, source='approval', idem_key=None,
+def apply_sell_atomic(col, acct_id, pid, sizing, source='auto', idem_key=None,
                       proposal_id=None, canonical=None, base_currency='USDC', asset=None, price_q=PRICE_Q,
-                      strategy_version=None, strategy_hash=None, required_mode=None,
+                      strategy_version=None, strategy_hash=None,
                       completed_rule_id=None, ticket_id=None):
     """Apply a reduce-only SELL as ONE conditional update.
 
-    TICKET MODEL: if ticket_id is provided, ONLY that ticket is affected. Other
-    tickets for the same asset remain untouched. If ticket_id is None, falls back
-    to the first lot for the asset (legacy compat).
+    TICKET MODEL: ticket_id is REQUIRED. Every SELL targets a specific ticket.
+    Other tickets for the same asset remain untouched.
 
     Returns (result_dict, error_code, http_status)."""
     asset = (asset or sizing.get('asset') or (canonical or {}).get('asset') or 'BTC').upper()
@@ -652,24 +649,23 @@ def apply_sell_atomic(col, acct_id, pid, sizing, source='approval', idem_key=Non
         if not acct:
             return None, 'NOT_FOUND', 404
         if strategy_version is not None and (acct.get('strategyVersion') != strategy_version or
-                                              acct.get('strategyContractHash') != strategy_hash or
-                                              (required_mode is not None and acct.get('mode') != required_mode)):
+                                              acct.get('strategyContractHash') != strategy_hash):
             return None, 'STRATEGY_CHANGED', 409
         if idem_key:
             for ap in (acct.get('appliedApprovals') or []):
                 if ap.get('idemKey') == idem_key:
                     return ap.get('result'), None, 200
-        # Find the target ticket — by ID or by symbol (legacy fallback).
-        lot = _ticket_by_id(acct, ticket_id) if ticket_id else _lot_for(acct, asset)
+        # Find the target ticket — by ID only. Symbol-only fallback is removed.
+        if not ticket_id:
+            return None, 'TICKET_ID_REQUIRED', 422
+        lot = _ticket_by_id(acct, ticket_id)
         if not lot or (D(lot.get('qty')) or Decimal('0')) <= 0:
             return None, 'NO_POSITION', 404
         target_lot_id = lot.get('lotId')
         expected_version = acct.get('version')
         cash = D(acct.get('cash')) or Decimal('0')
-        fees = D(acct.get('feesPaid')) or Decimal('0')
         realized_acc = D(acct.get('realizedPnl')) or Decimal('0')
         qty = sizing['qty']; fill_px = sizing['fillPx']
-        fee = sizing.get('fee') or Decimal('0')
         oq = D(lot.get('qty')); ocb = D(lot.get('costBasis'))
         qty = q_qty(min(oq, qty))
         # Direct-price accounting: proceeds = qty × fill, P&L = proceeds − cost portion.
@@ -677,7 +673,6 @@ def apply_sell_atomic(col, acct_id, pid, sizing, source='approval', idem_key=Non
         cost_portion = q_cash(ocb * (qty / oq)) if oq > 0 else Decimal('0')
         realized = q_cash(proceeds - cost_portion)
         new_cash = q_cash(cash + proceeds)
-        new_fees = q_cash(fees + fee)
         new_realized = q_cash(realized_acc + realized)
         remaining = q_qty(oq - qty)
         lots = list(acct.get('lots') or [])
@@ -710,14 +705,14 @@ def apply_sell_atomic(col, acct_id, pid, sizing, source='approval', idem_key=Non
                             'SELL %s %s @ %s (PnL %s) · %s · ticket %s'
                             % (qty_dstr(qty), asset, dstr(fill_px, pq), dstr(realized), source, target_lot_id),
                             extra={'side': 'SELL', 'asset': asset, 'qty': qty_dstr(qty), 'fillPx': dstr(fill_px, pq),
-                                   'fee': dstr(fee), 'proceeds': dstr(proceeds), 'realized': dstr(realized),
-                                   'costPortion': dstr(cost_portion), 'proposalId': proposal_id,
+                                   'proceeds': dstr(proceeds), 'realized': dstr(realized),
+                                   'costPortion': dstr(cost_portion),
                                    'completedRuleId': completed_rule_id, 'ticketId': target_lot_id})
         result = {'side': 'SELL', 'asset': asset, 'qty': qty_dstr(qty), 'fillPrice': dstr(fill_px, pq),
-                  'fee': dstr(fee), 'proceeds': dstr(proceeds), 'realized': dstr(realized),
+                  'proceeds': dstr(proceeds), 'realized': dstr(realized),
                   'ticketId': target_lot_id, 'paperOnly': True}
         push = {'ledger': led}
-        setd = {'cash': to128(new_cash), 'feesPaid': to128(new_fees),
+        setd = {'cash': to128(new_cash),
                 'realizedPnl': to128(new_realized), 'lots': lots, 'closedLots': closed}
         flt = {'paperAccountId': acct_id, 'ownerId': pid, 'version': expected_version}
         if idem_key:

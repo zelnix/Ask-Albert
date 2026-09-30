@@ -108,16 +108,14 @@ def per_asset_cap_pct(symbol, rank=None, profile=AGGRESSIVE_EXPERIENCED_V1, tier
 
 
 # =========================== per-asset exec profiles ========================= #
-# Price precision + conservative (fee/spread/slippage) + liquidity SCALE (<=1)
-# that shrinks position sizing for less-liquid / more-volatile assets. Higher
-# tiers = tighter markets = larger allowable size.
-BPS = Decimal('10000')
+# Price precision per tier. Fee/spread/slippage fields are RETIRED — the paper
+# simulator uses direct observed-price fills with zero synthetic cost.
 
 _TIER_EXEC = {
-    'BTC':   {'priceQ': Decimal('0.01'),   'feeBps': Decimal('40'), 'spreadBps': Decimal('5'),  'slippageBps': Decimal('8'),  'liquidityScale': Decimal('1.00')},
-    'LARGE': {'priceQ': Decimal('0.01'),   'feeBps': Decimal('40'), 'spreadBps': Decimal('8'),  'slippageBps': Decimal('12'), 'liquidityScale': Decimal('0.90')},
-    'MID':   {'priceQ': Decimal('0.0001'), 'feeBps': Decimal('45'), 'spreadBps': Decimal('15'), 'slippageBps': Decimal('30'), 'liquidityScale': Decimal('0.65')},
-    'SPEC':  {'priceQ': Decimal('0.00001'),'feeBps': Decimal('50'), 'spreadBps': Decimal('25'), 'slippageBps': Decimal('60'), 'liquidityScale': Decimal('0.40')},
+    'BTC':   {'priceQ': Decimal('0.01'),   'liquidityScale': Decimal('1.00')},
+    'LARGE': {'priceQ': Decimal('0.01'),   'liquidityScale': Decimal('1.00')},
+    'MID':   {'priceQ': Decimal('0.0001'), 'liquidityScale': Decimal('1.00')},
+    'SPEC':  {'priceQ': Decimal('0.00001'),'liquidityScale': Decimal('1.00')},
 }
 
 # Per-symbol price-precision overrides (only where the tier default is too coarse).

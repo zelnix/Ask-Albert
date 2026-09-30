@@ -3866,14 +3866,13 @@ def _remediation_flag(name: str, default: bool) -> bool:
     return v.strip().lower() in ('1', 'true', 'yes', 'on')
 
 
-# Both default OFF for the entire remediation programme.
+# Paper execution emergency switch. Retained as the sole environment-level safety control.
 PAPER_EXECUTION_ENABLED = _remediation_flag('PAPER_EXECUTION_ENABLED', False)
-PAPER_AUTOPILOT_ENABLED = _remediation_flag('PAPER_AUTOPILOT_ENABLED', False)
-# M5 Expert Multi-Asset Trader. When ON the background worker manages a multi-asset
-# portfolio (BTC + approved altcoins). Default ON alongside M4 flags.
-PAPER_MULTI_ASSET_ENABLED = _remediation_flag('PAPER_MULTI_ASSET_ENABLED', True)
-PAPER_EXEC_DISABLED_MSG = ('Paper execution is disabled pending remediation and '
-                           'acceptance. No simulated fills are placed in this build.')
+# Legacy flags — kept as True to avoid breaking existing references, scheduled for deletion.
+PAPER_AUTOPILOT_ENABLED = True
+PAPER_MULTI_ASSET_ENABLED = True
+PAPER_EXEC_DISABLED_MSG = ('Paper execution is disabled by the environment safety switch. '
+                           'No simulated fills are placed.')
 
 
 @app.post('/api/auth/google')
@@ -5996,7 +5995,7 @@ def _startup():
         # Price-watch alerts created from Albert chat: check crossings every 60s.
         scheduler.add_job(_check_price_watches, 'interval', seconds=60, id='price_watch_check',
                           misfire_grace_time=120)
-        # Background Paper Autopilot: the durable worker that trades paper accounts
+        # Background Paper Auto Run: the durable worker that trades paper accounts
         # WITHOUT any browser/dashboard being open. Runs every 30s, one instance.
         scheduler.add_job(_paper_autopilot_worker, 'interval', seconds=30, id='paper_autopilot',
                           replace_existing=True, coalesce=True, max_instances=1,
@@ -7817,10 +7816,10 @@ def _simulation_cg_get(path, params):
 _verified_market.configure_coingecko(_simulation_cg_get)
 
 PAPER_EXEC_PROFILE = {'executionProfileId': 'ep_direct_price_v2',
-                      'feeBps': 0, 'spreadBps': 0, 'slippageBps': 0,
                       'model': 'direct_price',
                       'note': 'Paper trading fills at the observed market price with zero fees.'}
-PAPER_PROPOSAL_TTL_MIN = _paper_core.PROPOSAL_TTL_MIN
+# PROPOSAL_TTL_MIN is retired; kept for historical reference only.
+PAPER_PROPOSAL_TTL_MIN = 30
 
 
 def _paper_btc_mark():
@@ -7873,7 +7872,7 @@ def _paper_equity(acct, persist=False):
             'value': info['equityStr'], 'cash': _s(info['cash']),
             'protectedReserve': _s(info['protectedReserve']),
             'deployableCash': _s(info['deployableCash']),
-            'realizedPnl': _s(info['realizedPnl']), 'fees': _s(info['fees']),
+            'realizedPnl': _s(info['realizedPnl']),
             'unrealizedPnl': _s(info['unrealized']),
             'drawdownPct': _s(info['drawdownPct'], _paper_core.PCT_Q),
             'highWater': _s(info['highWater']),
@@ -8093,7 +8092,7 @@ def _paper_proposal_public(prop):
     return {k: v for k, v in (prop or {}).items() if k != '_id'}
 
 
-# ------------------------- Background Paper Autopilot -------------------------
+# ------------------------- Background Paper Auto Run -------------------------
 # A durable worker (APScheduler job, max_instances=1) runs independently of any
 # browser/dashboard. It is the ONLY thing that trades. GET/dashboard is read-only.
 _AUTOPILOT = {'lastRunAt': None, 'lastCompletedAt': None, 'state': 'starting',
@@ -8269,7 +8268,7 @@ def _autopilot_process_account(acct):
                     _autopilot_set_vis(acct_id, lastTradeAt=now_iso)
                     paper_accounts_col.update_one({'paperAccountId': acct_id},
                                                   {'$set': {'marketObservationCursor': mark_ts}})
-                    _autopilot_notify(pid, acct_id, 'Paper Autopilot bought BTC',
+                    _autopilot_notify(pid, acct_id, 'Paper Auto Run bought BTC',
                                       'Auto-executed a simulated BUY on a fresh decision. Paper only — no real money.')
         else:  # SELL / EXIT / TRIM (reduce-only) — allowed even if paused
             s = _paper_core.run_exit_gates(acct=acct, mark_px=px, mark_fresh=fresh,
@@ -8282,7 +8281,7 @@ def _autopilot_process_account(acct):
                     _autopilot_set_vis(acct_id, lastTradeAt=now_iso)
                     paper_accounts_col.update_one({'paperAccountId': acct_id},
                                                   {'$set': {'marketObservationCursor': mark_ts}})
-                    _autopilot_notify(pid, acct_id, 'Paper Autopilot reduced BTC',
+                    _autopilot_notify(pid, acct_id, 'Paper Auto Run reduced BTC',
                                       'Auto-executed a simulated %s. Paper only — no real money.' % canonical['action'])
         _autopilot_set_vis(acct_id, lastDecisionProcessed=sid)
         paper_accounts_col.update_one({'paperAccountId': acct_id}, {'$set': {'lastProcessedDecisionSnapshotId': sid}})
@@ -8320,40 +8319,46 @@ def _strategy_syms(strat):
 
 
 def _studio_entry_budget(strat, symbol, desired, acct, equity_info):
-    """Cap a canonical BUY at the reviewed plan's weight, reserve and position count.
+    """Cap a BUY at the strategy's reviewed entry sizing, reserve and position count.
 
-    None means WAIT. Unsupported/old prose never becomes a paper trading rule.
-    The existing paper risk/mandate gates still make the final decision.
+    Uses the strategy's explicit entrySizing (FIXED_USD or PCT_AVAILABLE_CASH)
+    instead of hidden weight-based or profile-based sizing. Returns None if
+    the sizing is missing, or the budget is below the minimum notional.
     """
     if not strat or not strat.get('latest') or strat.get('status') != 'PAPER_ACTIVE':
         return None
     c = strat.get('contract') or {}
-    if (c.get('timeframe') != 'paper cycle' or
-            any(c.get(k) != v for k, v in STUDIO_RULES.items()) or
-            _studio_plan_unsupported(c.get('requestedPlan'), c.get('assets'), c.get('rules'))):
+    if not equity_info.get('available'):
         return None
-    risks = c.get('riskLimits') or {}
-    if (c.get('maxDrawdownPct') is not None or risks.get('stopLossPct') is not None
-            or risks.get('maxTradeRiskPct') is not None or not equity_info.get('available')):
-        return None
-    asset = next((a for a in c.get('assets') or [] if a.get('symbol') == symbol), None)
-    if not asset:
-        return None
-    positions = equity_info.get('positions') or []
-    held = [p for p in positions if p.get('symbol') == symbol and p.get('qty', 0) > 0]
-    if not held and equity_info.get('openPositionsCount', 0) >= int(risks.get('maxPositions') or 0):
-        return None
+    es = c.get('entrySizing')
+    # Legacy contracts without entrySizing: fall back to the canonical recommended amount
+    # capped by reserve and position limits (but never hidden profiles/liquidity scaling).
     equity = _paper_core.D(equity_info.get('equity'))
     cash = _paper_core.D(equity_info.get('cash'))
-    weight = _paper_core.D(asset.get('weightPct'))
     reserve = _paper_core.D(c.get('reservePct')) or Decimal('0')
     account_reserve = _paper_core.D(acct.get('reservePct')) or Decimal('0')
-    if equity is None or cash is None or weight is None or equity <= 0 or weight <= 0:
+    if equity is None or cash is None or equity <= 0:
         return None
-    held_value = sum((_paper_core.D(p.get('value')) or Decimal('0') for p in held), Decimal('0'))
-    remaining_weight = equity * weight / Decimal('100') - held_value
     deployable = cash - equity * max(reserve, account_reserve) / Decimal('100')
-    budget = min(_paper_core.D(desired) or Decimal('0'), remaining_weight, deployable)
+    if deployable < _paper_core.MIN_NOTIONAL:
+        return None
+    # Position count check.
+    risks = c.get('riskLimits') or {}
+    max_pos = int(risks.get('maxPositions') or len(c.get('assets') or []))
+    open_count = equity_info.get('openPositionsCount', 0)
+    # Only block new assets; a repeated BUY for a held coin still opens a new ticket.
+    held_syms = {(p.get('symbol') or '').upper() for p in (equity_info.get('positions') or [])
+                 if p.get('qty', 0) > 0}
+    if symbol.upper() not in held_syms and open_count >= max_pos:
+        return None
+    if es and es.get('method') == 'FIXED_USD':
+        budget = min(_paper_core.D(es.get('amount')) or Decimal('0'), deployable)
+    elif es and es.get('method') == 'PCT_AVAILABLE_CASH':
+        pct = _paper_core.D(es.get('pct')) or Decimal('0')
+        budget = min(deployable * pct / Decimal('100'), deployable)
+    else:
+        # Legacy fallback: use the canonical recommended amount, capped by deployable cash.
+        budget = min(_paper_core.D(desired) or Decimal('0'), deployable)
     return budget if budget >= _paper_core.MIN_NOTIONAL else None
 
 
@@ -8499,7 +8504,12 @@ def _check_portfolio_goals(acct, equity_info, marks, mark_obs):
 
 
 def _execute_goal_action(acct, trigger, reason, equity_info, marks):
-    """Execute the portfolio goal end action: close-all-and-stop or stop-entries."""
+    """Execute the portfolio goal end action: close-all-and-stop or stop-entries.
+    
+    GOAL_CLOSE_PENDING: When CLOSE_ALL_AND_STOP is the action but some tickets
+    lack a fresh mark, we enter GOAL_CLOSE_PENDING instead of HALTED_GOAL_CLOSED.
+    The worker will retry closing unpriced tickets on each cycle until all are done.
+    """
     acct_id = acct['paperAccountId']
     pid = acct['ownerId']
     goals = acct.get('portfolioGoals') or {}
@@ -8508,6 +8518,7 @@ def _execute_goal_action(acct, trigger, reason, equity_info, marks):
 
     if action == 'CLOSE_ALL_AND_STOP':
         # Close ALL open tickets at observed market prices.
+        unpriced_tickets = 0
         for lot in list(acct.get('lots') or []):
             sym = (lot.get('asset') or '').upper()
             qty = _paper_core.D(lot.get('qty')) or Decimal('0')
@@ -8515,15 +8526,21 @@ def _execute_goal_action(acct, trigger, reason, equity_info, marks):
                 continue
             px, fresh = marks.get(sym, (None, False))
             if px is None or not fresh:
+                unpriced_tickets += 1
                 continue
             sizing = _paper_core.ticket_sell_sizing(sym, qty, px)
             if sizing.get('reject'):
+                unpriced_tickets += 1
                 continue
             _paper_core.apply_sell_atomic(
                 paper_accounts_col, acct_id, pid, sizing, source='goal_close',
                 idem_key='goal:%s:%s:%s' % (lot.get('lotId'), trigger, now_iso),
                 asset=sym, ticket_id=lot.get('lotId'))
-        new_state = 'HALTED_GOAL_CLOSED'
+        # If any tickets couldn't be closed (no mark), use GOAL_CLOSE_PENDING.
+        if unpriced_tickets > 0:
+            new_state = 'GOAL_CLOSE_PENDING'
+        else:
+            new_state = 'HALTED_GOAL_CLOSED'
     else:
         # Stop new entries but keep managing open tickets.
         new_state = 'HALTED_GOAL_ENTRIES'
@@ -8538,12 +8555,48 @@ def _execute_goal_action(acct, trigger, reason, equity_info, marks):
             'goalStatus.endAction': action,
         }})
     _paper_ledger_add(acct_id, 'GOAL_HALT', 'account', acct_id, None, None,
-                      'Portfolio goal triggered: %s. Action: %s.' % (reason, action))
+                      'Portfolio goal triggered: %s. Action: %s.%s' % (
+                          reason, action,
+                          ' Some tickets await a mark for closure.' if new_state == 'GOAL_CLOSE_PENDING' else ''))
     _autopilot_notify(pid, acct_id, 'Portfolio goal reached',
                       '%s. %s. Paper only.' % (reason,
-                          'All positions closed and strategy stopped.' if action == 'CLOSE_ALL_AND_STOP'
+                          'All positions closed and strategy stopped.' if new_state == 'HALTED_GOAL_CLOSED'
+                          else 'Closing positions — some tickets await a fresh mark.' if new_state == 'GOAL_CLOSE_PENDING'
                           else 'New entries stopped; open tickets will continue to be managed.'),
                       'success' if trigger == 'PROFIT_TARGET' else 'warning')
+
+
+
+def _retry_goal_close_pending(acct, marks):
+    """GOAL_CLOSE_PENDING: attempt to close any remaining open tickets that
+    previously lacked a fresh mark. Transition to HALTED_GOAL_CLOSED once
+    every ticket is closed."""
+    acct_id = acct['paperAccountId']
+    pid = acct['ownerId']
+    now_iso = datetime.datetime.utcnow().isoformat()
+    still_open = 0
+    for lot in list(acct.get('lots') or []):
+        sym = (lot.get('asset') or '').upper()
+        qty = _paper_core.D(lot.get('qty')) or Decimal('0')
+        if qty <= 0:
+            continue
+        px, fresh = marks.get(sym, (None, False))
+        if px is None or not fresh:
+            still_open += 1
+            continue
+        sizing = _paper_core.ticket_sell_sizing(sym, qty, px)
+        if sizing.get('reject'):
+            still_open += 1
+            continue
+        _paper_core.apply_sell_atomic(
+            paper_accounts_col, acct_id, pid, sizing, source='goal_close_retry',
+            idem_key='goalretry:%s:%s' % (lot.get('lotId'), now_iso),
+            asset=sym, ticket_id=lot.get('lotId'))
+    if still_open == 0:
+        paper_accounts_col.update_one({'paperAccountId': acct_id, 'ownerId': pid},
+            {'$set': {'runtimeState': 'HALTED_GOAL_CLOSED'}})
+        _paper_ledger_add(acct_id, 'GOAL_HALT_CLOSED', 'account', acct_id, None, None,
+                          'All tickets now closed after goal-close retry.')
 
 
 
@@ -8812,6 +8865,10 @@ def _autopilot_process_account_multi(acct):
         return
     if goal_trigger == 'ALREADY_HALTED':
         # Already halted — HALTED_GOAL_ENTRIES still needs rule-based exit management.
+        # GOAL_CLOSE_PENDING: retry closing any remaining unpriced tickets.
+        if acct.get('runtimeState') == 'GOAL_CLOSE_PENDING':
+            _retry_goal_close_pending(acct, marks)
+            acct = paper_accounts_col.find_one({'paperAccountId': acct_id}) or acct
         if acct.get('runtimeState') == 'HALTED_GOAL_ENTRIES' and _strat:
             _studio_record_assessment(acct, _strat, [], marks, mark_obs)
         return
@@ -8929,148 +8986,135 @@ def _autopilot_process_account_multi(acct):
                            'typedRuleResults': entry_verdict['results'] if entry_verdict else [],
                            '_sid': sid, '_canonical': d})
 
-    if mode == 'OBSERVE':
+    # ── Auto Run execution (single path) ──
+    if not PAPER_EXECUTION_ENABLED:
         for c in candidates:
             newly_seen[c['symbol']] = c['_sid']
-            _materialize_sds(acct, _strat, c['_canonical'], mark_obs.get(c['symbol']),
-                             c['action'], c['symbol'], None, [], 'OBSERVED')
-            _paper_ledger_add(acct_id, 'OBSERVED', 'decision', c['_sid'], None, None,
-                              'Observed %s %s signal — observe-only mode.' % (c['symbol'], c['action']))
+            _paper_ledger_add(acct_id, 'AUTO_DISABLED', 'decision', c['_sid'], None, None,
+                              'Paper execution is disabled by environment safety switch — no trade.')
         _persist_multi_cursors(acct_id, processed, newly_seen, cursors)
-        if newly_seen:
-            _autopilot_set_vis(acct_id, lastDecisionProcessed=now_iso)
         return
-
-    if mode == 'PAPER_AUTOPILOT':
-        if not (PAPER_EXECUTION_ENABLED and PAPER_AUTOPILOT_ENABLED):
-            for c in candidates:
-                newly_seen[c['symbol']] = c['_sid']
-                _paper_ledger_add(acct_id, 'AUTO_DISABLED', 'decision', c['_sid'], None, None,
-                                  'Autopilot is disabled by configuration — no trade.')
-            _persist_multi_cursors(acct_id, processed, newly_seen, cursors)
-            return
-        paused = acct.get('runtimeState') != 'RUNNING'
-        # SELLs (reduce-only) allowed even when paused; BUYs suppressed while paused.
-        alloc_candidates = [c for c in candidates if c['action'] == 'SELL' or not paused]
-        alloc = _paper_portfolio.allocate(acct=acct, equity_info=equity_info,
-                                          candidates=alloc_candidates, regime=regime, marks=marks,
-                                          holding_scores=holding_scores)
-        funded = {i['symbol'] for i in alloc['intents'] if i.get('action') in ('BUY', 'ADD')}
-        for c in alloc_candidates:
-            if c['action'] == 'BUY' and c['symbol'] not in funded:
-                _studio_wait_reason(acct, _strat, c['symbol'],
-                                    'current portfolio allocation or risk limits leave no executable BUY.')
-        traded_syms = set()
-        for intent in alloc['intents']:
-            sym = intent['symbol']
-            can = dec_by_sym.get(sym) or {}
-            sid = (next((c['_sid'] for c in candidates if c['symbol'] == sym), can.get('decisionSnapshotId'))
-                   or 'rot_%s' % sym)
-            px, fresh2 = marks.get(sym, (None, False))
-            _rk, _tier, _rmeta = _paper_rank_for(sym, live_ranks, rank_meta_top)
-            prof = _paper_profiles.asset_profile(sym, _rk, tier=_tier,
-                                                  market=(mark_obs.get(sym) or {}).get('execution'))
-            idem = 'auto:%s:%s:%s' % (acct_id, sym, sid)
-            if intent['action'] in ('BUY', 'ADD'):
-                # Allocators can introduce rotation targets, so recheck the
-                # actual intent (not merely the candidate) before any fill.
-                if not (_asset_caps.entry_allowed(sym, mandate, data_ok=fresh2)[0]
-                        and can.get('action') == 'BUY' and can.get('eligible')
-                        and can.get('actionable') and can.get('fresh')
-                        and (_strat_syms is None or sym in _strat_syms)):
+    paused = acct.get('runtimeState') not in ('RUNNING',)
+    # SELLs (reduce-only) allowed even when paused; BUYs suppressed while paused.
+    alloc_candidates = [c for c in candidates if c['action'] == 'SELL' or not paused]
+    alloc = _paper_portfolio.allocate(acct=acct, equity_info=equity_info,
+                                      candidates=alloc_candidates, regime=regime, marks=marks,
+                                      holding_scores=holding_scores)
+    funded = {i['symbol'] for i in alloc['intents'] if i.get('action') in ('BUY', 'ADD')}
+    for c in alloc_candidates:
+        if c['action'] == 'BUY' and c['symbol'] not in funded:
+            _studio_wait_reason(acct, _strat, c['symbol'],
+                                'current portfolio allocation or risk limits leave no executable BUY.')
+    traded_syms = set()
+    for intent in alloc['intents']:
+        sym = intent['symbol']
+        can = dec_by_sym.get(sym) or {}
+        sid = (next((c['_sid'] for c in candidates if c['symbol'] == sym), can.get('decisionSnapshotId'))
+               or 'rot_%s' % sym)
+        px, fresh2 = marks.get(sym, (None, False))
+        _rk, _tier, _rmeta = _paper_rank_for(sym, live_ranks, rank_meta_top)
+        prof = _paper_profiles.asset_profile(sym, _rk, tier=_tier,
+                                              market=(mark_obs.get(sym) or {}).get('execution'))
+        idem = 'auto:%s:%s:%s' % (acct_id, sym, sid)
+        if intent['action'] in ('BUY', 'ADD'):
+            # Allocators can introduce rotation targets, so recheck the
+            # actual intent (not merely the candidate) before any fill.
+            if not (_asset_caps.entry_allowed(sym, mandate, data_ok=fresh2)[0]
+                    and can.get('action') == 'BUY' and can.get('eligible')
+                    and can.get('actionable') and can.get('fresh')
+                    and (_strat_syms is None or sym in _strat_syms)):
+                continue
+            actual_rule = _studio_rule_check(_strat, sym, 'BUY', px, acct, mark_obs.get(sym)) if _strat else None
+            if actual_rule and not actual_rule['ready']:
+                _studio_wait_reason(acct, _strat, sym, actual_rule['reason'])
+                continue
+            budget = (_studio_entry_budget(_strat, sym, intent['notional'], acct, equity_info)
+                      if acct.get('strategyId') else intent['notional'])
+            if budget is None:
+                _studio_wait_reason(acct, _strat, sym,
+                                    'reviewed entry sizing, reserve, position limit or cash prevents an additional BUY.')
+                continue
+            if acct.get('strategyId'):
+                current_acct = paper_accounts_col.find_one({'paperAccountId': acct_id, 'ownerId': pid,
+                                                            'runtimeState': 'RUNNING'})
+                current_strat = _strategy_for_account(current_acct) if current_acct else None
+                if not current_strat or current_strat.get('version') != _strat.get('version'):
                     continue
-                actual_rule = _studio_rule_check(_strat, sym, 'BUY', px, acct, mark_obs.get(sym)) if _strat else None
-                if actual_rule and not actual_rule['ready']:
-                    _studio_wait_reason(acct, _strat, sym, actual_rule['reason'])
-                    continue
-                budget = (_studio_entry_budget(_strat, sym, intent['notional'], acct, equity_info)
-                          if acct.get('strategyId') else intent['notional'])
-                if budget is None:
-                    _studio_wait_reason(acct, _strat, sym,
-                                        'reviewed weight, reserve, position limit or cash prevents an additional BUY.')
-                    continue
-                if acct.get('strategyId'):
-                    current_acct = paper_accounts_col.find_one({'paperAccountId': acct_id, 'ownerId': pid,
-                                                                'runtimeState': 'RUNNING'})
-                    current_strat = _strategy_for_account(current_acct) if current_acct else None
-                    if not current_strat or current_strat.get('version') != _strat.get('version'):
-                        continue
-                sizing = _paper_core.ticket_buy_sizing(sym, budget, px)
-                if sizing.get('reject'):
-                    continue
-                # Build ticket rules: save the strategy's exit rules for this asset
-                # at entry time so the ticket retains its rules even if the strategy
-                # is later edited (entry-time rules govern existing tickets).
-                _ticket_rules = None
-                if _strat:
-                    contract_rules = ((_strat.get('contract') or {}).get('rules') or [])
-                    _sell_rules = [r for r in contract_rules
-                                   if r.get('side') == 'SELL' and
-                                   ((r.get('symbol') or r.get('asset', '')).upper() == sym or
-                                    not r.get('symbol') and not r.get('asset'))]
-                    if _sell_rules:
-                        import copy as _copy
-                        _ticket_rules = _copy.deepcopy(_sell_rules)
-                res, err, _ = _paper_core.apply_buy_atomic(
-                    paper_accounts_col, acct_id, pid, acct.get('version'), idem, 'auto_%s_%s' % (sym, sid),
-                    sizing, can, base_currency=acct.get('baseCurrency', 'USDC'), asset=sym,
-                    strategy_version=_strat['version'] if _strat else None,
-                    strategy_hash=_strat['contractHash'] if _strat else None,
-                    required_mode='PAPER_AUTOPILOT' if _strat else None,
-                    ticket_rules=_ticket_rules)
-                if not err:
-                    traded_syms.add(sym)
-                    _materialize_sds(acct, _strat, can, mark_obs.get(sym), 'BUY', sym,
-                                     sizing, sizing.get('trace', []), 'EXECUTED',
-                                     rule_results=(actual_rule or {}).get('results'))
-                    _paper_complete_rotation(acct_id, sym, intent, sizing)   # M5.1 finish a pending rotation
-                    _autopilot_notify(pid, acct_id, 'Paper Autopilot bought %s' % sym,
-                                      'Auto-executed a simulated %s on %s. Paper only — no real money.'
-                                      % (intent['action'], sym))
-                    acct = paper_accounts_col.find_one({'paperAccountId': acct_id}) or acct
-            else:  # TRIM / EXIT / SELL (reduce-only)
-                # Studio promises only canonical SELL (or the protective
-                # invalidation above); allocator rotation cannot add an exit rule.
-                if acct.get('strategyId') and can.get('action') != 'SELL':
-                    continue
-                pos = next((p for p in equity_info['positions'] if p['symbol'] == sym and p['qty'] > 0), None)
-                if not pos or px is None or not fresh2:
-                    continue
-                frac = intent.get('fraction') or Decimal('1')
-                sell_qty = _paper_core.q_qty(pos['qty'] * frac)
-                sizing = _paper_core.ticket_sell_sizing(sym, sell_qty, px)
-                if sizing.get('reject'):
-                    continue
-                res, err, _ = _paper_core.apply_sell_atomic(
-                    paper_accounts_col, acct_id, pid, sizing, source='auto_%s' % intent.get('reason', 'sell'),
-                    idem_key=idem, proposal_id='auto_%s_%s' % (sym, sid), canonical=can,
-                    asset=sym, ticket_id=pos.get('ticketId'))
-                if not err:
-                    traded_syms.add(sym)
-                    if intent.get('reason') == 'ROTATION':      # M5.1 open a rotation record
-                        _paper_record_rotation_reduce(acct_id, pid, intent, dec_by_sym, rank_meta_top,
-                                                      regime, res)
-                    _autopilot_notify(pid, acct_id, 'Paper Autopilot reduced %s' % sym,
-                                      'Auto-executed a simulated %s on %s. Paper only — no real money.'
-                                      % (intent['action'], sym))
-                    acct = paper_accounts_col.find_one({'paperAccountId': acct_id}) or acct
-        # Consume snapshots + advance cursors. A BUY snapshot is consumed ONLY when it
-        # actually traded; an untraded BUY (blocked by a limit or awaiting rotation
-        # capital) is left UNCONSUMED so a later tick can act once cash frees. SELL/other
-        # resolved candidates are consumed. Traded assets advance their observation cursor.
-        for c in candidates:
-            sym = c['symbol']
-            if sym in traded_syms:
-                newly_seen[sym] = c['_sid']
-                cursors[sym] = (mark_obs.get(sym) or {}).get('obsId')
-            elif c['action'] != 'BUY':
-                newly_seen[sym] = c['_sid']
-            # else: untraded BUY -> leave unconsumed to retry next tick
-        if traded_syms:
-            _autopilot_set_vis(acct_id, lastTradeAt=now_iso)
-        _persist_multi_cursors(acct_id, processed, newly_seen, cursors)
-        if newly_seen:
-            _autopilot_set_vis(acct_id, lastDecisionProcessed=now_iso)
+            sizing = _paper_core.ticket_buy_sizing(sym, budget, px)
+            if sizing.get('reject'):
+                continue
+            # Build ticket rules: save the strategy's exit rules for this asset
+            # at entry time so the ticket retains its rules even if the strategy
+            # is later edited (entry-time rules govern existing tickets).
+            _ticket_rules = None
+            if _strat:
+                contract_rules = ((_strat.get('contract') or {}).get('rules') or [])
+                _sell_rules = [r for r in contract_rules
+                               if r.get('side') == 'SELL' and
+                               ((r.get('symbol') or r.get('asset', '')).upper() == sym or
+                                not r.get('symbol') and not r.get('asset'))]
+                if _sell_rules:
+                    import copy as _copy
+                    _ticket_rules = _copy.deepcopy(_sell_rules)
+            res, err, _ = _paper_core.apply_buy_atomic(
+                paper_accounts_col, acct_id, pid, acct.get('version'), idem, 'auto_%s_%s' % (sym, sid),
+                sizing, can, base_currency=acct.get('baseCurrency', 'USDC'), asset=sym,
+                strategy_version=_strat['version'] if _strat else None,
+                strategy_hash=_strat['contractHash'] if _strat else None,
+                ticket_rules=_ticket_rules)
+            if not err:
+                traded_syms.add(sym)
+                _materialize_sds(acct, _strat, can, mark_obs.get(sym), 'BUY', sym,
+                                 sizing, sizing.get('trace', []), 'EXECUTED',
+                                 rule_results=(actual_rule or {}).get('results'))
+                _paper_complete_rotation(acct_id, sym, intent, sizing)
+                _autopilot_notify(pid, acct_id, 'Paper Auto Run bought %s' % sym,
+                                  'Auto-executed a simulated %s on %s. Paper only — no real money.'
+                                  % (intent['action'], sym))
+                acct = paper_accounts_col.find_one({'paperAccountId': acct_id}) or acct
+        else:  # EXIT / SELL (reduce-only)
+            # Studio promises only canonical SELL (or the protective
+            # invalidation above); allocator rotation cannot add an exit rule.
+            if acct.get('strategyId') and can.get('action') != 'SELL':
+                continue
+            pos = next((p for p in equity_info['positions'] if p['symbol'] == sym and p['qty'] > 0), None)
+            if not pos or px is None or not fresh2:
+                continue
+            frac = intent.get('fraction') or Decimal('1')
+            sell_qty = _paper_core.q_qty(pos['qty'] * frac)
+            sizing = _paper_core.ticket_sell_sizing(sym, sell_qty, px)
+            if sizing.get('reject'):
+                continue
+            res, err, _ = _paper_core.apply_sell_atomic(
+                paper_accounts_col, acct_id, pid, sizing, source='auto_%s' % intent.get('reason', 'sell'),
+                idem_key=idem, proposal_id='auto_%s_%s' % (sym, sid), canonical=can,
+                asset=sym, ticket_id=pos.get('ticketId'))
+            if not err:
+                traded_syms.add(sym)
+                if intent.get('reason') == 'ROTATION':
+                    _paper_record_rotation_reduce(acct_id, pid, intent, dec_by_sym, rank_meta_top,
+                                                  regime, res)
+                _autopilot_notify(pid, acct_id, 'Paper Auto Run reduced %s' % sym,
+                                  'Auto-executed a simulated %s on %s. Paper only — no real money.'
+                                  % (intent['action'], sym))
+                acct = paper_accounts_col.find_one({'paperAccountId': acct_id}) or acct
+    # Consume snapshots + advance cursors. A BUY snapshot is consumed ONLY when it
+    # actually traded; an untraded BUY (blocked by a limit or awaiting rotation
+    # capital) is left UNCONSUMED so a later tick can act once cash frees. SELL/other
+    # resolved candidates are consumed. Traded assets advance their observation cursor.
+    for c in candidates:
+        sym = c['symbol']
+        if sym in traded_syms:
+            newly_seen[sym] = c['_sid']
+            cursors[sym] = (mark_obs.get(sym) or {}).get('obsId')
+        elif c['action'] != 'BUY':
+            newly_seen[sym] = c['_sid']
+        # else: untraded BUY -> leave unconsumed to retry next tick
+    if traded_syms:
+        _autopilot_set_vis(acct_id, lastTradeAt=now_iso)
+    _persist_multi_cursors(acct_id, processed, newly_seen, cursors)
+    if newly_seen:
+        _autopilot_set_vis(acct_id, lastDecisionProcessed=now_iso)
 
 
 def _persist_multi_cursors(acct_id, processed, newly_seen, cursors):
@@ -9161,11 +9205,10 @@ def _paper_autopilot_worker():
         all_accts = list(paper_accounts_col.find(
             {'archivedAt': None,
              '$or': [
-                 {'runtimeState': 'RUNNING',
-                  'mode': {'$in': ['OBSERVE', 'PAPER_AUTOPILOT']}},
-                 {'runtimeState': {'$in': ['PAUSED_BY_USER', 'PAUSED_RISK_BREAKER', 'HALTED_GOAL_ENTRIES']},
-                  'lots.0': {'$exists': True},
-                  'mode': {'$in': ['OBSERVE', 'PAPER_AUTOPILOT']}}
+                 {'runtimeState': 'RUNNING'},
+                 {'runtimeState': {'$in': ['PAUSED_BY_USER', 'PAUSED_RISK_BREAKER',
+                                           'HALTED_GOAL_ENTRIES', 'GOAL_CLOSE_PENDING']},
+                  'lots.0': {'$exists': True}}
              ]}))
 
         # ── 2. Split into strategy-first + others, apply rotation ──
@@ -9181,7 +9224,8 @@ def _paper_autopilot_worker():
             other_accts = other_accts[idx:] + other_accts[:idx]
         ordered = strat_accts + other_accts
 
-        fn = _autopilot_process_account_multi if PAPER_MULTI_ASSET_ENABLED else _autopilot_process_account
+        # Single execution path: always the ticket-based multi-asset worker.
+        fn = _autopilot_process_account_multi
 
         for acct in ordered:
             remaining = _WORKER_BUDGET_SEC - (_time.monotonic() - cycle_start)
@@ -9470,8 +9514,7 @@ def _paper_dashboard_payload(a):
                 'invalidationPrice': _paper_core.dstr(p.get('invalidationPrice')) if p.get('invalidationPrice') is not None else None,
                 'currentPrice': _paper_core.dstr(px) if (px is not None and eq['_fresh']) else None,
                 'unrealizedPnl': _paper_core.dstr(upnl) if upnl is not None else None})
-    proposals = [_paper_proposal_public(pr) for pr in
-                 paper_proposals_col.find({'paperAccountId': acct_id, 'status': 'CREATED'}, {'_id': 0})]
+    # Proposals are retired — skip querying them.
     activity = sorted((a.get('ledger') or []), key=lambda e: e.get('recordedAt') or e.get('effectiveAt') or '',
                       reverse=True)[:20]
     activity = _paper_jsonify(activity)
@@ -9494,11 +9537,10 @@ def _paper_dashboard_payload(a):
                      'protectedReserve': _paper_core.dstr(a.get('protectedReserve')) if a.get('protectedReserve') is not None else None}
     return {'status': 'ready', 'paperOnly': True, 'asOf': datetime.datetime.utcnow().isoformat(),
             'account': public_wallet, 'equity': eqc, 'positions': positions,
-            'openOrders': [], 'pendingProposals': proposals, 'recentActivity': activity,
+            'openOrders': [], 'recentActivity': activity,
             'performance': {'closedTrades': len(closed), 'wins': wins,
                             'winRatePct': round(wins / len(closed) * 100, 1) if closed else None,
-                            'realizedPnl': eqc['realizedPnl'], 'fees': eqc['fees']},
-            'assumptions': PAPER_EXEC_PROFILE,
+                            'realizedPnl': eqc['realizedPnl']},
             'integrity': {'status': 'LIMITED_NO_WORKER' if recon['ok'] else 'RECONCILIATION_MISMATCH',
                           'marketData': eq['markStatus'],
                           'equityAvailable': eq['available'],
@@ -9507,7 +9549,6 @@ def _paper_dashboard_payload(a):
                           'ledgerSizeWarning': _paper_core.ledger_size_warning(a),
                           'lastReconciledAt': datetime.datetime.utcnow().isoformat() if recon['ok'] else None,
                           'executionEnabled': PAPER_EXECUTION_ENABLED,
-                          'autopilotEnabled': PAPER_AUTOPILOT_ENABLED,
                           'primaryPauseReason': pause_reason},
             'allocation': allocation_panel, 'rankingSnapshot': ranking_snapshot,
             'rotations': rotations,
@@ -10027,16 +10068,7 @@ def _sop_build(user, requested_account=None):
                                  'marketData': integ.get('marketData'),
                                  'reconciliation': integ.get('reconciliation')},
             }
-            # attention: proposals awaiting a decision
-            for pr in pend:
-                attention.append({
-                    'id': 'proposal:' + str(pr.get('proposalId')),
-                    'kind': 'PROPOSAL_APPROVAL', 'severity': 'ACTION',
-                    'title': f"Approve or reject a paper {pr.get('side', '').lower()} of {pr.get('asset', '')}".strip(),
-                    'entity': {'type': 'proposal', 'id': pr.get('proposalId'),
-                               'paperAccountId': acct_id, 'asset': pr.get('asset')},
-                    'expiresAt': pr.get('expiresAt'),
-                    'deepLink': f'/?section=paper&proposal={pr.get("proposalId")}'})
+            # Proposal attention items retired — no more approvals.
             if (dash.get('account') or {}).get('runtimeState') == 'PAUSED_RISK_BREAKER':
                 attention.append({'id': 'breaker:' + acct_id, 'kind': 'RISK_BREAKER', 'severity': 'WARNING',
                                   'title': 'Paper account paused by the drawdown breaker — a reviewed reset is needed.',
@@ -12592,8 +12624,10 @@ STUDIO_RULES = {
     'exitRules': 'CANONICAL_SELL_OR_INVALIDATION',
     'profitTaking': 'CANONICAL_SELL_ONLY',
     'invalidation': 'CANONICAL_INVALIDATION_ONLY',
-    'sizing': 'MAX_REVIEWED_ASSET_WEIGHT',
+    'sizing': 'STRATEGY_DEFINED',
 }
+# Accept legacy sizing value for existing immutable contracts.
+_SIZING_ACCEPTED = {'STRATEGY_DEFINED', 'MAX_REVIEWED_ASSET_WEIGHT'}
 
 
 def _studio_requested_wallet(goal):
@@ -12725,6 +12759,23 @@ def _studio_canonical(draft):
             goals['endAction'] = str(pg['endAction'])
         if goals:
             contract['portfolioGoals'] = goals
+    # Entry sizing: how much to deploy per BUY ticket.
+    if draft.get('entrySizing'):
+        es = draft['entrySizing']
+        sizing_obj = {}
+        method = str(es.get('method') or '').upper()
+        if method in ('FIXED_USD', 'PCT_AVAILABLE_CASH'):
+            sizing_obj['method'] = method
+            if method == 'FIXED_USD':
+                amt = _f(es.get('amount'))
+                if amt is not None and amt > 0:
+                    sizing_obj['amount'] = amt
+            elif method == 'PCT_AVAILABLE_CASH':
+                pct = _f(es.get('pct'))
+                if pct is not None and 0 < pct <= 100:
+                    sizing_obj['pct'] = pct
+            if len(sizing_obj) >= 2:  # method + amount/pct
+                contract['entrySizing'] = sizing_obj
     return contract
 
 
@@ -12759,7 +12810,11 @@ def _studio_validate(draft, pid, account=None):
     if c['requestedPlan']:
         start_errors.extend(_asset_caps.explicit_request_errors(c['requestedPlan'], c))
     for field, supported in STUDIO_RULES.items():
-        if c[field] != supported:
+        val = c[field]
+        # Accept legacy sizing value for existing contracts.
+        if field == 'sizing' and val in _SIZING_ACCEPTED:
+            continue
+        if val != supported:
             start_errors.append(f'{field}: Needs changes. Only {supported} is executable as a canonical gate; use typed rules for additional triggers.')
     if c['timeframe'] != 'paper cycle':
         start_errors.append('Needs changes. A custom trade timeframe is not executable; Studio runs on the normal paper cycle.')
@@ -12785,6 +12840,9 @@ def _studio_validate(draft, pid, account=None):
         # Portfolio-level goals (profit target, equity floor, drawdown) are not
         # per-coin rules — resolve them as portfolio goals, not unresolved text.
         if _strategy_rules.is_portfolio_goal_clause(ui_str):
+            continue
+        # Entry sizing instructions are resolved into the entrySizing field.
+        if _strategy_rules.is_entry_sizing_clause(ui_str):
             continue
         unresolved.append(ui_str)
     for ui in unresolved[:5]:
@@ -12818,6 +12876,32 @@ def _studio_validate(draft, pid, account=None):
         save_errors.append('maxPositions must be between 1 and the portfolio limit.')
     if c['reservePct'] is not None and (c['reservePct'] < 0 or c['reservePct'] > 100):
         save_errors.append('reservePct must be between 0 and 100.')
+    # Validate entry sizing — required for new strategies.
+    es = c.get('entrySizing')
+    if not es or not es.get('method'):
+        start_errors.append('Entry sizing is required: specify FIXED_USD (a dollar amount per trade) or PCT_AVAILABLE_CASH (a percentage of deployable cash).')
+    elif es['method'] == 'FIXED_USD':
+        if not es.get('amount') or es['amount'] <= 0:
+            start_errors.append('FIXED_USD entry sizing requires a positive dollar amount.')
+    elif es['method'] == 'PCT_AVAILABLE_CASH':
+        if not es.get('pct') or es['pct'] <= 0 or es['pct'] > 100:
+            start_errors.append('PCT_AVAILABLE_CASH entry sizing requires a percentage between 0 and 100.')
+    else:
+        start_errors.append(f'Unsupported entry sizing method: {es["method"]}. Use FIXED_USD or PCT_AVAILABLE_CASH.')
+    # Validate portfolio goals (if provided).
+    pg = c.get('portfolioGoals')
+    if pg:
+        if pg.get('profitTargetPct') is not None and (pg['profitTargetPct'] <= 0 or pg['profitTargetPct'] > 10000):
+            save_errors.append('portfolioGoals.profitTargetPct must be between 0 and 10000.')
+        if pg.get('equityFloorUsd') is not None and pg['equityFloorUsd'] < 0:
+            save_errors.append('portfolioGoals.equityFloorUsd must be non-negative.')
+        if pg.get('maxDrawdownPct') is not None and (pg['maxDrawdownPct'] <= 0 or pg['maxDrawdownPct'] > 100):
+            save_errors.append('portfolioGoals.maxDrawdownPct must be between 0 and 100.')
+        if pg.get('maxTrades') is not None and pg['maxTrades'] < 1:
+            save_errors.append('portfolioGoals.maxTrades must be at least 1.')
+        ea = pg.get('endAction')
+        if ea and ea not in ('CLOSE_ALL_AND_STOP', 'STOP_ENTRIES_MANAGE_OPEN'):
+            save_errors.append('portfolioGoals.endAction must be CLOSE_ALL_AND_STOP or STOP_ENTRIES_MANAGE_OPEN.')
     # Legacy compatibility: callers that expect a flat errors list get all combined.
     return c, _studio_short_hash(c), save_errors, start_errors
 
@@ -12829,11 +12913,28 @@ def _studio_summary(c):
                       f"{r.get('operator') or 'at least'} {r['value']}" for r in extra)
     wallet = (f" Wallet {c['walletName']}, virtual starting cash ${c['startingCash']}."
               if c.get('walletName') and c.get('startingCash') else '')
+    es = c.get('entrySizing') or {}
+    if es.get('method') == 'FIXED_USD':
+        sizing_desc = f"${es.get('amount', '?')} per entry"
+    elif es.get('method') == 'PCT_AVAILABLE_CASH':
+        sizing_desc = f"{es.get('pct', '?')}% of available cash per entry"
+    else:
+        sizing_desc = 'canonical recommended amount'
+    goals_desc = ''
+    pg = c.get('portfolioGoals')
+    if pg:
+        parts = []
+        if pg.get('profitTargetPct'): parts.append(f"profit target {pg['profitTargetPct']}%")
+        if pg.get('equityFloorUsd'): parts.append(f"equity floor ${pg['equityFloorUsd']}")
+        if pg.get('maxDrawdownPct'): parts.append(f"max drawdown {pg['maxDrawdownPct']}%")
+        if parts:
+            goals_desc = ' Portfolio goals: ' + ', '.join(parts) + '.'
     return (f"A paper strategy across {legs}, checked on the normal paper cycle. "
-            f"At most {c['riskLimits']['maxPositions']} positions, each capped at its reviewed weight; "
+            f"At most {c['riskLimits']['maxPositions']} positions; entry sizing: {sizing_desc}; "
             f"protected reserve {c['reservePct']:g}%. Canonical BUY and risk gates still apply. "
-            f"Executable additional conditions: {terms or 'none'}. SELL triggers reduce the held position; "
-            f"Autopilot executes paper trades after the reviewed rules and risk gates pass.{wallet} Macro and tokenomics are advisory context only.")
+            f"Executable additional conditions: {terms or 'none'}. SELL triggers close the targeted ticket; "
+            f"Auto Run executes paper trades after the reviewed rules and risk gates pass.{wallet}{goals_desc} "
+            f"Macro and tokenomics are advisory context only.")
 
 
 def _studio_public(doc):
@@ -12992,21 +13093,72 @@ def _studio_backtest(contract):
 
 
 # ---- Studio conversational draft (LLM proposes; NOT authoritative, never persists) ----
+
+# ── Evidence assessment for strategy confidence grounding ──────────────── #
+EVIDENCE_CATEGORIES = ['technical', 'tokenomics', 'sentiment', 'institutional', 'whale_onchain']
+
+def _assess_strategy_evidence(symbols, marks_obs=None):
+    """Assess the availability of evidence across 5 categories for each symbol.
+    Returns a dict keyed by symbol, each value a dict of category -> status.
+    Status values: 'available', 'stale', 'unavailable'.
+    We NEVER invent missing evidence — only report what is actually available."""
+    evidence = {}
+    for sym in symbols:
+        sym_upper = sym.upper()
+        obs = (marks_obs or {}).get(sym_upper) or {}
+        cat_status = {}
+        # Technical: price data + indicators.
+        if obs.get('price') is not None and obs.get('fresh'):
+            cat_status['technical'] = 'available'
+        elif obs.get('price') is not None:
+            cat_status['technical'] = 'stale'
+        else:
+            cat_status['technical'] = 'unavailable'
+        # Tokenomics: check if market data (mcap, volume) is present.
+        if obs.get('mcap') or obs.get('volume24h'):
+            cat_status['tokenomics'] = 'available'
+        else:
+            cat_status['tokenomics'] = 'unavailable'
+        # Sentiment: check for change data (proxy for market activity).
+        if obs.get('change_24h') is not None:
+            cat_status['sentiment'] = 'available'
+        else:
+            cat_status['sentiment'] = 'unavailable'
+        # Institutional: not directly tracked in this build; always mark honestly.
+        cat_status['institutional'] = 'unavailable'
+        # Whale / On-chain: check if we have whale data for this asset.
+        try:
+            from backend.albert.repositories.crypto_data import get_cached_or_fetch
+            whale_data = get_cached_or_fetch('whale_%s' % sym_upper, None, max_age=3600)
+            if whale_data:
+                cat_status['whale_onchain'] = 'available'
+            else:
+                cat_status['whale_onchain'] = 'unavailable'
+        except Exception:
+            cat_status['whale_onchain'] = 'unavailable'
+        evidence[sym_upper] = cat_status
+    return evidence
+
+
 STUDIO_DRAFT_SYSTEM = (
     "You are Albert drafting a PAPER-only strategy. Output ONLY JSON: name, timeframe='paper cycle', "
     "assets [{symbol,weightPct}], entryRules='CANONICAL_BUY_ONLY', "
     "exitRules='CANONICAL_SELL_OR_INVALIDATION', profitTaking='CANONICAL_SELL_ONLY', "
-    "invalidation='CANONICAL_INVALIDATION_ONLY', sizing='MAX_REVIEWED_ASSET_WEIGHT', "
+    "invalidation='CANONICAL_INVALIDATION_ONLY', sizing='STRATEGY_DEFINED', "
+    "entrySizing {method:'FIXED_USD'|'PCT_AVAILABLE_CASH', amount(for FIXED_USD), pct(for PCT_AVAILABLE_CASH)}, "
     "reservePct, riskLimits {maxPositions,maxTradeRiskPct:null,stopLossPct:null}, maxDrawdownPct:null, "
-    "portfolioGoals {profitTargetPct,equityFloorUsd,lossFloorPct,maxDrawdownPct} (all optional; "
+    "portfolioGoals {profitTargetPct,equityFloorUsd,lossFloorPct,maxDrawdownPct,endAction:'CLOSE_ALL_AND_STOP'|'STOP_ENTRIES_MANAGE_OPEN'} (all optional; "
     "extract from any portfolio-level profit target, equity floor, loss floor or drawdown instructions), "
     "walletName, startingCash, unsupportedInstructions:[]. "
+    "For entrySizing: if user specifies a dollar amount per trade, use FIXED_USD with that amount. "
+    "If user specifies a percentage of available cash, use PCT_AVAILABLE_CASH with that pct. "
+    "If not specified, default to PCT_AVAILABLE_CASH with pct=25 (25% of available cash per entry). "
     "Do not invent, substitute or omit requested coins, weights, wallet amounts or instructions. "
     "The server parses literal price/rolling-24-hour-change/RSI14/SMA20/EMA20/MACD histogram and percentage-exit "
     "rules into a separate typed contract. Do NOT rewrite them into canonical presets. "
     "Anything not exactly expressible as a supported rule belongs in unsupportedInstructions. "
     "Portfolio-level goals belong in portfolioGoals, NOT in unsupportedInstructions. "
-    "Autopilot executes paper trades after reviewed rules pass; no approval step exists. "
+    "Auto Run executes paper trades after reviewed rules pass; no approval step exists. "
     "A saved plan trades no real assets; drafting never saves, starts or trades."
 )
 
@@ -13149,6 +13301,13 @@ def studio_draft(payload: dict = Body(...), user: dict = Depends(get_current_use
             portfolio_goals = _strategy_rules.extract_portfolio_goals(goal)
             if portfolio_goals:
                 candidate.setdefault('portfolioGoals', {}).update(portfolio_goals)
+            # Extract entry sizing from the goal text (server-side, not LLM).
+            parsed_sizing = _strategy_rules.extract_entry_sizing(goal)
+            if parsed_sizing:
+                candidate.setdefault('entrySizing', {}).update(parsed_sizing)
+            # Default entry sizing when neither LLM nor parser provided one.
+            if not candidate.get('entrySizing') or not candidate['entrySizing'].get('method'):
+                candidate['entrySizing'] = {'method': 'PCT_AVAILABLE_CASH', 'pct': 25}
             # Explicitly supplied wallet name takes precedence; LLM default only when absent.
             candidate['walletName'] = requested_wallet or str(candidate.get('walletName') or (candidate.get('name') or 'New strategy') + ' wallet')[:60]
             candidate['startingCash'] = requested_cash or candidate.get('startingCash') or '100000.00'
@@ -13163,13 +13322,107 @@ def studio_draft(payload: dict = Body(...), user: dict = Depends(get_current_use
                 errors = ['Albert did not return a usable draft.']
     if draft is None:
         raise HTTPException(status_code=503, detail='Albert could not draft a strategy; nothing was replaced or saved.')
+    # Assess evidence availability for confidence grounding.
+    asset_syms = [a['symbol'] for a in c.get('assets', [])]
+    evidence = _assess_strategy_evidence(asset_syms)
     return {'status': 'ready' if not errors else 'needs_changes',
             'draft': {**draft, 'name': draft.get('name') or 'New strategy'},
             'contract': c, 'contractHash': chash, 'summary': _studio_summary(c),
             'validationErrors': errors, 'valid': not errors,
             'assetCapabilities': [_studio_capability_row(a['symbol'], mandate) for a in c['assets']],
+            'evidence': evidence,
             'note': ('Draft only; a WAIT decision does not prevent a supported strategy from starting. '
-                     'Starting evaluates the reviewed conditions immediately; Autopilot executes after all gates pass.')}
+                     'Starting evaluates the reviewed conditions immediately; Auto Run executes after all gates pass.')}
+
+
+
+STUDIO_REVISE_SYSTEM = (
+    "You are Albert revising an EXISTING paper strategy. The current contract is provided below. "
+    "The user wants specific changes — apply ONLY the requested changes and return a COMPLETE revised JSON strategy. "
+    "Output ONLY JSON: the full revised strategy with ALL fields preserved from the original where not changed. "
+    "Do not drop fields, do not reset startingCash, do not rename the wallet. "
+    "Preserve: name, timeframe='paper cycle', walletName, startingCash, assets, "
+    "entryRules, exitRules, profitTaking, invalidation, sizing='STRATEGY_DEFINED', "
+    "entrySizing, reservePct, riskLimits, portfolioGoals, unsupportedInstructions. "
+    "If the user adds or removes coins, update assets accordingly. "
+    "If the user changes entry sizing, update entrySizing. "
+    "If the user changes exit rules, only new tickets will use them — existing tickets keep their entry-time rules. "
+    "Return the COMPLETE revised strategy JSON, not a partial diff."
+)
+
+
+@app.post('/api/v1/albert/studio/revise-draft')
+def studio_revise_draft(payload: dict = Body(...), user: dict = Depends(get_current_user)):
+    """Revise an existing strategy via Albert. Loads the current contract, sends
+    it with the user's revision request to Albert, and returns a complete revised draft.
+    Chat must not mutate strategies directly — the user reviews and saves explicitly."""
+    pid = owner_pid(user)
+    body = payload or {}
+    sid = body.get('strategyId')
+    revision_request = body.get('revisionRequest', '')
+    if not sid:
+        raise HTTPException(status_code=422, detail='strategyId is required for a revision.')
+    if not revision_request.strip():
+        raise HTTPException(status_code=422, detail='revisionRequest is required (what to change).')
+    doc = _studio_get(sid, pid)
+    if not doc:
+        raise HTTPException(status_code=404, detail='No such strategy.')
+    current_contract = doc.get('contract') or {}
+    if not (LLM_READY_KEY and _HAS_LLM):
+        raise HTTPException(status_code=503, detail='Albert is unavailable for revision.')
+    import json as _json
+    contract_json = _json.dumps(current_contract, default=str)
+    prompt = (
+        f"CURRENT STRATEGY CONTRACT:\n{contract_json}\n\n"
+        f"USER'S REVISION REQUEST:\n{revision_request}\n\n"
+        f"Apply the requested changes and return the COMPLETE revised strategy JSON."
+    )
+    candidate = None
+    errors = ['Albert did not return a usable revision.']
+    for attempt in range(2):
+        try:
+            chat = (LlmChat(api_key=LLM_READY_KEY, session_id='revise-' + uuid.uuid4().hex[:8],
+                            system_message=STUDIO_REVISE_SYSTEM)
+                    .with_model('gemini', _model_for('strategy')).with_params(temperature=0.2, max_tokens=3000))
+            instructions = prompt
+            if attempt:
+                instructions += (' Your earlier revision failed server validation: ' + '; '.join(errors) +
+                                 '. Regenerate preserving all requested changes.')
+            reply = asyncio.run(chat.send_message(UserMessage(text=instructions)))
+            raw = (getattr(reply, 'text', None) or getattr(reply, 'content', None) or
+                   (reply if isinstance(reply, str) else '')).strip() if reply else ''
+            if '```' in raw:
+                raw = re.sub(r'```(?:json)?', '', raw).strip()
+            candidate = json.loads(raw) if raw else None
+            if not candidate or not isinstance(candidate, dict):
+                errors = ['Albert returned unparseable JSON.']
+                candidate = None
+                continue
+            break
+        except Exception as exc:
+            errors = [str(exc)[:200]]
+            candidate = None
+    if not candidate:
+        raise HTTPException(status_code=502, detail='Albert revision failed: %s' % '; '.join(errors))
+    # Preserve immutable fields from the original contract.
+    candidate['walletName'] = current_contract.get('walletName')
+    candidate['startingCash'] = current_contract.get('startingCash')
+    # Default entry sizing when neither LLM nor parser provided one.
+    if not candidate.get('entrySizing') or not candidate['entrySizing'].get('method'):
+        candidate['entrySizing'] = current_contract.get('entrySizing') or {'method': 'PCT_AVAILABLE_CASH', 'pct': 25}
+    # Preserve portfolio goals unless explicitly revised.
+    if not candidate.get('portfolioGoals') and current_contract.get('portfolioGoals'):
+        candidate['portfolioGoals'] = current_contract['portfolioGoals']
+    c, chash, sv_err, st_err = _studio_validate(candidate, pid)
+    return {'status': 'ready',
+            'revisedDraft': c, 'contractHash': chash,
+            'summary': _studio_summary(c),
+            'saveErrors': sv_err, 'startErrors': st_err,
+            'originalStrategyId': sid,
+            'originalVersion': doc.get('version'),
+            'note': 'Review the revised strategy. Save it to apply the changes. '
+                    'Existing tickets retain their entry-time exit rules.'}
+
 
 
 @app.post('/api/v1/albert/studio/validate')
@@ -13337,30 +13590,27 @@ def studio_backtest_endpoint(sid: str, payload: dict = Body(default={}), user: d
 # =====================================================================
 # M-G — UNIFIED STRATEGY <-> PAPER-TRADING JOURNEY
 # =====================================================================
-# One journey: build -> save -> start paper trading. A strategy owns its OWN
+# One journey: build -> save -> start Auto Run. A strategy owns its OWN
 # isolated paper wallet (created on first start), so each strategy's performance
 # is measured independently and never co-mingled.
 #
-# "Observe" is GONE. A live strategy is either:
-#   REVIEW    -> Albert proposes, you approve each paper trade
-#   AUTOPILOT -> Albert places the simulated trades himself
-#
-# Controls are Start / Stop only (no separate pause), and the paper wallet is an
-# implementation detail the user never has to set up.
+# Mode concept is retired. The worker acts from runtimeState only.
+# Controls are: Start Auto Run / Stop Auto Run / Revise with Albert.
 # NOTE: these routes MUST be declared before the generic /{sid}/{cmd} route below,
 # otherwise the catch-all would swallow them.
 STRATEGY_PAPER_START_CASH = Decimal('100000.00')
+# Legacy maps — retained only so references in _strategy_paper_public don't crash.
+# No new code should use these.
 APPROVAL_TO_ACCT_MODE = {'AUTOPILOT': 'PAPER_AUTOPILOT'}
-# Legacy OBSERVE wallets keep their mode; APPROVAL_REQUIRED has been retired.
 ACCT_MODE_TO_APPROVAL = {'PAPER_AUTOPILOT': 'AUTOPILOT', 'OBSERVE': 'OBSERVE'}
 
 # ── Startup migration: pause any RUNNING accounts still using the retired
-# APPROVAL_REQUIRED mode. Users must manually restart under AUTOPILOT. ──
+# APPROVAL_REQUIRED mode. Users must manually restart under Auto Run. ──
 _ar_paused = paper_accounts_col.update_many(
     {'mode': 'APPROVAL_REQUIRED', 'runtimeState': 'RUNNING'},
     {'$set': {'runtimeState': 'PAUSED_BY_USER'}})
 if _ar_paused.modified_count:
-    print('MIGRATION: paused %d RUNNING APPROVAL_REQUIRED accounts — restart under Autopilot.'
+    print('MIGRATION: paused %d RUNNING APPROVAL_REQUIRED accounts — restart under Auto Run.'
           % _ar_paused.modified_count)
 
 PAPER_STATUS_LABEL = {'SAVED': 'Saved · not trading', 'STOPPED': 'Stopped',
@@ -13370,35 +13620,29 @@ PAPER_STATUS_LABEL = {'SAVED': 'Saved · not trading', 'STOPPED': 'Stopped',
                       'RESTRICTED_IN_WALLET': 'Restricted in this wallet · exits preserved',
                       'HALTED_RISK': 'Halted — drawdown limit', 'ARCHIVED': 'Archived',
                       'HALTED_GOAL_CLOSED': 'Goal reached — all closed',
-                      'HALTED_GOAL_ENTRIES': 'Goal reached — managing exits'}
+                      'HALTED_GOAL_ENTRIES': 'Goal reached — managing exits',
+                      'GOAL_CLOSE_PENDING': 'Goal reached — closing remaining tickets'}
 
 
-def _studio_mode_blocker(approval):
-    """Do not promise paper execution when the selected mode cannot run."""
+def _studio_mode_blocker(approval=None):
+    """Do not promise paper execution when the environment safety switch is off,
+    or when the worker is genuinely not running."""
     if not PAPER_EXECUTION_ENABLED:
         return 'Paper execution is disabled; Start is unavailable.'
-    if not PAPER_MULTI_ASSET_ENABLED:
-        return 'The multi-asset paper worker required by Strategy Studio is disabled.'
-    if approval == 'AUTOPILOT' and not PAPER_AUTOPILOT_ENABLED:
-        return 'Autopilot is disabled; choose Review or wait for it to be enabled.'
     try:
         if not _scheduler or not _scheduler.running or not _scheduler.get_job('paper_autopilot'):
             return 'The paper worker is not running.'
         last = _AUTOPILOT.get('lastCompletedAt')
         last_run = _AUTOPILOT.get('lastRunAt')
         state = _AUTOPILOT.get('state')
-        # If the worker completed recently, all good.
         if last:
             age = (datetime.datetime.utcnow() - datetime.datetime.fromisoformat(last)).total_seconds()
             if state == 'running' and age <= 180:
-                return None  # healthy
+                return None
             if age <= 180:
-                return None  # completed recently, even if delayed
-        # If the worker started but never completed, it may be stuck on a slow
-        # The worker now has a 25-second budget and always completes its cycle.
-        # If it hasn't completed recently, it genuinely isn't running.
+                return None
         if state in ('starting', None) and last_run:
-            return None  # first cycle still in progress
+            return None
         if not last and not last_run:
             return 'The paper worker has not started yet. Please wait a moment.'
         return 'The paper worker has not completed a recent cycle. Please try again shortly.'
@@ -13414,15 +13658,14 @@ def _strategy_acct(doc, pid):
 
 
 def _strategy_paper_status(doc, acct):
-    """Plain, single status for the unified journey."""
+    """Plain, single status for the unified journey (no mode dependency)."""
     st = doc.get('status')
     if st == 'ARCHIVED':
         return 'ARCHIVED'
     if st == 'PAPER_ACTIVE':
         rs = (acct or {}).get('runtimeState')
         if rs == 'RUNNING':
-            mode = ACCT_MODE_TO_APPROVAL.get((acct or {}).get('mode'), 'AUTOPILOT')
-            if _studio_mode_blocker(mode):
+            if _studio_mode_blocker():
                 return 'UNAVAILABLE'
             assessment = (acct or {}).get('strategyAssessment') or {}
             if (assessment.get('strategyVersion') == doc.get('version') and
@@ -13431,6 +13674,8 @@ def _strategy_paper_status(doc, acct):
             return 'LIVE'
         if rs == 'PAUSED_RISK_BREAKER':
             return 'HALTED_RISK'
+        if rs in ('HALTED_GOAL_CLOSED', 'HALTED_GOAL_ENTRIES', 'GOAL_CLOSE_PENDING'):
+            return rs
         return 'STOPPED'
     return 'STOPPED' if acct else 'SAVED'
 
@@ -13447,8 +13692,7 @@ def _strategy_paper_public(doc, pid, acct=None):
         blockers.append('The assigned paper wallet is unavailable; Start cannot open a second wallet.')
     if status == 'HALTED_RISK':
         blockers.append('The drawdown breaker requires a reviewed reset.')
-    modes = {mode: _studio_mode_blocker(mode) for mode in APPROVAL_TO_ACCT_MODE}
-    modes_ready = any(reason is None for reason in modes.values())
+    modes_ready = not _studio_mode_blocker()
     blockers = [b for b in blockers if b]
     capabilities = [_studio_capability_row(a['symbol'], _get_mandate(pid))
                     for a in (doc.get('contract') or {}).get('assets') or []]
@@ -13491,8 +13735,7 @@ def _strategy_paper_public(doc, pid, acct=None):
             'canStart': not blockers and modes_ready and status != 'ARCHIVED',
             'entryBlockers': blockers, 'startErrors': _st_err, 'saveErrors': _sv_err,
             'workerUnavailable': not modes_ready,
-            'modeBlockers': modes, 'assessment': assessment, 'assetCapabilities': capabilities,
-            'approvalMode': ACCT_MODE_TO_APPROVAL.get((acct or {}).get('mode')) if acct else None,
+            'assessment': assessment, 'assetCapabilities': capabilities,
             'walletName': (acct or {}).get('name') or (doc.get('contract') or {}).get('walletName'),
             'startingCash': (_paper_core.dstr((acct or {}).get('startingCash')) if acct else
                              (doc.get('contract') or {}).get('startingCash')),
@@ -13506,24 +13749,23 @@ def _strategy_paper_public(doc, pid, acct=None):
             'executionModel': 'direct_price',
             'goalStatus': (acct or {}).get('goalStatus'),
             'portfolioGoals': (acct or {}).get('portfolioGoals'),
+            'entrySizing': (doc.get('contract') or {}).get('entrySizing'),
             'paperOnly': True}
 
 
-def _paper_new_wallet_for_strategy(pid, doc, acct_mode):
+def _paper_new_wallet_for_strategy(pid, doc, _acct_mode=None):
     """Open exactly one named, independent virtual wallet with reviewed starting cash.
-    No automatic 100k fallback — the user's stated amount is preserved as agreed."""
+    No automatic 100k fallback — the user's stated amount is preserved as agreed.
+    Mode parameter is retired; _acct_mode is accepted but ignored for backward compat."""
     contract = doc.get('contract') or {}
     raw_cash = contract.get('startingCash')
     if raw_cash is None:
         raise HTTPException(status_code=422,
-                            detail='No virtual starting amount was agreed. Please specify the starting capital in the strategy review before starting paper trading.')
+                            detail='No virtual starting amount was agreed. Please specify the starting capital in the strategy review before starting Auto Run.')
     start = _paper_core.D(raw_cash)
     name = contract.get('walletName') or (doc.get('name') or 'Strategy')[:60]
     if start is None or not _paper_core.MIN_NOTIONAL <= start <= Decimal('1000000000'):
         raise HTTPException(status_code=422, detail='Needs changes: invalid reviewed virtual starting amount.')
-    # Strategy-dedicated wallets use the reviewed contract reserve.
-    # The mandate default (25%) is a generic safety net that should not silently
-    # override an explicitly reviewed strategy reserve.
     contract_reserve = _paper_core.D(contract.get('reservePct'))
     if contract_reserve is not None:
         reserve_pct = contract_reserve
@@ -13536,7 +13778,7 @@ def _paper_new_wallet_for_strategy(pid, doc, acct_mode):
     econ = _paper_core.new_account_economics(start, reserve_pct)
     acct = {'paperAccountId': 'pa_' + uuid.uuid4().hex[:12], 'ownerId': pid,
             'name': name, 'baseCurrency': 'USDC',
-            'mode': acct_mode, 'runtimeState': 'RUNNING', 'mandateId': 'default',
+            'runtimeState': 'RUNNING', 'mandateId': 'default',
             'mandateVersion': 0, 'executionProfileId': PAPER_EXEC_PROFILE['executionProfileId'],
             'version': 0, 'createdAt': datetime.datetime.utcnow().isoformat(), 'archivedAt': None,
             'strategyId': doc['strategyId'], 'strategyVersion': doc['version'],
@@ -13545,10 +13787,13 @@ def _paper_new_wallet_for_strategy(pid, doc, acct_mode):
     if contract.get('portfolioGoals'):
         acct['portfolioGoals'] = contract['portfolioGoals']
         acct['goalStatus'] = {'halted': False, 'tradeCount': 0}
+    # Persist entry sizing from the reviewed contract on the account.
+    if contract.get('entrySizing'):
+        acct['entrySizing'] = contract['entrySizing']
     paper_accounts_col.insert_one(dict(acct))
     _paper_ledger_add(acct['paperAccountId'], 'ACCOUNT_OPENED', 'account', acct['paperAccountId'],
                       start, acct['baseCurrency'],
-                      'Opened a dedicated paper wallet for "%s".' % acct['name'])
+                      'Opened a dedicated paper wallet for "%s". Auto Run.' % acct['name'])
     return acct
 
 
@@ -13567,21 +13812,17 @@ def _studio_guard(doc, body, pid, cmd):
 @app.post('/api/v1/albert/studio/strategies/{sid}/start-paper')
 def studio_start_paper(sid: str, payload: dict = Body(default={}),
                        user: dict = Depends(get_current_user)):
-    """Start paper trading for THIS strategy. Creates its own isolated paper wallet on
-    first start, binds the exact reviewed contract version, and goes live in the chosen
-    trade-approval mode. Paper only — this can never place a real order."""
+    """Start Auto Run paper trading for THIS strategy. Creates its own isolated paper
+    wallet on first start, binds the exact reviewed contract version, and goes live.
+    Paper only — this can never place a real order."""
     pid = owner_pid(user)
     body = payload or {}
     doc = _studio_get(sid, pid)
     if not doc:
         raise HTTPException(status_code=404, detail='No such strategy.')
-    approval = str(body.get('approvalMode') or 'AUTOPILOT').upper()
-    if approval not in APPROVAL_TO_ACCT_MODE:
-        raise HTTPException(status_code=422,
-                            detail='Trade approval must be AUTOPILOT.')
     if doc.get('status') == 'ARCHIVED':
         raise HTTPException(status_code=409, detail='This strategy is archived.')
-    blocker = _studio_mode_blocker(approval)
+    blocker = _studio_mode_blocker()
     if blocker:
         raise HTTPException(status_code=503, detail=blocker)
     key = _studio_guard(doc, body, pid, 'startpaper')
@@ -13589,7 +13830,6 @@ def studio_start_paper(sid: str, payload: dict = Body(default={}),
     if prior is not None:
         return {'status': 'ready', 'command': 'start-paper', **_studio_public(doc),
                 **_strategy_paper_public(doc, pid)}
-    acct_mode = APPROVAL_TO_ACCT_MODE[approval]
     acct = _strategy_acct(doc, pid) or paper_accounts_col.find_one(
         {'ownerId': pid, 'strategyId': sid, 'dedicatedToStrategy': True}, sort=[('createdAt', 1)])
     if acct and (acct.get('strategyId') != sid or not acct.get('dedicatedToStrategy') or
@@ -13621,7 +13861,7 @@ def studio_start_paper(sid: str, payload: dict = Body(default={}),
         if claimed.modified_count != 1:
             raise HTTPException(status_code=409, detail='Strategy Start is already underway; reload its latest version.')
         try:
-            acct = _paper_new_wallet_for_strategy(pid, doc, acct_mode)
+            acct = _paper_new_wallet_for_strategy(pid, doc, None)
         except Exception:
             strategy_contracts_col.update_one({'_id': doc['_id'], 'status': 'STARTING'},
                                               {'$set': {'status': 'REVIEWED'}})
@@ -13630,13 +13870,13 @@ def studio_start_paper(sid: str, payload: dict = Body(default={}),
         updated = paper_accounts_col.update_one(
             {'paperAccountId': acct['paperAccountId'], 'ownerId': pid, 'strategyId': sid,
              'dedicatedToStrategy': True},
-            {'$set': {'mode': acct_mode, 'runtimeState': 'RUNNING',
+            {'$set': {'runtimeState': 'RUNNING',
                       'strategyVersion': doc['version'], 'strategyContractHash': doc['contractHash']},
              '$inc': {'version': 1}})
         if updated.matched_count != 1:
             raise HTTPException(status_code=409, detail='Strategy wallet binding changed; no new wallet was opened.')
         _paper_ledger_add(acct['paperAccountId'], 'RESUME', 'account', acct['paperAccountId'],
-                          None, None, 'Paper trading started in %s mode.' % approval)
+                          None, None, 'Auto Run paper trading started.')
         acct = _paper_get(acct['paperAccountId'], pid)
     # Start means the strategy is permitted to watch for a later canonical BUY.
     # It does not imply that one exists: WAIT is a valid running state.
@@ -13683,13 +13923,9 @@ def studio_stop_paper(sid: str, payload: dict = Body(default={}),
         paused = paper_accounts_col.update_one(
             {'paperAccountId': acct['paperAccountId'], 'ownerId': pid, 'runtimeState': 'RUNNING'},
             {'$set': {'runtimeState': 'PAUSED_BY_USER'}, '$inc': {'version': 1}})
-        superseded = paper_proposals_col.update_many(
-            {'paperAccountId': acct['paperAccountId'], 'ownerId': pid,
-             'strategyId': sid, 'status': 'CREATED'},
-            {'$set': {'status': 'SUPERSEDED', 'supersededAt': datetime.datetime.utcnow().isoformat()}})
-        if paused.modified_count or superseded.modified_count:
+        if paused.modified_count:
             _paper_ledger_add(acct['paperAccountId'], 'PAUSE', 'account', acct['paperAccountId'],
-                              None, None, 'Paper trading stopped; no new Review proposals or entries. '
+                              None, None, 'Auto Run stopped. '
                               'Existing holdings and valid exits remain.')
         acct = _paper_get(acct['paperAccountId'], pid)
     if doc.get('status') == 'PAPER_ACTIVE':
@@ -13705,46 +13941,8 @@ def studio_stop_paper(sid: str, payload: dict = Body(default={}),
 @app.post('/api/v1/albert/studio/strategies/{sid}/approval-mode')
 def studio_set_approval_mode(sid: str, payload: dict = Body(default={}),
                              user: dict = Depends(get_current_user)):
-    """Switch this strategy between 'Review and approve' and 'Autopilot'. Applies to the
-    strategy's own wallet only — other strategies are untouched."""
-    pid = owner_pid(user)
-    body = payload or {}
-    doc = _studio_get(sid, pid)
-    if not doc:
-        raise HTTPException(status_code=404, detail='No such strategy.')
-    approval = str(body.get('approvalMode') or '').upper()
-    if approval not in APPROVAL_TO_ACCT_MODE:
-        raise HTTPException(status_code=422, detail='Trade approval must be AUTOPILOT.')
-    blocker = _studio_mode_blocker(approval)
-    if blocker:
-        raise HTTPException(status_code=503, detail=blocker)
-    key = _studio_guard(doc, body, pid, 'approval:' + approval)
-    prior = _studio_idem(pid, key)
-    if prior is not None:
-        return {'status': 'ready', 'command': 'approval-mode', **_strategy_paper_public(doc, pid)}
-    acct = _strategy_acct(doc, pid)
-    if not acct:
-        raise HTTPException(status_code=409,
-                            detail='Start paper trading first — then you can change trade approval.')
-    _c, _h, _sv_err, _st_err = _studio_validate(doc.get('contract') or {}, pid, account=acct); errors = _sv_err + _st_err
-    if errors or _h != doc.get('contractHash'):
-        raise HTTPException(status_code=422, detail='This plan cannot be executed as reviewed: '
-                            + '; '.join(errors or ['contract hash mismatch']))
-    paper_accounts_col.update_one({'paperAccountId': acct['paperAccountId'], 'ownerId': pid,
-                                   'strategyId': sid},
-                                  {'$set': {'mode': APPROVAL_TO_ACCT_MODE[approval]},
-                                   '$inc': {'version': 1}})
-    if approval == 'AUTOPILOT':
-        paper_proposals_col.update_many({'paperAccountId': acct['paperAccountId'], 'ownerId': pid,
-                                         'strategyId': sid, 'status': 'CREATED'},
-                                        {'$set': {'status': 'SUPERSEDED',
-                                                  'supersededAt': datetime.datetime.utcnow().isoformat()}})
-    _paper_ledger_add(acct['paperAccountId'], 'MODE_CHANGED', 'account', acct['paperAccountId'],
-                      None, None, 'Trade approval set to %s.' % approval)
-    acct = _paper_get(acct['paperAccountId'], pid)
-    result = {'status': 'ready', 'command': 'approval-mode',
-              **_strategy_paper_public(doc, pid, acct)}
-    return _studio_idem(pid, key, result)
+    """RETIRED — trade approval modes no longer exist. Returns 410 Gone."""
+    raise HTTPException(status_code=410, detail='Trade approval modes are retired. Use Start Auto Run / Stop Auto Run.')
 
 
 
@@ -13799,12 +13997,6 @@ def studio_strategy_paper(sid: str, user: dict = Depends(get_current_user)):
         return {**out, 'dashboard': None, 'performance': None,
                 'positions': [], 'pendingApprovals': [], 'activity': [], 'proposalHistory': []}
     d = _paper_dashboard_payload(dict(acct))
-    proposal_history = list(paper_proposals_col.find(
-        {'ownerId': pid, 'paperAccountId': acct['paperAccountId'], 'strategyId': sid,
-         'status': {'$in': ['SUPERSEDED', 'CANCELLED_BY_USER', 'EXPIRED', 'REJECTED_ON_REVALIDATION']}},
-        {'_id': 0, 'proposalId': 1, 'side': 1, 'asset': 1, 'status': 1,
-         'strategyVersion': 1, 'createdAt': 1, 'supersededAt': 1})
-        .sort('createdAt', -1).limit(30))
     eq = d.get('equity') or {}
     startc = (d.get('account') or {}).get('startingCash')
     return {**out, 'startedAt': doc.get('paperStartedAt'),
@@ -13817,8 +14009,6 @@ def studio_strategy_paper(sid: str, user: dict = Depends(get_current_user)):
                             'drawdownPct': eq.get('drawdownPct'),
                             'valueAvailable': eq.get('available')},
             'positions': d.get('positions') or [],
-            'pendingApprovals': [],
-            'proposalHistory': proposal_history,
             'activity': _filter_strategy_activity(d.get('recentActivity') or [], doc),
             'integrity': d.get('integrity') or {},
             'marketData': (d.get('integrity') or {}).get('marketData'),
@@ -13868,7 +14058,7 @@ def paper_overview(user: dict = Depends(get_current_user)):
     tot_cash = Decimal('0'); tot_risk = Decimal('0'); tot_risk_limit = Decimal('0')
     tot_protected = Decimal('0'); tot_deployable = Decimal('0')
     value_known = True; cash_known = True; risk_known = True; reserve_known = True; wallets = 0
-    realized = Decimal('0'); fees = Decimal('0')
+    realized = Decimal('0')
     closed_trades = 0; wins = 0
     # Build a lookup of strategies by paperAccountId for enrichment.
     strategy_by_account = {}
@@ -13930,13 +14120,19 @@ def paper_overview(user: dict = Depends(get_current_user)):
                 tot_risk += risk_usd
                 tot_risk_limit += limit_usd
             realized += (_paper_core.D(eq.get('realizedPnl')) or Decimal('0'))
-            fees += (_paper_core.D(eq.get('fees')) or Decimal('0'))
             closed_trades += int(perf.get('closedTrades') or 0)
             wins += int(perf.get('wins') or 0)
             last = (d.get('recentActivity') or [{}])[0] or {}
             tag = {'paperAccountId': paid, 'strategyName': strategy_by_account.get(paid, (None, None, {}))[2].get('name') or a_doc.get('name') or 'Paper wallet'}
+            # Apply the same strategy-scoped activity filtering as the individual endpoint.
+            strat_doc = strategy_by_account.get(paid, (None, None, {}))[2]
+            raw_activity = d.get('recentActivity') or []
+            if strat_doc and strat_doc.get('contract'):
+                filtered = _filter_strategy_activity(raw_activity, strat_doc)
+            else:
+                filtered = raw_activity
             positions += [{**p, **tag} for p in (d.get('positions') or [])]
-            activity += [{**e, **tag} for e in (d.get('recentActivity') or [])]
+            activity += [{**e, **tag} for e in filtered]
             recent_fills += [{**e, **tag} for e in (acct.get('ledger') or [])
                              if e.get('eventType') == 'FILL' and e.get('side') in ('BUY', 'SELL')
                              and not e.get('nonEconomic')]
@@ -13956,13 +14152,11 @@ def paper_overview(user: dict = Depends(get_current_user)):
                                           _paper_core.PCT_Q)
                          if (value_known and wallets and tot_start > 0) else None),
               'realizedPnl': _paper_core.dstr(realized) if wallets else None,
-              'fees': _paper_core.dstr(fees) if wallets else None,
               'closedTrades': closed_trades,
               'wins': wins,
               'winRatePct': round(wins / closed_trades * 100, 1) if closed_trades else None,
               'openPositions': len(positions),
-              'pendingApprovals': 0,
-              'autopilotStrategies': len([s for s in live if s.get('approvalMode') == 'AUTOPILOT'])}
+              'liveAutoRunStrategies': len(live)}
     combined_usable = bool(wallets and value_known and tot_value > 0)
     cash_usable = bool(wallets and cash_known)
     reserve_usable = bool(combined_usable and reserve_known)
@@ -15324,7 +15518,7 @@ def _albert_notifications(pid, limit=40):
     """Build the merged, most-recent-first per-pid notification list."""
     seen = _notif_seen_ids(pid)
     items = []
-    # -1) Paper Autopilot trade/approval notifications (background worker).
+    # -1) Paper Auto Run trade/approval notifications (background worker).
     try:
         for a in paper_notif_col.find({'pid': pid}).sort('ts', -1).limit(20):
             items.append({'id': a.get('_id'), 'category': 'paper', 'severity': a.get('severity', 'info'),

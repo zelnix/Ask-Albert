@@ -107,7 +107,7 @@ const PRIMARY_NAV = [
   { id: 'ask', label: 'Ask Albert', icon: MessageCircle,
     blurb: 'Your context-aware trading companion. Explain, explore and build — grounded strictly in your live state of play.' },
   { id: 'strategies', label: 'Strategies', icon: Crosshair,
-    blurb: 'One journey: build a plan with Albert, save it, then start paper trading on it. Each strategy carries its own status, trade approval (review each trade or let Albert autopilot), activity and performance — on its own ring-fenced virtual wallet.' },
+    blurb: 'One journey: build a plan with Albert, save it, then start Auto Run. Each strategy carries its own status, activity and performance — on its own ring-fenced virtual wallet. Auto Run uses your reviewed rules to execute simulated trades autonomously.' },
   { id: 'paper', label: 'Paper Trading', icon: FlaskConical,
     blurb: 'The scoreboard: combined paper performance across every strategy. Review-only — you start, stop and approve trades on the strategy itself. Paper only, no real orders.' },
 ];
