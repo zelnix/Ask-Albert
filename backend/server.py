@@ -12386,6 +12386,15 @@ ASK_ALBERT_SYSTEM = (
     "comparable past conditions — never a forecast, prediction, expectation or target. Quote it as 'comparable "
     "past conditions produced X% to Y% over N days' and always name the horizon. Never present the median as "
     "what you expect.\n\n"
+    "INCOMPLETE MANDATE: when the context shows mandateStatus = INCOMPLETE, this is your TOP PRIORITY before "
+    "giving strategy or trading advice. Proactively and warmly prompt the user to complete their mandate by "
+    "providing: (1) their investment GOAL — e.g. 'grow long-term wealth', 'generate income', 'speculate on "
+    "momentum'; (2) their RISK TOLERANCE — Conservative, Moderate, or Aggressive; (3) their PROTECTED RESERVE "
+    "percentage — the cash cushion they always want to keep (e.g. 25%). Until the mandate is complete, gently "
+    "remind the user that strategy creation, auto-execution and personalised sizing all depend on having these "
+    "set. If the user provides these details in conversation, confirm you've noted them and tell them to save "
+    "via the Settings screen (/?section=settings). You may still answer market questions, but always weave in "
+    "a nudge to complete the mandate if it remains incomplete.\n\n"
     "RESEARCH FINDINGS are hypotheses with declared confirm and invalidate conditions. Report the hypothesis "
     "and its conditions; never upgrade an open hypothesis into a conclusion.\n\n"
     "ENGINE CODE REVIEW: when bounded INTERNAL ENGINE SOURCE appears in context, use it as read-only "
@@ -12811,6 +12820,28 @@ def _ask_gather(user, message, entity=None, context=None):
 
     # State of play is always in scope (market + user context).
     add('state_of_play', _ask_read_state_of_play(user, sop))
+
+    # When the mandate is incomplete, inject a prominent mandate-prompt block
+    # so Albert proactively asks the user to complete it.
+    mandate_status = (sop.get('user') or {}).get('mandateStatus')
+    if mandate_status != 'COMPLETE':
+        m_user = sop.get('user') or {}
+        missing = []
+        if not m_user.get('goal'):
+            missing.append('investment goal')
+        if not m_user.get('riskTolerance'):
+            missing.append('risk tolerance (Conservative / Moderate / Aggressive)')
+        if m_user.get('protectedReservePct') is None:
+            missing.append('protected reserve %')
+        blocks.append(
+            '[MANDATE_INCOMPLETE] The owner\'s trading mandate is not complete. '
+            'Missing fields: %s. '
+            'Albert MUST proactively prompt the user to provide these before offering '
+            'strategy or execution advice. The user can save their mandate at /?section=settings.'
+            % (', '.join(missing) if missing else 'unknown fields'))
+        evidence.append({'label': 'mandate_status', 'kind': 'SYSTEM_CONCLUSION',
+                         'sourceId': 'mandate:check', 'asOf': None,
+                         'freshness': 'CURRENT', 'deepLink': '/?section=settings'})
 
     # Paper-account context is included ONLY when the question relates to the paper
     # wallet, positions, performance, or execution — not for general market research
