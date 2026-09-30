@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   Sparkles, Wallet, ShieldAlert, GitBranch, BarChart3, Newspaper,
-  Waves, ArrowUpRight, Maximize2, RefreshCw, ShieldCheck,
+  Waves, ArrowUpRight, Maximize2, RefreshCw, ShieldCheck, Bot,
 } from 'lucide-react';
 import ModalShell from './ModalShell';
 import DashboardAskPanel from './DashboardAskPanel';
@@ -79,55 +79,107 @@ const TickerContent = ({ d, ticker, snapshot }) => {
   return [
     // 1. BTC price + 24h change
     { title: 'BTC spot', value: ticker?.price ? `${money(ticker.price)} · ${change24 != null ? signed(change24) : ''}` : 'Unavailable', to: 'market-intel',
+      definition: 'The current BTC/USD spot price and its percentage change over the past 24 hours. This is the real-time market price of one Bitcoin in US dollars.',
       what: ticker?.price ? `BTC/USD spot ${money(ticker.price)}; 24h change ${change24 != null ? signed(change24) : 'unavailable'}.` : 'Quote unavailable.',
+      commentary: ticker?.price
+        ? `BTC is trading at ${money(ticker.price)}${change24 != null ? `. Over the past 24 hours the price has moved ${signed(change24)}${Math.abs(change24) > 5 ? ' — a significant daily move that may signal increased volatility' : Math.abs(change24) < 1 ? ' — essentially flat, suggesting consolidation' : ''}` : ''}. This is the reference price used by all other engine calculations.`
+        : 'The live BTC price feed is not responding. This typically means the ticker provider (CoinGecko or Kraken) is temporarily unreachable. All price-dependent metrics will also show as unavailable until the feed recovers.',
       source: ticker?.source || 'ticker', asOf: ticker?.ts },
     // 2. 7d downside probability (from scenario band)
     { title: '7d downside', value: band?.lowerPct != null ? `${signed(band.lowerPct)} to ${signed(band.upperPct)}` : 'Unavailable', to: 'scenarios',
+      definition: 'The 20th-to-80th percentile range of where BTC price could be in 7 days, based on the scenario evaluation model. The lower bound represents the bearish tail; the upper bound represents the bullish tail.',
       what: band?.lowerPct != null ? `20th–80th pct 7d range: ${signed(band.lowerPct)} to ${signed(band.upperPct)}.` : band?.reasonText || 'Unavailable.',
+      commentary: band?.lowerPct != null
+        ? `Based on the scenario evaluation model, there is roughly a 20% chance BTC moves below ${signed(band.lowerPct)} and a 20% chance it moves above ${signed(band.upperPct)} over the next 7 days. ${Math.abs(band.lowerPct) > Math.abs(band.upperPct) ? 'The downside tail is wider than the upside, suggesting the risk distribution is skewed bearish.' : Math.abs(band.upperPct) > Math.abs(band.lowerPct) ? 'The upside tail is wider, suggesting the distribution is skewed bullish.' : 'The band is roughly symmetric — no strong directional skew.'}`
+        : 'The scenario evaluation engine has not run yet, or the most recent run did not produce a valid probability band. Use "Ask Albert to refresh" or wait for the next scheduled evaluation cycle. The scenario engine requires at least 30 days of closed daily candles.',
       source: 'scenario-outlooks/preview', asOf: outlook?.baseline?.observedAt },
     // 3. Volume vs normal
     { title: 'Volume', value: volChange != null ? `${volChange > 0 ? '+' : ''}${volChange.toFixed(0)}% vs avg` : btcVolPct != null ? `BTC ${btcVolPct.toFixed(1)}% share` : 'Unavailable', to: 'market-intel',
+      definition: 'How current 24-hour trading volume compares to the 30-day average. Higher-than-normal volume often signals conviction behind a price move; lower volume suggests weak participation.',
       what: volChange != null ? `24h trading volume is ${volChange > 0 ? '+' : ''}${volChange.toFixed(0)}% vs 30d average.` : 'Volume data unavailable.',
+      commentary: volChange != null
+        ? `Trading volume over the last 24 hours is ${volChange > 0 ? '+' : ''}${volChange.toFixed(0)}% relative to the 30-day average. ${volChange > 50 ? 'This is unusually high volume — often accompanies breakouts, capitulation events or major news. Price moves on high volume tend to be more sustained.' : volChange > 20 ? 'Above-average volume suggests genuine participation behind the current price action.' : volChange < -30 ? 'Volume is well below normal — price moves in thin conditions are less reliable and more prone to reversal.' : 'Volume is in a normal range — no unusual activity to flag.'}`
+        : 'Volume data is not available. The market-streams engine has not produced a spot volume comparison for the last 24 hours. This feed is refreshed every 15 minutes; if it remains unavailable, the upstream exchange data source may be down.',
       source: 'spot volume shares', asOf: vol24?.asOf },
     // 4. Taker buy/sell ratio
     { title: 'Taker ratio', value: takerItem?.value || 'Unavailable', to: 'institutional',
+      definition: 'The ratio of aggressive buy orders to aggressive sell orders on derivatives exchanges. "Takers" are traders who hit the ask (buy) or bid (sell) with market orders. A ratio above 1.0 means buyers are more aggressive; below 1.0 means sellers dominate.',
       what: takerItem ? `Taker buy/sell ratio: ${takerItem.value}. Signal: ${takerItem.signal || 'N/A'}.` : 'Unavailable.',
+      commentary: takerItem
+        ? `The taker buy/sell ratio measures aggressive market orders. ${takerItem.value} — ${takerItem.signal === 'bullish' ? 'buyers are dominating, which typically signals near-term upward pressure' : takerItem.signal === 'bearish' ? 'sellers are dominating, suggesting near-term downward pressure' : 'the ratio is balanced — neither side is clearly dominant'}. This is sourced from OKX derivatives data and reflects institutional-grade order flow.`
+        : 'Taker buy/sell ratio is not available. This metric is sourced from OKX derivatives data, which is fetched during the engine snapshot refresh. If the OKX API is unreachable or the engine snapshot has not run recently, this reading will be missing. Ask Albert to refresh or check the Engine & Evidence screen.',
       source: takerItem?.source || 'OKX derivatives', asOf: takerItem?.as_of || takerItem?.asOf },
     // 5. Bear scenario price
     { title: 'Bear scenario', value: bearPrice != null ? `${money(bearPrice)}` : band?.lowerPct != null ? signed(band.lowerPct) : 'Unavailable', to: 'scenarios',
+      definition: 'The absolute BTC price in the 20th-percentile downside scenario over 7 days. This is the dollar level where only 20% of modelled outcomes were worse — a useful risk-planning threshold for position sizing and stop placement.',
       what: bearPrice != null ? `7d bear scenario price: ${money(bearPrice)} (${signed(lowerPct)} from current).` : 'Unavailable.',
+      commentary: bearPrice != null
+        ? `In the 20th-percentile bear scenario, BTC would be trading around ${money(bearPrice)} in 7 days — that is ${signed(lowerPct)} from the current price of ${money(basePrice)}. This is the price level where only 20% of historical scenarios resulted in a worse outcome. It serves as a risk planning threshold, not a prediction.`
+        : 'The bear scenario price could not be computed. This requires both a live BTC price and a completed scenario evaluation. Either the ticker feed or the scenario engine is not returning data. Check the 7d downside and BTC spot items above for specifics.',
       source: 'scenario-outlooks/preview', asOf: outlook?.baseline?.observedAt },
     // 6. Invalidation level (nearest support)
     { title: 'Support', value: dsZone?.price ? money(dsZone.price) + ` (${signed(-dsZone.distance_pct)})` : 'Unavailable', to: 'market-intel',
+      definition: 'The nearest technical support level from the daily-close chart analysis. Support is a price zone where historical buying interest has been strong enough to arrest declines. A break below support can trigger accelerated selling.',
       what: dsZone?.price ? `Nearest support: ${money(dsZone.price)}, ${dsZone.distance_pct}% below current price.` : 'Unavailable.',
+      commentary: dsZone?.price
+        ? `The nearest technical support level is at ${money(dsZone.price)}, which is ${dsZone.distance_pct}% below the current price. ${dsZone.distance_pct < 3 ? 'Price is very close to this support — a break below could trigger stop-loss cascades and accelerate the move.' : dsZone.distance_pct < 8 ? 'There is a reasonable buffer above support, but it is still within a normal daily range.' : 'Support is relatively far away, suggesting the current price has room to consolidate.'} This level is derived from the daily-close chart analysis in the core snapshot.`
+        : 'Support level data is not available. The core daily snapshot has not run recently, or the chart analysis did not identify a nearby support zone. This data is refreshed during the daily compute cycle.',
       source: 'chart analysis', asOf: d?.created_at },
     // 7. ETF net flow
     { title: 'ETF flow', value: net == null ? 'Unavailable' : `${signed(net, 'm')} · ${etf?.latest_date ? etf.latest_date.slice(5) : ''}`, to: 'institutional',
+      definition: 'The net inflow or outflow of capital into US-listed Bitcoin spot ETFs on the most recent reporting day. Positive means money is flowing in (buying pressure); negative means redemptions (selling pressure). Data is typically delayed by one business day.',
       what: net == null ? 'Unavailable.' : `Net flow ${signed(net, 'm USD')} for ${etf?.latest_date || ''}.`,
+      commentary: net != null
+        ? `Bitcoin spot ETFs saw a net ${net > 0 ? 'inflow' : 'outflow'} of ${signed(net, 'm USD')} on ${etf?.latest_date || 'the most recent reporting day'}. ${Math.abs(net) > 500 ? 'This is a very large flow — significant institutional conviction in one direction.' : Math.abs(net) > 200 ? 'A meaningful flow that reflects active institutional positioning.' : Math.abs(net) < 50 ? 'A relatively quiet day for ETF flows — no strong signal.' : 'A moderate flow.'} ETF data is typically delayed by one trading day.`
+        : 'ETF flow data is not available. The ETF report source has not published data recently, or the feed is unreachable. ETF flow data is updated daily after US market close and is typically delayed by one business day.',
       source: etf?.source || 'ETF report', asOf: etf?.latest_date },
     // 8. Funding rate
     { title: 'Funding', value: fundingItem?.value || 'Unavailable', to: 'institutional',
+      definition: 'The periodic payment between long and short holders of Bitcoin perpetual futures contracts. When positive, longs pay shorts (bullish crowding); when negative, shorts pay longs (bearish crowding). Extreme rates often precede mean-reversion moves.',
       what: fundingItem ? `Perpetual funding rate: ${fundingItem.value}. Signal: ${fundingItem.signal || 'N/A'}.` : 'Unavailable.',
+      commentary: fundingItem
+        ? `The perpetual futures funding rate is ${fundingItem.value}. ${fundingItem.signal === 'bullish' ? 'A positive funding rate means longs are paying shorts — the market is net long and willing to pay for it.' : fundingItem.signal === 'bearish' ? 'A negative funding rate means shorts are paying longs — bearish positioning dominates.' : 'The rate is near neutral — no strong leverage bias.'} Extreme funding rates (above 0.05% or below -0.03%) often precede mean-reversion moves.`
+        : 'Funding rate data is not available. This is sourced from OKX perpetual futures during the engine snapshot refresh. If OKX is unreachable or the snapshot has not refreshed recently, this reading will be missing.',
       source: fundingItem?.source || 'OKX derivatives', asOf: fundingItem?.as_of || fundingItem?.asOf },
     // 9. Halving progress
     { title: 'Halving', value: halvingPct != null ? `${halvingPct.toFixed(0)}% · ${cycle.phase}` : 'Unavailable', to: 'market-intel',
+      definition: 'How far through the current Bitcoin halving cycle we are. Bitcoin halves its block reward roughly every 4 years, reducing new supply. Historically, the 12–18 months after a halving have seen the strongest price appreciation.',
       what: halvingPct != null ? `Halving cycle ${halvingPct.toFixed(1)}% complete. Phase: ${cycle.phase}. ${cycle.days_since_halving}d since halving.` : 'Unavailable.',
+      commentary: halvingPct != null
+        ? `The current halving cycle is ${halvingPct.toFixed(1)}% complete (${cycle.days_since_halving} days since the last halving). The cycle phase is "${cycle.phase}". ${halvingPct < 25 ? 'Early in the cycle — historically, the first year after a halving has seen gradual price appreciation as reduced supply takes effect.' : halvingPct < 50 ? 'Mid-cycle — this is historically when the most explosive price appreciation occurs.' : halvingPct < 75 ? 'Entering the mature phase of the cycle — historically where cycle tops have formed.' : 'Late cycle — historically a period of distribution and eventual correction before the next halving.'}`
+        : 'Halving cycle data is not available. The core daily snapshot has not run, or the block height data from mempool.space was not retrieved. This is computed from the Bitcoin block reward schedule.',
       source: 'mempool.space', asOf: d?.created_at },
     // 10. BTC dominance
     { title: 'BTC dom.', value: num(d?.dominance?.dominance) != null ? `${num(d.dominance.dominance).toFixed(1)}%${num(d.dominance.change_7d) != null ? ` · ${signed(d.dominance.change_7d, ' pts')}` : ''}` : 'Unavailable', to: 'crossmarket',
+      definition: 'Bitcoin market cap as a percentage of total crypto market cap. Rising dominance typically means capital is rotating out of altcoins into BTC (risk-off); falling dominance suggests an "altcoin season" where smaller coins outperform.',
       what: num(d?.dominance?.dominance) != null ? `BTC dominance ${num(d.dominance.dominance).toFixed(2)}%.` : 'Not reported.',
+      commentary: num(d?.dominance?.dominance) != null
+        ? `Bitcoin's market cap dominance is ${num(d.dominance.dominance).toFixed(1)}%${num(d.dominance.change_7d) != null ? `, having moved ${signed(d.dominance.change_7d, ' percentage points')} over the past 7 days` : ''}. ${num(d.dominance.dominance) > 55 ? 'Dominance above 55% typically indicates a risk-off environment where capital is rotating from altcoins into BTC.' : num(d.dominance.dominance) < 45 ? 'Low dominance suggests an active altcoin season — capital is spreading across the broader market.' : 'Dominance is in the mid-range — no extreme rotation signal.'}`
+        : 'BTC dominance data is not available. This is sourced from CoinGecko during the daily core snapshot. If the CoinGecko API is unreachable or the snapshot has not run, this reading will be missing.',
       source: 'CoinGecko', asOf: d?.created_at },
     // 11. Altcoin breadth
     { title: 'Alt breadth', value: breadth?.altsWithReturns > 0 ? `${breadth.altsBeatingBtc}/${breadth.altsWithReturns} beat BTC` : 'Unavailable', to: 'market-intel',
+      definition: 'How many tracked altcoins are outperforming BTC over the assessment period. High breadth (most alts beating BTC) signals broad risk appetite; low breadth (few alts keeping up) signals a narrow, BTC-dominated market.',
       what: breadth?.altsWithReturns > 0 ? `${breadth.altsBeatingBtc} of ${breadth.altsWithReturns} altcoins beat BTC.` : 'Unavailable.',
+      commentary: breadth?.altsWithReturns > 0
+        ? `${breadth.altsBeatingBtc} out of ${breadth.altsWithReturns} tracked altcoins are outperforming BTC. ${breadth.altsBeatingBtc / breadth.altsWithReturns > 0.6 ? 'A majority of alts are beating BTC — this is a broad-based rally, suggesting genuine risk appetite across the market.' : breadth.altsBeatingBtc / breadth.altsWithReturns < 0.3 ? 'Very few alts are keeping up with BTC — this is a narrow, BTC-led move. Capital is concentrated, not distributed.' : 'Breadth is moderate — a mixed market with no clear leadership rotation.'}`
+        : 'Altcoin breadth data is not available. The phase assessment engine (part of market-streams) has not produced a breadth reading. This is refreshed every 15 minutes and requires data from multiple altcoin pairs.',
       source: 'phase assessment', asOf: phase?.assessedAt },
     // 12. Market stance
     { title: 'Stance', value: sop?.market?.regime ? titleCase(sop.market.regime) : 'Unavailable', to: 'briefing',
+      definition: 'The engine regime classification (Bull, Bear, or Range) based on the combined weight of price action, trend indicators, volume and market structure. This classification directly affects how the strategy engine sizes entries and manages risk.',
       what: claim?.text || (sop?.market?.regime ? `Regime: ${titleCase(sop.market.regime)}.` : 'Unavailable.'),
+      commentary: sop?.market?.regime
+        ? `Albert's current market regime classification is "${titleCase(sop.market.regime)}". ${claim?.text ? `The briefing summary: ${claim.text}` : ''} ${sop.market.regime === 'BULL' ? 'In a bull regime, the engine favours long entries and tighter take-profits.' : sop.market.regime === 'BEAR' ? 'In a bear regime, the engine is cautious on new entries and widens stop-losses.' : sop.market.regime === 'RANGE' ? 'In a range regime, the engine looks for mean-reversion setups within the identified band.' : 'The regime classification informs how the strategy engine sizes and times entries.'}`
+        : 'Market stance is not available. The state-of-play engine has not produced a regime classification. This requires a completed core daily snapshot with sufficient market data. Ask Albert to refresh or wait for the next scheduled cycle.',
       source: 'canonical regime', asOf: sop?.market?.asOf || sop?.generatedAt },
     // 13. Forecast performance
     { title: 'Forecasts', value: forecastPerf, to: 'scenario-evaluation',
+      definition: 'The prediction ledger tracks how accurate the engine forecasts have been. Each forecast is graded when its maturity date arrives by comparing the predicted direction against actual price. This is the primary measure of model reliability.',
       what: accuracy != null ? `${accuracy.toFixed(0)}% accuracy, ${graded} graded.` : 'Unavailable.',
+      commentary: accuracy != null
+        ? `The prediction ledger has graded ${graded} forecast(s) with an overall accuracy of ${accuracy.toFixed(0)}%. ${accuracy >= 70 ? 'This is strong performance — the model is demonstrating consistent predictive ability.' : accuracy >= 55 ? 'Performance is above chance but not exceptional — the model has some edge, but sizing and risk management matter more than raw accuracy.' : accuracy < 45 ? 'Accuracy is below 50%, which means the model has been less reliable than a coin flip over the graded period. This warrants caution.' : 'Performance is near the 50% baseline — the edge is marginal over this sample.'}`
+        : 'Forecast performance data is not available. The prediction ledger has not graded any forecasts yet. Forecasts are graded when their maturity date arrives and closed candle data is available. If the ledger engine has not run, ask Albert to refresh.',
       source: 'prediction_ledger', asOf: d?.prediction_ledger?.overall?.lastGradedAt },
   ];
 };
@@ -142,9 +194,30 @@ const TICKER_DEST_MAP = {
   'scenario-evaluation': 'scenario-evaluation',
 };
 
-const Explanation = ({ item, onNav, onEvidence }) => <div className="space-y-3 text-sm leading-relaxed text-slate-300">
-  <p>{item.what || 'Not available.'}</p>
-  <p className="border-t border-slate-700 pt-3 text-xs text-slate-400">Source: {item.source || 'unavailable'} · As of {when(item.asOf)}</p>
+const Explanation = ({ item, onNav, onEvidence }) => <div className="space-y-4 text-sm leading-relaxed text-slate-200">
+  {/* What is this metric? */}
+  {item.definition && (
+    <div className="rounded-lg border border-slate-700/50 bg-slate-800/40 px-3.5 py-2.5">
+      <p className="mb-0.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500">What is {item.title}?</p>
+      <p className="text-[13px] leading-relaxed text-slate-300">{item.definition}</p>
+    </div>
+  )}
+  {/* Albert's commentary — the main value of the popup */}
+  {item.commentary && (
+    <div className="rounded-lg border border-violet-800/40 bg-violet-950/30 px-3.5 py-3">
+      <p className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-violet-400"><Bot className="h-3.5 w-3.5" />Albert's take</p>
+      <p className="text-[13px] leading-relaxed text-slate-200">{item.commentary}</p>
+    </div>
+  )}
+  {/* Raw reading */}
+  <div>
+    <p className="mb-0.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Current reading</p>
+    <p className="text-[13px] text-slate-300">{item.what || 'Not available.'}</p>
+  </div>
+  {/* Source provenance */}
+  <div className="border-t border-slate-700/60 pt-3">
+    <p className="text-[11px] text-slate-500">Source: <span className="text-slate-400">{item.source || 'unavailable'}</span> · As of <span className="text-slate-400">{when(item.asOf)}</span></p>
+  </div>
   {item.snapshotId && <button type="button" onClick={() => onEvidence(item.snapshotId)} className="flex items-center gap-1.5 text-sm font-semibold text-sky-300 underline"><ShieldCheck className="h-4 w-4" />Open evidence</button>}
   {item.to && <NavigateLink id={TICKER_DEST_MAP[item.to] || (item.to.startsWith('dashboard-') ? item.to : `dashboard-${item.to}`)} onNav={onNav} className="text-sm">Open detailed screen<ArrowUpRight className="h-3.5 w-3.5" /></NavigateLink>}
 </div>;
