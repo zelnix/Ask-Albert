@@ -12328,13 +12328,16 @@ def _albert_answer(ctx, user_text, session_id, deep=False, system_override=None,
             pass
         return out[:8]
 
-    def _run(model, use_tools, timeout_s, max_toks):
+    def _run(model, use_tools, timeout_s, max_toks, thinking=None):
         def _call():
             async def _go():
+                params = dict(temperature=0.4, max_tokens=max_toks)
+                if thinking is not None:
+                    params['thinking_budget'] = thinking
                 chat = (LlmChat(api_key=LLM_READY_KEY, session_id=f'askquant-{session_id}',
                                 system_message=(system_override or CHAT_SYSTEM.format(ctx=ctx)))
                         .with_model('gemini', model)
-                        .with_params(temperature=0.4, max_tokens=max_toks))
+                        .with_params(**params))
                 if use_tools:
                     return await chat.with_tools([{'googleSearch': {}}]).send_message_with_tools(UserMessage(text=user_text))
                 return await chat.send_message(UserMessage(text=user_text))
@@ -12345,26 +12348,29 @@ def _albert_answer(ctx, user_text, session_id, deep=False, system_override=None,
         fut = _LLM_POOL.submit(_call)
         return fut.result(timeout=timeout_s)
 
+    # Attempt chains — thinking_budget caps internal reasoning to keep latency
+    # under the timeout for gemini-2.5-pro.  Budget 0 disables thinking entirely.
     if deep:
         _primary = _model_for('chat_deep')
-        attempts = [(_primary, True, 30, 4000),
-                    (CHAT_MODEL, True, 14, 4000),
-                    (CHAT_MODEL, False, 12, 4000)]
+        attempts = [(_primary, True, 45, 4000, 4096),
+                    (CHAT_MODEL, True, 25, 4000, 0),
+                    (CHAT_MODEL, False, 18, 4000, 0)]
     else:
         _primary = _model_for('chat_standard')
-        attempts = [(_primary, True, 20, 3500),
-                    (_primary, False, 14, 3500),
-                    (CHAT_MODEL, False, 12, 3500)]
+        attempts = [(_primary, True, 35, 3500, 2048),
+                    (_primary, False, 25, 3500, 0),
+                    (CHAT_MODEL, False, 18, 3500, 0)]
     if not grounded:
         # Context-grounded only (no web search) — used by Ask Albert (M-C), which must
         # answer strictly from the injected authoritative context, not the open web.
         _primary = _model_for('chat_deep' if deep else 'chat_standard')
-        attempts = [(_primary, False, 22, 3500),
-                    (CHAT_MODEL, False, 14, 3500)]
+        # First try with moderate thinking; fallback disables thinking for speed.
+        attempts = [(_primary, False, 45, 3500, 4096),
+                    (CHAT_MODEL, False, 22, 3500, 0)]
 
-    for model, use_tools, tmo, mx in attempts:
+    for model, use_tools, tmo, mx, thk in attempts:
         try:
-            reply = _run(model, use_tools, tmo, mx)
+            reply = _run(model, use_tools, tmo, mx, thinking=thk)
             text = _extract(reply)
             if text:
                 sources = _extract_sources(reply) if use_tools else []
