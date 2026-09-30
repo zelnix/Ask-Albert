@@ -3331,12 +3331,7 @@ export default function DashboardPage() {
   const [status, setStatus] = useState(__dashCache ? 'ready' : 'loading');
   const [error, setError] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [passPrompt, setPassPrompt] = useState(false);
-  const [passInput, setPassInput] = useState('');
-  const [passError, setPassError] = useState('');
-  const [passRemember, setPassRemember] = useState(true);
-  const [passAutoClear, setPassAutoClear] = useState(false);
-  const [showPassPopup, setShowPassPopup] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [ticker, setTicker] = useState(__tickerCache);
   const [active, setActive] = useState('home');
   const [homeParams, setHomeParams] = useState({ horizon: '7D', focus: null, mdHorizon: 'SWING' });
@@ -3691,70 +3686,9 @@ export default function DashboardPage() {
     return () => { alive = false; clearInterval(t); clearInterval(dref); };
   }, [load, symbol, authUser]);
 
-  const doRefresh = async (passcode, remember = true, autoClear = false) => {
-    setRefreshing(true);
-    setPassError('');
-    try {
-      const r = await fetch(`${API_BASE}/v1/refresh`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ passcode }),
-      });
-      if (r.status === 401) {
-        setRefreshing(false);
-        setPassPrompt(true);
-        setPassError('Incorrect passcode. Please try again.');
-        return;
-      }
-      if (r.status === 429) {
-        setRefreshing(false);
-        setPassPrompt(false);
-        if (typeof window !== 'undefined') window.alert('Too many refreshes — please wait a moment and try again.');
-        return;
-      }
-      // Accepted — persist the passcode only if the admin opted to remember it on this device.
-      if (typeof window !== 'undefined') {
-        if (remember && passcode) {
-          window.localStorage.setItem('btciq_admin_passcode', passcode);
-          if (autoClear) window.localStorage.setItem('btciq_admin_passcode_exp', String(Date.now() + 24 * 60 * 60 * 1000));
-          else window.localStorage.removeItem('btciq_admin_passcode_exp');
-        } else {
-          window.localStorage.removeItem('btciq_admin_passcode');
-          window.localStorage.removeItem('btciq_admin_passcode_exp');
-        }
-      }
-      setPassPrompt(false);
-      setPassInput('');
-      const id = setInterval(load, 4000);
-      setTimeout(() => clearInterval(id), 90000);
-    } catch (e) {
-      setRefreshing(false);
-      setPassError('Network error — please try again.');
-    }
-  };
-
-  // Read a saved passcode, honouring an optional 24h auto-clear expiry.
-  const readStoredPasscode = () => {
-    if (typeof window === 'undefined') return '';
-    const p = window.localStorage.getItem('btciq_admin_passcode') || '';
-    const exp = window.localStorage.getItem('btciq_admin_passcode_exp');
-    if (p && exp && Date.now() > Number(exp)) {
-      window.localStorage.removeItem('btciq_admin_passcode');
-      window.localStorage.removeItem('btciq_admin_passcode_exp');
-      return '';
-    }
-    return p;
-  };
-
   const handleRefresh = () => {
     // Instruction 3: No passcode gate. Triggers the analysis pipeline directly.
     window.dispatchEvent(new Event('albert:trigger-refresh'));
-  };
-
-  const submitPasscode = () => {
-    const p = (passInput || '').trim();
-    if (!p) { setPassError('Enter the admin passcode.'); return; }
-    doRefresh(p, passRemember, passAutoClear);
   };
 
   if (authUser === undefined) {

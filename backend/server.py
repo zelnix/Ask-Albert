@@ -19219,9 +19219,11 @@ def compute_alert_signals(symbol, settings=None):
     expanded_bull = bool(state == 'bull' and slow_e[60].iloc[-1] > slow_e[60].iloc[-6])
 
     last = df.iloc[-1]
-    green = bool(last['close'] > last['open'])
-    touched = bool(last['low'] <= slow_top * 1.01)
-    recovered = bool(last['close'] > slow_top)
+    last_open = last['open'] if last['open'] is not None else last['close']
+    last_low = last['low'] if last['low'] is not None else last['close']
+    green = bool(float(last['close']) > float(last_open))
+    touched = bool(float(last_low) <= slow_top * 1.01)
+    recovered = bool(float(last['close']) > slow_top)
     dip_buy = bool(expanded_bull and touched and green and recovered)
 
     bbw = _bollinger_width(close, 20, 2)
