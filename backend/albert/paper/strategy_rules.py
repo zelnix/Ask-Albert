@@ -99,6 +99,10 @@ def requested_triggers(text, assets):
         # per-coin rules — skip them here. They're extracted by extract_portfolio_goals().
         if is_portfolio_goal_clause(clause):
             continue
+        # Entry sizing instructions ("$500 per trade", "invest 10% of cash") are
+        # extracted separately and are not per-coin execution rules.
+        if is_entry_sizing_clause(clause):
+            continue
         named = [s for s in symbols if re.search(r'\b' + re.escape(s) + r'\b', clause, re.I)]
         sym = named[0] if len(named) == 1 else (symbols[0] if len(symbols) == 1 else None)
         raw = []
@@ -209,6 +213,10 @@ def requested_triggers(text, assets):
         for start, end in covered:
             residual[start:end] = ' ' * (end - start)
         remaining = ''.join(residual)
+        # When a PRICE rule was already parsed from this clause, strip "price ... above/below"
+        # fragments from remaining so they do not re-trigger unknown_trigger.
+        if any(r['kind'] == 'PRICE' for r in raw):
+            remaining = re.sub(r'\bprice\s+(?:\w+\s+){0,3}(?:above|below|over|under)\b', ' ', remaining, flags=re.I)
         # Strip exclusion/negation phrases that are NOT trading conditions:
         # "no other assets or conditions", "nothing else", "no additional", etc.
         # These are plain English constraints, not OR-logic branching.
@@ -227,6 +235,17 @@ def requested_triggers(text, assets):
         # Also strip common descriptive/summary words that are not actionable
         # triggers to avoid flagging strategy descriptions as unsupported instructions.
         uncaptured = re.sub(r'\b(?:strategy|paper|virtual|allocating|allocated|allocation|strict|limits?|per|with|its|this|from|entry|reserves?|protected|starting|cash|wallet|balance|budget|named|called|positions?|targets?|implements?|trading|across|all|every|each|no|other|additional|further|nothing|else|more|without|any|conditions?|assets?|implement)\b', ' ', uncaptured, flags=re.I)
+        # Strip action verbs, state verbs and transition words that commonly appear
+        # in strategy descriptions but are not execution triggers themselves.
+        uncaptured = re.sub(r'\b(?:set|sets|setting|use|uses|using|apply|applied|enable|configure|run|running|go|goes|going|drops?|falls?|rises?|gains?|moves?|increases?|decreases?|reaches?|hits?|gets?|puts?|place|places|keep|keeps|maintain|maintains?|hold|holds|monitor|monitors?|watch|watches|check|checks|start|starts|stop|stops|will|should|would|could|can|do|does|did|make|makes|want|wants|have|has|had|been|being|then|so|also|it|i|up|down|once|that|or|not|in|into|above|below|over|under|than|which|are|am|be|was|were|its|your|our|their|here|there|where|how|what|just|now)\b', ' ', uncaptured, flags=re.I)
+        # Strip dollar amounts that describe wallet sizing, budgets or starting cash
+        # (e.g. "$10,000", "$500") — these are not execution triggers.
+        uncaptured = re.sub(r'\$\s*[\d,]+(?:\.\d+)?(?:\s*(?:starting|cash|budget|wallet|balance|usd|worth|available|initial|capital|funds?)\b)?', ' ', uncaptured, flags=re.I)
+        # Strip entry sizing and portfolio goal matched values from uncaptured text
+        for _p, _f in _PORTFOLIO_GOAL_PATTERNS:
+            uncaptured = re.sub(_p, ' ', uncaptured, flags=re.I)
+        for _p, _m in _ENTRY_SIZING_PATTERNS:
+            uncaptured = re.sub(_p, ' ', uncaptured, flags=re.I)
         extra_instruction = bool(raw and re.search(r'[A-Za-z]{2,}|[<>%]|\$\s*\d', uncaptured))
         unknown_trigger = bool(extra_instruction or re.search(r'\b(?:trail(?:ing)?|stop[ -]?loss|take[ -]?profit|profit\s+target|RSI|SMA|EMA|MACD|indicator|pullback|breakout|cross(?:over)?|limit\s+order|rebalance|short|leverage)\b', remaining, re.I)
                                or (raw and re.search(r'\bor\b', remaining_for_or, re.I))

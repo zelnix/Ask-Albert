@@ -11767,6 +11767,12 @@ ASK_ALBERT_SYSTEM = (
     "promise restoration at the next engine run. A score of zero from a data failure is NOT a measured assessment — "
     "state that Albert is waiting for data, not that the opportunity is zero. A regime of RANGE from missing data "
     "is a default fallback, not an observed market condition.\n"
+    "5b. STRATEGY WAIT REASONS: when the context includes a strategyAssessment with state WAIT and per-condition "
+    "reasons, use THOSE recorded engine reasons (e.g. 'waiting for BTC price below $58,000') as your primary "
+    "explanation. Do NOT claim the strategy has mandate issues, settings problems, or configuration errors unless "
+    "the assessment explicitly says so. The engine records exactly why it is waiting — cite that reason directly. "
+    "If the assessment says price is above the trigger, say the strategy is waiting for the price condition to be "
+    "met, not that there is an issue with the strategy setup.\n"
     "6. SCENARIO RANGES: if the context contains a scenario band, it is a HISTORICAL SCENARIO RANGE from "
     "comparable past conditions — never a forecast, prediction, expectation or target. Quote it as \"comparable "
     "past conditions produced X% to Y% over N days\" and always name the horizon. NEVER present the median or "
@@ -11927,10 +11933,25 @@ def _ask_read_state_of_play(user, sop):
 def _ask_read_paper(user, sop):
     p = sop.get('paper') or {}
     positions = (p.get('positions') or [])[:8]
-    return {'data': {'account': p.get('selectedAccount'),
-                     'positions': positions,
-                     'performance': p.get('performance'), 'allocation': p.get('allocation'),
-                     'recentActivity': (p.get('recentActivity') or [])[:8]},
+    # Include the strategy assessment so Albert can explain WAIT reasons using the
+    # engine's actual recorded conditions (e.g. "waiting for price BELOW 58000")
+    # instead of guessing about mandates or settings.
+    assessment = None
+    acct = p.get('selectedAccount') or {}
+    if acct.get('paperAccountId'):
+        try:
+            acct_doc = paper_accounts_col.find_one({'paperAccountId': acct['paperAccountId']})
+            if acct_doc:
+                assessment = acct_doc.get('strategyAssessment')
+        except Exception:
+            pass
+    data = {'account': acct,
+            'positions': positions,
+            'performance': p.get('performance'), 'allocation': p.get('allocation'),
+            'recentActivity': (p.get('recentActivity') or [])[:8]}
+    if assessment:
+        data['strategyAssessment'] = assessment
+    return {'data': data,
             **_ask_meta('paper-account', sop.get('generatedAt'),
                         (p.get('workerHealth') or {}).get('marketData') == 'STALE' and 'STALE' or 'FRESH',
                         '/?section=paper')}

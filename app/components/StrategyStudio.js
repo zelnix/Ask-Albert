@@ -260,7 +260,7 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
       setReview({ contract: j.contract, hash: j.contractHash, summary: j.summary,
         saveErrors: j.saveErrors || [], startErrors: j.startErrors || [],
         errors: j.validationErrors || [], capabilities: j.assetCapabilities || [], for: JSON.stringify(j.draft) });
-    } catch (e) { setErr('Could not draft — try again. No strategy was saved.'); }
+    } catch (e) { setErr(`Drafting failed: ${e.message || 'network error'}. No strategy was saved.`); }
     finally { setDrafting(false); }
   };
   const setAsset = (i, key, val) => {
@@ -308,8 +308,17 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
           <textarea rows={4} value={goal} onChange={(e) => setGoal(e.target.value)} placeholder="e.g. BTC 60%, ETH 40%; Buy BTC if price below $80000 and RSI(14) below 30; Take-profit 12% for BTC; Start with $5000; Consider macro and supply in my review."
             className="w-full resize-none rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-slate-100 outline-none focus:border-violet-500" />
           <Button onClick={runDraft} disabled={drafting || !goal.trim()} className="mt-3 gap-1.5 bg-violet-600 hover:bg-violet-500">
-            {drafting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}Draft with Albert
+            {drafting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}{drafting ? 'Drafting with Albert…' : 'Draft with Albert'}
           </Button>
+          {drafting && (
+            <div className="mt-3 flex items-center gap-2 rounded-lg border border-violet-800/50 bg-violet-950/40 px-3 py-2.5">
+              <Bot className="h-4 w-4 shrink-0 text-violet-400 animate-pulse" />
+              <div className="min-w-0">
+                <p className="text-[12px] font-medium text-violet-300">Drafting with Albert…</p>
+                <p className="text-[11px] text-slate-400">Albert is extracting your rules, verifying coins and building the executable contract. This usually takes 15–30 seconds.</p>
+              </div>
+            </div>
+          )}
           {err && <p role="alert" className="mt-2 text-[12px] font-medium text-amber-300">{err}</p>}
           {(unsupportedAssets || []).length > 0 && <div className="mt-2 flex flex-wrap gap-2">{unsupportedAssets.map((asset) => <CoinCapability key={asset.symbol} item={asset} />)}</div>}
         </div>
@@ -435,6 +444,28 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
             <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
               <p className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400"><ShieldCheck className="h-3.5 w-3.5" />{hasSaveErrors ? 'Cannot save' : hasStartErrors ? 'Reviewed · needs changes before trading' : 'Reviewed'} · hash {review.hash}</p>
               <p className="text-[13px] text-slate-200">{review.summary}</p>
+              {/* Authoritative rule listing: every executable rule that will be saved */}
+              {(draft.rules || []).length > 0 && (
+                <div className="mt-2 rounded-lg border border-slate-700/50 bg-slate-900/40 p-2">
+                  <p className="mb-1.5 text-[11px] font-semibold text-slate-400">Executable rules in this contract ({draft.rules.length})</p>
+                  <div className="space-y-1">
+                    {(draft.rules || []).map((rule, i) => {
+                      const kindLabel = rule.kind === 'STOP_LOSS_PCT' ? 'Stop-loss' : rule.kind === 'TAKE_PROFIT_PCT' ? 'Take-profit'
+                        : rule.kind === 'CHANGE_PCT_24H' ? '24h change' : rule.kind === 'INDICATOR' ? rule.indicator?.replace('_', ' ') : 'Price';
+                      const opLabel = rule.operator === 'ABOVE' ? '>' : rule.operator === 'BELOW' ? '<' : '≥';
+                      const unit = (rule.kind === 'STOP_LOSS_PCT' || rule.kind === 'TAKE_PROFIT_PCT' || rule.kind === 'CHANGE_PCT_24H') ? '%'
+                        : rule.kind === 'PRICE' ? ' USD' : '';
+                      return (
+                        <div key={i} className="flex items-center gap-1.5 text-[11px]">
+                          <Badge variant="outline" className={`px-1.5 py-0 text-[10px] ${rule.side === 'BUY' ? 'border-emerald-600 text-emerald-400' : 'border-amber-600 text-amber-400'}`}>{rule.side}</Badge>
+                          <span className="font-semibold text-white">{rule.symbol}</span>
+                          <span className="text-slate-400">{kindLabel} {opLabel} {rule.value}{unit}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               {(review.capabilities || []).length > 0 && <div className="mt-2 flex flex-wrap gap-1.5">{review.capabilities.map((cap) => <CoinCapability key={cap.symbol} item={cap} />)}</div>}
               {(review.saveErrors || []).length > 0 && (
                 <div className="mt-2 rounded-lg border border-red-500/30 bg-red-500/10 p-2">
