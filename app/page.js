@@ -1949,6 +1949,24 @@ function ExecutiveSummary({ d, ticker, news, onNav, homeParams, setHomeParams })
   const autoRefreshedRef = React.useRef(new Set());
   useEffect(() => { setBriefOverride(null); }, [briefSym]); // clear stale override on coin switch
   const brief = briefOverride || briefFetched;
+  // If the initial fetch returned 'computing' (first-ever brief), poll for it
+  useEffect(() => {
+    if (briefFetched && briefFetched.status === 'computing' && briefFetched.refreshing && !briefOverride) {
+      setRefreshing(true);
+      let attempts = 0;
+      const poll = setInterval(async () => {
+        attempts++;
+        try {
+          const pr = await fetch(`${API_BASE}/v1/albert/brief${briefSym !== 'BTC' ? `?symbol=${encodeURIComponent(briefSym)}` : ''}`, { cache: 'no-store' });
+          const pj = await pr.json();
+          if (pj && pj.status === 'ready' && pj.text) {
+            clearInterval(poll); setBriefOverride(pj); setRefreshing(false);
+          } else if (attempts > 20) { clearInterval(poll); setRefreshing(false); }
+        } catch { clearInterval(poll); setRefreshing(false); }
+      }, 3000);
+      return () => clearInterval(poll);
+    }
+  }, [briefFetched]); // eslint-disable-line
   const briefAgeH = (() => { try { if (!brief || !brief.generated_at) return null; const norm = /[zZ]$/.test(brief.generated_at) ? brief.generated_at : brief.generated_at + 'Z'; return (Date.now() - new Date(norm).getTime()) / 3600000; } catch (e) { return null; } })();
   const staleBrief = briefAgeH != null && briefAgeH > 24;
   const [techOpen, setTechOpen] = useState(false);
@@ -1968,8 +1986,23 @@ function ExecutiveSummary({ d, ticker, news, onNav, homeParams, setHomeParams })
     try {
       const r = await fetch(`${API_BASE}/v1/albert/brief?refresh=1${briefSym !== 'BTC' ? `&symbol=${encodeURIComponent(briefSym)}` : ''}`, { cache: 'no-store' });
       const j = await r.json();
-      if (j && j.status === 'ready') { setBriefOverride(j); prefetchAlbert(buildParts(j)); }
-    } catch (e) { /* noop */ } finally { setRefreshing(false); }
+      if (j && j.status === 'ready' && j.text) { setBriefOverride(j); prefetchAlbert(buildParts(j)); setRefreshing(false); return; }
+      // Pro brief is generating in the background — poll until ready
+      if (j && (j.refreshing || j.status === 'computing')) {
+        let attempts = 0;
+        const poll = setInterval(async () => {
+          attempts++;
+          try {
+            const pr = await fetch(`${API_BASE}/v1/albert/brief${briefSym !== 'BTC' ? `?symbol=${encodeURIComponent(briefSym)}` : ''}`, { cache: 'no-store' });
+            const pj = await pr.json();
+            if (pj && pj.status === 'ready' && pj.text && !pj.refreshing) {
+              clearInterval(poll); setBriefOverride(pj); prefetchAlbert(buildParts(pj)); setRefreshing(false);
+            } else if (attempts > 20) { clearInterval(poll); setRefreshing(false); }
+          } catch { clearInterval(poll); setRefreshing(false); }
+        }, 3000);
+        return;
+      }
+    } catch (e) { /* noop */ } finally { if (!refreshing) {} else { setRefreshing(false); } }
   };
   // Freshness auto-refresh: the moment a stale brief's tab is opened, quietly fetch
   // Albert's latest read (once per coin per session).
@@ -2061,6 +2094,11 @@ function ExecutiveSummary({ d, ticker, news, onNav, homeParams, setHomeParams })
           })()}
           {brief && brief.generated_at && (
             <span className="rounded-full border border-slate-700 bg-slate-900/60 px-2 py-0.5 text-[10px] font-semibold text-slate-400" title={(() => { try { return new Date(brief.generated_at + (/[zZ]$/.test(brief.generated_at) ? '' : 'Z')).toLocaleString(); } catch (e) { return ''; } })()}>generated {briefTimeAgo(brief.generated_at)}</span>
+          )}
+          {(refreshing || (brief && brief.refreshing)) && (
+            <span className="flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold text-amber-300 animate-pulse">
+              <Loader2 className="h-3 w-3 animate-spin" />Albert is updating…
+            </span>
           )}
           <div className="ml-auto flex items-center gap-2">
             <BriefCoinPicker />

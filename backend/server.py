@@ -3720,18 +3720,22 @@ PRO_MODEL = ALBERT_CHAT_MODEL     # gemini-3.1-pro-preview
 _MODEL_FEATURE_DEFAULTS = {
     'chat_standard': 'flash',   # quick Ask-Albert replies
     'chat_deep': 'pro',         # "Deep dive" Ask-Albert replies
-    'insight': 'flash',         # per-section AI insights
-    'brief': 'flash',           # morning / coin briefs + weekly recap
-    'strategy': 'flash',        # strategy drafting
-    'news': 'flash',            # per-headline news analysis
+    'insight': 'flash',         # routine screen commentary / decision explanations
+    'brief': 'pro',             # morning / coin / weekly / dashboard briefs (async-cached)
+    'strategy': 'pro',          # strategy creation & revision (stronger reasoning)
+    'news': 'flash',            # news headline summaries
+    'recap': 'flash',           # Time Machine historical recap
+    'call_extract': 'flash',    # Albert call extraction (buy/sell classification)
 }
 _MODEL_FEATURE_LABELS = {
     'chat_standard': 'Ask Albert — quick chat',
     'chat_deep': 'Ask Albert — deep dive',
-    'insight': 'Section AI insights',
-    'brief': 'Morning & coin briefs',
-    'strategy': 'Strategy drafting',
-    'news': 'News headline analysis',
+    'insight': 'Screen commentary & decisions',
+    'brief': 'Briefs (morning · coin · weekly · dashboard)',
+    'strategy': 'Strategy creation & revision',
+    'news': 'News headline summaries',
+    'recap': 'Time Machine historical recap',
+    'call_extract': 'Albert call extraction',
 }
 
 
@@ -10642,7 +10646,7 @@ def analog_recap(date: str, price: float = None):
         if price:
             q += f" (BTC traded near ${round(price):,} at that time.)"
         chat = (LlmChat(api_key=LLM_READY_KEY, session_id=f'analog-{date}', system_message=sys)
-                .with_model('gemini', ALBERT_CHAT_MODEL)
+                .with_model('gemini', _model_for('recap'))
                 .with_params(temperature=0.3, max_tokens=3000))
         text = ''
         try:
@@ -11025,7 +11029,7 @@ def admin_overview(user: dict = Depends(get_current_user)):
                  'dashboard for exact usage & spend.'),
         'emergent': {
             'service': 'Google Gemini API (google-genai SDK)',
-            'model': str(CHAT_MODEL),
+            'model': f'{FLASH_MODEL} (flash) / {PRO_MODEL} (pro)',
             'status': 'Active' if (LLM_READY_KEY and _HAS_LLM) else 'Inactive',
             'llm_calls_total': llm_total,
             'llm_calls_today': llm_today,
@@ -12349,7 +12353,8 @@ def _albert_answer(ctx, user_text, session_id, deep=False, system_override=None,
         return fut.result(timeout=timeout_s)
 
     # Attempt chains — thinking_budget caps internal reasoning to keep latency
-    # under the timeout for gemini-2.5-pro.  Budget 0 disables thinking entirely.
+    # under the timeout.  Budget 0 disables thinking entirely.
+    requested_model = _model_for('chat_deep' if deep else 'chat_standard')
     if deep:
         _primary = _model_for('chat_deep')
         attempts = [(_primary, True, 45, 4000, 4096),
@@ -12374,11 +12379,11 @@ def _albert_answer(ctx, user_text, session_id, deep=False, system_override=None,
             text = _extract(reply)
             if text:
                 sources = _extract_sources(reply) if use_tools else []
-                return text, model, sources
+                return text, model, sources, requested_model
         except Exception:  # noqa
             traceback.print_exc()
             continue
-    return '', (_model_for('chat_deep') if deep else _model_for('chat_standard')), []
+    return '', requested_model, [], requested_model
 
 
 
@@ -12979,7 +12984,7 @@ def albert_ask(request: Request, payload: dict = Body(...), user: dict = Depends
     try:
         ctx, evidence, used, sop, engine_review = _ask_gather(user, message, entity=entity, context=context)
         system = ASK_ALBERT_SYSTEM.format(ctx=ctx)
-        text, model, sources = _albert_answer('', message, session_id, deep=deep, system_override=system, grounded=False)
+        text, model, sources, requested_model = _albert_answer('', message, session_id, deep=deep, system_override=system, grounded=False)
         if not text:
             text = ("I couldn’t compose an answer just now — my model call didn’t come back in time. "
                     "Please try again in a moment.")
@@ -13033,7 +13038,8 @@ def albert_ask(request: Request, payload: dict = Body(...), user: dict = Depends
         # user can open what Albert actually saw rather than a screen that merely looks related.
         answer_snapshot = _evidence_snapshot_put(
             'albertAnswer',
-            {'question': message, 'reply': text, 'model': model,
+            {'question': message, 'reply': text,
+             'requestedModel': requested_model, 'actualModel': model, 'model': model,
              'stateId': sop.get('stateId'), 'sessionId': session_id,
              'contextFunctions': used, 'evidence': evidence,
              'engineReview': public_review,
@@ -13044,7 +13050,9 @@ def albert_ask(request: Request, payload: dict = Body(...), user: dict = Depends
                       'is partial and is not a test run.')},
             owner_pid=owner_pid(user), as_of=sop.get('generatedAt'),
             title='Albert answer evidence set')
-        return {'status': 'ready', 'reply': text, 'model': model, 'sources': sources,
+        return {'status': 'ready', 'reply': text,
+                'requestedModel': requested_model, 'actualModel': model, 'model': model,
+                'sources': sources,
                 'evidence': evidence, 'contextFunctions': used, 'sessionId': session_id,
                 'engineReview': public_review, 'stateId': sop.get('stateId'),
                 'answerSnapshotId': answer_snapshot,
@@ -14974,7 +14982,7 @@ def chat_endpoint(request: Request, payload: dict = Body(...), user: dict = Depe
         user_text = ((f"{focus}\n" if focus else '')
                      + (f"Recent conversation:\n{hist_txt}\n" if hist_txt else '')
                      + f"Question: {message}")
-        text, used_model, sources = _albert_answer(ctx, user_text, session_id, deep=deep,
+        text, used_model, sources, req_model = _albert_answer(ctx, user_text, session_id, deep=deep,
                                                     grounded=not bool(engine_review.get('available') and
                                                                       re.search(r'(?i)\b(code|source|implementation|audit|correct|mismatch)\b', message)))
         if not text:
@@ -14982,14 +14990,16 @@ def chat_endpoint(request: Request, payload: dict = Body(...), user: dict = Depe
                     'text': 'Sorry — I could not answer that just now. Please try again in a moment.'}
         text = re.sub(r'\[REFRESH_ANALYSIS:[^\]]*\]', '', _engine_code_safe_reply(text, engine_review)).strip()
         chat_col.insert_one({'_id': str(uuid.uuid4()), 'session_id': session_id,
-                             'user': message, 'assistant': text, 'model': used_model,
+                             'user': message, 'assistant': text,
+                             'requestedModel': req_model, 'actualModel': used_model, 'model': used_model,
                              'created_at': datetime.datetime.utcnow().isoformat()})
         # Self-check: log Albert's directional call in the background (never blocks the reply).
         try:
             _LLM_POOL.submit(_log_albert_call, session_id, sym, message, text)
         except Exception:  # noqa
             pass
-        result = {'session_id': session_id, 'text': text, 'model': used_model,
+        result = {'session_id': session_id, 'text': text,
+                'requestedModel': req_model, 'actualModel': used_model, 'model': used_model,
                 'deep': deep, 'sources': sources,
                 'engineReview': _engine_code_public_meta(engine_review)}
         return result
@@ -16322,7 +16332,7 @@ def albert_weekly_brief(pid: str = '', refresh: bool = False, user: dict = Depen
             def _call():
                 async def _go():
                     chat = (LlmChat(api_key=LLM_READY_KEY, session_id=f'weekly-brief-{pid}', system_message=WEEKLY_BRIEF_SYSTEM)
-                            .with_model('gemini', _model_for('chat_standard')).with_params(temperature=0.6, max_tokens=400, thinking_budget=0))
+                            .with_model('gemini', _model_for('brief')).with_params(temperature=0.6, max_tokens=400, thinking_budget=0))
                     return await chat.send_message(UserMessage(text=prompt))
                 return asyncio.run(_go())
             reply = _LLM_POOL.submit(_call).result(timeout=40)
@@ -16757,7 +16767,7 @@ def _log_albert_call(session_id, symbol, question, answer):
             async def _go():
                 chat = (LlmChat(api_key=LLM_READY_KEY, session_id=f'callx-{session_id}',
                                 system_message=CALL_EXTRACT_SYSTEM)
-                        .with_model('gemini', CHAT_MODEL).with_params(temperature=0.0, max_tokens=2000))
+                        .with_model('gemini', _model_for('call_extract')).with_params(temperature=0.0, max_tokens=2000))
                 return await chat.send_message(UserMessage(text=f"Analyst answer:\n{answer[:2500]}"))
             return asyncio.run(_go())
         reply = _LLM_POOL.submit(_call).result(timeout=20)
@@ -17183,8 +17193,20 @@ def albert_weekly_recap(refresh: bool = False):
         f"=== MY CALL PERFORMANCE (last 7 days) ===\n{digest}\n"
     )
     try:
-        text, _model, _src = _albert_answer(ctx, prompt, 'weekly-recap', deep=False)
+        def _recap_call():
+            async def _go():
+                chat = (LlmChat(api_key=LLM_READY_KEY, session_id='weekly-recap',
+                                system_message='You are Albert, a crypto quant analyst. ' + ctx[:6000])
+                        .with_model('gemini', _model_for('brief'))
+                        .with_params(temperature=0.4, max_tokens=3500))
+                return await chat.with_tools([{'googleSearch': {}}]).send_message_with_tools(
+                    UserMessage(text=prompt))
+            return asyncio.run(_go())
+        _rep = _LLM_POOL.submit(_recap_call).result(timeout=45)
+        text = (_rep.strip() if isinstance(_rep, str)
+                else (getattr(_rep, 'content', None) or getattr(_rep, 'text', None) or '')).strip()
     except Exception:  # noqa
+        traceback.print_exc()
         text = ''
     if not text:
         return {'status': 'unavailable', 'text': ''}
@@ -17648,9 +17670,9 @@ async def albert_insight(request: Request, section: str = 'overview', mode: str 
             insights_col.update_one(
                 {'_id': cache_id},
                 {'$set': {'_id': cache_id, 'section': section, 'mode': mode, 'version': version, 'text': text,
-                          'model': CHAT_MODEL, 'created_at': now_iso}},
+                          'model': _model_for('insight'), 'created_at': now_iso}},
                 upsert=True)
-        return {'status': 'ready', 'section': section, 'mode': mode, 'text': text, 'model': CHAT_MODEL, 'generated_at': now_iso, 'cached': False}
+        return {'status': 'ready', 'section': section, 'mode': mode, 'text': text, 'model': _model_for('insight'), 'generated_at': now_iso, 'cached': False}
     except Exception as ex:  # noqa
         traceback.print_exc()
         return {'status': 'fallback', 'reason': 'error'}
@@ -20054,42 +20076,20 @@ def albert_engine_brief(symbol: str = 'BTC', pid: str = '', user: dict = Depends
 
 
 
-@app.get('/api/v1/albert/brief')
-async def albert_brief(request: Request, refresh: int = 0, mode: str = 'plain', symbol: str = 'BTC'):
-    """Albert's Morning Brief — a daily summary, coin-specific. mode='plain' (layman,
-    default) or 'technical'; symbol selects the asset (BTC default)."""
-    mode = 'technical' if mode == 'technical' else 'plain'
-    symbol = (symbol or 'BTC').strip().upper()[:6]
-    is_btc = symbol == 'BTC'
-    if not is_btc and symbol not in COMPARE_COINS:
-        return {'status': 'error', 'reason': 'unsupported_symbol'}
-    today = datetime.date.today().isoformat()
-    cache_id = f'brief:{today}:{mode}' if is_btc else f'brief:{today}:{mode}:{symbol}'
-    if not refresh:
-        c = insights_col.find_one({'_id': cache_id}, {'_id': 0})
-        if c and c.get('text'):
-            return {'status': 'ready', 'cached': True, 'mode': mode, 'symbol': symbol, **c}
-    if _rate_limited(request, 'albert_brief', per_min=10, per_day=200):
-        return {'status': 'computing', 'reason': 'rate_limited'}
+_BRIEF_REFRESH_LOCKS = {}  # cache_id -> True while a bg refresh is running
+
+
+def _brief_generate_bg(cache_id, symbol, mode, coin_name, sys_msg, as_of):
+    """Background worker: generate a brief via Pro model and cache it."""
     try:
-        if is_btc:
-            ctx, as_of = _brief_context()
-            coin_name = 'Bitcoin'
-            sys_prompt = ALBERT_BRIEF_TECH_SYSTEM if mode == 'technical' else ALBERT_BRIEF_SYSTEM
-            sys_msg = sys_prompt.format(ctx=ctx)
-        else:
-            ctx, coin_name, as_of = _coin_brief_context(symbol)
-            sys_prompt = ALBERT_BRIEF_COIN_TECH_SYSTEM if mode == 'technical' else ALBERT_BRIEF_COIN_SYSTEM
-            sys_msg = sys_prompt.format(ctx=ctx, coin=coin_name)
-        if not ctx.strip():
-            return {'status': 'computing'}
-        if not (LLM_READY_KEY and _HAS_LLM):
-            return {'status': 'ready', 'cached': False, 'mode': mode, 'symbol': symbol, 'text': ctx,
-                    'observations': [l for l in ctx.split('\n')][:5], 'take': '', 'as_of': as_of}
-        chat = (LlmChat(api_key=LLM_READY_KEY, session_id=f'brief-{uuid.uuid4().hex[:10]}',
-                        system_message=sys_msg)
-                .with_model('gemini', _model_for('brief')).with_params(temperature=0.4, max_tokens=6000))
-        reply = await chat.send_message(UserMessage(text=f"Write today's {coin_name} brief now."))
+        def _call():
+            async def _go():
+                chat = (LlmChat(api_key=LLM_READY_KEY, session_id=f'brief-{uuid.uuid4().hex[:10]}',
+                                system_message=sys_msg)
+                        .with_model('gemini', _model_for('brief')).with_params(temperature=0.4, max_tokens=6000))
+                return await chat.send_message(UserMessage(text=f"Write today's {coin_name} brief now."))
+            return asyncio.run(_go())
+        reply = _LLM_POOL.submit(_call).result(timeout=90)
         text = (reply if isinstance(reply, str) else (getattr(reply, 'content', None) or getattr(reply, 'text', None) or '')).strip()
         _bump_usage('llm_brief')
         obs, take = [], ''
@@ -20101,12 +20101,65 @@ async def albert_brief(request: Request, refresh: int = 0, mode: str = 'plain', 
                 obs.append(ln.lstrip('-').strip())
         now_iso = datetime.datetime.utcnow().isoformat()
         doc = {'text': text, 'observations': obs, 'take': take, 'as_of': as_of,
-               'model': CHAT_MODEL, 'generated_at': now_iso, 'mode': mode, 'symbol': symbol, 'coin': coin_name}
+               'model': _model_for('brief'), 'generated_at': now_iso, 'mode': mode, 'symbol': symbol, 'coin': coin_name}
         insights_col.update_one({'_id': cache_id}, {'$set': {'_id': cache_id, 'kind': 'brief', **doc}}, upsert=True)
-        return {'status': 'ready', 'cached': False, **doc}
     except Exception:  # noqa
         traceback.print_exc()
-        return {'status': 'fallback'}
+    finally:
+        _BRIEF_REFRESH_LOCKS.pop(cache_id, None)
+
+
+@app.get('/api/v1/albert/brief')
+async def albert_brief(request: Request, refresh: int = 0, mode: str = 'plain', symbol: str = 'BTC'):
+    """Albert's Morning Brief — a daily summary, coin-specific. mode='plain' (layman,
+    default) or 'technical'; symbol selects the asset (BTC default).
+    Pro briefs are generated asynchronously and cached; the endpoint always returns
+    the latest cached brief instantly.  When a new brief is needed, the response
+    includes `refreshing: true` so the UI can show 'Albert is updating…'."""
+    mode = 'technical' if mode == 'technical' else 'plain'
+    symbol = (symbol or 'BTC').strip().upper()[:6]
+    is_btc = symbol == 'BTC'
+    if not is_btc and symbol not in COMPARE_COINS:
+        return {'status': 'error', 'reason': 'unsupported_symbol'}
+    today = datetime.date.today().isoformat()
+    cache_id = f'brief:{today}:{mode}' if is_btc else f'brief:{today}:{mode}:{symbol}'
+    cached = insights_col.find_one({'_id': cache_id}, {'_id': 0})
+    refreshing = _BRIEF_REFRESH_LOCKS.get(cache_id, False)
+
+    # Build prompt context (cheap — no LLM call)
+    def _build_ctx():
+        if is_btc:
+            ctx, as_of = _brief_context()
+            cn = 'Bitcoin'
+            sys_prompt = ALBERT_BRIEF_TECH_SYSTEM if mode == 'technical' else ALBERT_BRIEF_SYSTEM
+            return ctx, cn, as_of, sys_prompt.format(ctx=ctx)
+        else:
+            ctx, cn, as_of = _coin_brief_context(symbol)
+            sys_prompt = ALBERT_BRIEF_COIN_TECH_SYSTEM if mode == 'technical' else ALBERT_BRIEF_COIN_SYSTEM
+            return ctx, cn, as_of, sys_prompt.format(ctx=ctx, coin=cn)
+
+    need_gen = (refresh or not cached or not cached.get('text'))
+    if need_gen and not refreshing and (LLM_READY_KEY and _HAS_LLM):
+        if not _rate_limited(request, 'albert_brief', per_min=10, per_day=200):
+            try:
+                ctx, coin_name, as_of, sys_msg = _build_ctx()
+                if ctx.strip():
+                    _BRIEF_REFRESH_LOCKS[cache_id] = True
+                    _threading.Thread(target=_brief_generate_bg, daemon=True,
+                                      args=(cache_id, symbol, mode, coin_name, sys_msg, as_of)).start()
+                    refreshing = True
+            except Exception:  # noqa
+                traceback.print_exc()
+
+    # Always return the best available cached version immediately
+    if cached and cached.get('text'):
+        return {'status': 'ready', 'cached': True, 'refreshing': refreshing,
+                'mode': mode, 'symbol': symbol, **{k: v for k, v in cached.items() if k != '_id'}}
+
+    # No cache at all — tell the UI a brief is being generated
+    return {'status': 'computing', 'refreshing': refreshing,
+            'reason': 'generating' if refreshing else 'no_data',
+            'mode': mode, 'symbol': symbol}
 
 
 

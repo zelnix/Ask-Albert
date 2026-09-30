@@ -99,7 +99,11 @@ function TechnicalDetails({ msg }) {
       </button>
       {open && (
         <div className="mt-1.5 space-y-1.5 rounded-lg border border-slate-800 bg-slate-950/60 p-2.5 text-[11px] text-slate-400">
-          <p><span className="text-slate-500">Model:</span> <span className="font-mono text-slate-300">{msg.model || '—'}</span></p>
+          <p><span className="text-slate-500">Model:</span> <span className="font-mono text-slate-300">{msg.actualModel || msg.model || '—'}</span>
+            {msg.requestedModel && msg.actualModel && msg.requestedModel !== msg.actualModel && (
+              <span className="ml-1.5 text-amber-500/80">(requested {msg.requestedModel}, fell back)</span>
+            )}
+          </p>
           <p><span className="text-slate-500">Owner-scoped read functions consulted:</span> {(msg.contextFunctions || []).join(', ') || 'none'}</p>
           <p className="text-slate-500">Each evidence chip above links to the screen that owns that number — open it for the full technical read-out.</p>
         </div>
@@ -193,7 +197,9 @@ export default function AskAlbert({ onNav }) {
         const j = await r.json();
         announceAnalysis(j.analysisJob);
         setMessages((m) => [...m, { role: 'albert', text: j.reply || 'No answer came back.',
-          evidence: j.evidence, model: j.model, contextFunctions: j.contextFunctions,
+          evidence: j.evidence, model: j.model,
+          requestedModel: j.requestedModel, actualModel: j.actualModel,
+          contextFunctions: j.contextFunctions,
           answerSnapshotId: j.answerSnapshotId,
           basket_draft: j.basket_draft || null,
           strategyIntent: j.strategyIntent || false,
