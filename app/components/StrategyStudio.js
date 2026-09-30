@@ -713,6 +713,7 @@ function PaperPanel({ sid, name, onChange }) {
                 {pos.takeProfit && <span className="text-emerald-400/70">TP {usd(parseFloat(pos.takeProfit))}</span>}
                 {pos.currentPrice && <span className="text-slate-400">now {usd(parseFloat(pos.currentPrice))}</span>}
                 {pos.unrealizedPnl && <span className={parseFloat(pos.unrealizedPnl) >= 0 ? 'text-emerald-400' : 'text-rose-400'}>{signed(parseFloat(pos.unrealizedPnl))}</span>}
+                <button disabled={busy} onClick={() => closePos(pos.symbol)} className="ml-auto rounded-md border border-slate-700 px-2 py-0.5 text-[11px] font-semibold text-slate-300 hover:text-white">Close</button>
               </div>
             ))}
           </div>
@@ -743,24 +744,6 @@ function PaperPanel({ sid, name, onChange }) {
             ))}
           </div>
           <p className="mt-1.5 text-[10.5px] text-slate-500">This strategy trades its own ring-fenced {usd(perf.startingCash)} of virtual cash, so its results are never mixed with your other strategies.</p>
-        </div>
-      )}
-
-      {/* ---- Positions ---- */}
-      {positions.length > 0 && (
-        <div>
-          <p className="mb-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-500">Open positions</p>
-          <div className="space-y-1.5">
-            {positions.map((q) => (
-              <div key={q.paperPositionId} className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-1.5 text-[11.5px]">
-                <span className="font-bold text-white">{q.asset}</span>
-                <span className="text-slate-400">{Number(q.netQuantity).toLocaleString(undefined, { maximumFractionDigits: 8 })} @ {usd(q.averageEntryPrice)}</span>
-                <span className="text-slate-500">now {usd(q.currentPrice)}</span>
-                <span className={Number(q.unrealizedPnl || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}>{signed(q.unrealizedPnl)}</span>
-                <button disabled={busy} onClick={() => closePos(q.paperPositionId)} className="ml-auto rounded-md border border-slate-700 px-2 py-0.5 text-[11px] font-semibold text-slate-300 hover:text-white">Close</button>
-              </div>
-            ))}
-          </div>
         </div>
       )}
 

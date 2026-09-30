@@ -7814,8 +7814,7 @@ _verified_market.configure_coingecko(_simulation_cg_get)
 
 # Execution model: direct observed-price fills. No execution profile to select.
 PAPER_EXECUTION_MODEL = 'direct_price'
-# PROPOSAL_TTL_MIN is retired; kept for historical reference only.
-PAPER_PROPOSAL_TTL_MIN = 30
+
 
 
 def _paper_btc_mark():
@@ -8026,60 +8025,7 @@ def _paper_mark(sym):
     return None, False, obs
 
 
-def _paper_live_ranks():
-    """M5.1: live market-cap ranks from the cached top-100 Discovery snapshot (no
-    new API key). Returns (ranks, meta):
-      ranks: {SYMBOL: {rank, source, snapshotId, observedAt, fresh}}
-      meta:  {available, snapshotId, source, observedAt, fresh}
-    Never blocks (Discovery rebuilds in a background thread). When ranking is
-    unavailable/stale the caller must fall back to the conservative SPEC cap and
-    surface that live ranking was unavailable — never silently use a static rank."""
-    try:
-        core = _discovery_core()
-    except Exception:  # noqa
-        core = None
-    if not core:
-        return {}, {'available': False, 'snapshotId': None, 'source': None,
-                    'observedAt': None, 'fresh': False}
-    try:
-        fresh = (_time_mod.time() - _DISCOVERY_CACHE['ts']) < _discovery_mod.DISCOVERY_TTL_SEC
-    except Exception:  # noqa
-        fresh = False
-    observed = core.get('sourceTimestamp') or core.get('generatedAt')
-    meta = {'available': True, 'snapshotId': core.get('universeSnapshotId'),
-            'source': core.get('source'), 'observedAt': observed, 'fresh': bool(fresh)}
-    ranks = {}
-    for a in (core.get('assets') or []):
-        sym = (a.get('symbol') or '').upper()
-        if not sym:
-            continue
-        ranks[sym] = {'rank': a.get('rank'), 'source': core.get('source'),
-                      'snapshotId': core.get('universeSnapshotId'),
-                      'observedAt': observed, 'fresh': bool(fresh)}
-    return ranks, meta
 
-
-def _paper_rank_for(sym, ranks, meta):
-    """Resolve (rank, tier, rankMeta) for allocation. BTC keeps its own tier by
-    identity. For altcoins, live+fresh rank -> tier by rank; otherwise conservative
-    SPEC tier with rankMeta.available=False (never a silent static rank)."""
-    sym = (sym or '').upper()
-    rm = ranks.get(sym) if ranks else None
-    live_ok = bool(meta.get('available') and meta.get('fresh') and rm and rm.get('rank'))
-    if sym == 'BTC':
-        rank = (rm or {}).get('rank') or 1
-        tier = 'BTC'
-    elif live_ok:
-        rank = rm['rank']; tier = _paper_profiles.cap_tier(sym, rank)
-    else:
-        rank = None; tier = 'SPEC'   # conservative fallback
-    rank_meta = {'symbol': sym, 'rank': (rm or {}).get('rank'),
-                 'source': (rm or {}).get('source') or meta.get('source'),
-                 'snapshotId': (rm or {}).get('snapshotId') or meta.get('snapshotId'),
-                 'observedAt': (rm or {}).get('observedAt') or meta.get('observedAt'),
-                 'fresh': bool((rm or {}).get('fresh')),
-                 'available': live_ok, 'appliedTier': tier}
-    return rank, tier, rank_meta
 
 
 
@@ -8157,9 +8103,8 @@ def _autopilot_set_vis(acct_id, **fields):
 # M-E: PAPER WORKFLOWS — bind an ACTIVE assigned strategy to the existing multi-asset
 # worker. The strategy may CONSTRAIN (its asset universe) and PRIORITISE, but can NEVER
 # bypass canonical eligibility, mandate, freshness, portfolio-risk or execution gates.
-# Every strategy evaluation is materialised as an immutable StrategyDecisionSnapshot.
 # =====================================================================
-strategy_decision_snapshots_col = db['strategy_decision_snapshots']
+
 
 
 def _strategy_for_account(acct):
@@ -8487,53 +8432,7 @@ def _studio_wait_reason(acct, strat, sym, reason):
                                                 'strategyAssessment.conditions.$.reason': 'WAIT: ' + reason}})
 
 
-def _studio_rule_envelope(strat, sym, obs, rule_id):
-    """An explicit strategy-rule observation, NOT a fabricated canonical BUY/SELL."""
-    digest = _studio_short_hash({'contract': strat['contractHash'], 'version': strat['version'],
-                                 'asset': sym, 'rule': rule_id, 'observation': obs.get('obsId')})
-    return {'asset': sym, 'decisionSnapshotId': 'sr_' + digest, 'decisionId': 'sr_' + digest,
-            'decisionInputsHash': digest, 'engineVersion': 'studio-rule-v1',
-            'mandateVersion': None, 'invalidationPrice': None,
-            'expiresAt': (datetime.datetime.utcnow() + datetime.timedelta(minutes=PAPER_PROPOSAL_TTL_MIN)).isoformat(),
-            'actionable': False, 'eligible': False, 'ruleDriven': True}
 
-
-def _materialize_sds(acct, strat, canonical, obs, action, asset, sizing, gate_trace, outcome, rule_results=None):
-    """Immutable StrategyDecisionSnapshot (one per strategyVersion x canonical decision x
-    asset x market observation). setOnInsert makes it write-once, so restarts/duplicate
-    deliveries never fork it. Returns the snapshot id."""
-    if not strat:
-        return None
-    sid_dec = canonical.get('decisionSnapshotId')
-    obs_id = (obs or {}).get('obsId')
-    _id = 'sds_%s_v%s_%s_%s' % (strat['strategyId'], strat['version'], sid_dec, obs_id)
-    syms = _strategy_syms(strat) or set()
-    doc = {'_id': _id, 'strategyDecisionSnapshotId': _id,
-           'paperAccountId': acct['paperAccountId'], 'ownerId': acct['ownerId'],
-           'strategyId': strat['strategyId'], 'strategyVersion': strat['version'],
-           'strategyContractHash': strat['contractHash'],
-           'canonicalDecisionSnapshotId': sid_dec,
-           'canonicalDecisionHash': canonical.get('decisionInputsHash'),
-           'marketObservationId': obs_id, 'asset': asset, 'proposedAction': action,
-           'ruleResults': {'inStrategyUniverse': asset in syms,
-                           'canonicalActionable': bool(canonical.get('actionable')),
-                           'canonicalEligible': bool(canonical.get('eligible')),
-                           'ruleDrivenExit': bool(canonical.get('ruleDriven')),
-                           'ruleAuthorized': bool(canonical.get('ruleDriven') and action == 'SELL' and
-                                                  (rule_results or [])),
-                           'bothAuthorized': (asset in syms) and bool(canonical.get('actionable'))
-                                             if not canonical.get('ruleDriven') else False},
-           'gateTrace': gate_trace or [], 'typedRuleResults': rule_results or [],
-           'serverSizing': ({'notional': _paper_core.dstr(sizing.get('notional')) if sizing.get('notional') is not None else None,
-                             'qty': _paper_core.qty_dstr(sizing.get('qty')) if sizing.get('qty') is not None else None,
-                             'fillPx': _paper_core.dstr(sizing.get('fillPx')) if sizing.get('fillPx') is not None else None}
-                            if sizing else None),
-           'outcome': outcome, 'at': datetime.datetime.utcnow().isoformat(), 'paperOnly': True}
-    try:
-        strategy_decision_snapshots_col.update_one({'_id': _id}, {'$setOnInsert': doc}, upsert=True)
-    except Exception:  # noqa
-        traceback.print_exc()
-    return _id
 
 
 def _autopilot_process_account_multi(acct):
@@ -8717,7 +8616,6 @@ def _autopilot_process_account_multi(acct):
     processed = dict(acct.get('processedDecisionSnapshots') or {})
     cursors = dict(acct.get('marketObservationCursors') or {})
     regime = next((d.get('regime') for d in decisions if d.get('regime')), 'RANGE')
-    live_ranks, rank_meta_top = _paper_live_ranks()
     holding_scores = {(d.get('asset') or '').upper(): d.get('score') for d in decisions}
 
     candidates = []
@@ -8752,10 +8650,8 @@ def _autopilot_process_account_multi(acct):
         if d.get('action') == 'BUY' and not (elig and d.get('eligible') and
                 _asset_caps.entry_allowed(sym, mandate, data_ok=fresh)[0]):
             continue
-        rank, tier, rmeta = _paper_rank_for(sym, live_ranks, rank_meta_top)
         candidates.append({'symbol': sym, 'action': d.get('action'),
                            'score': d.get('score'), 'confidence': d.get('confidence'),
-                           'rank': rank, 'tier': tier,
                            'recommendedDeployNowUsd': d.get('recommendedDeployNowUsd'),
                            'invalidationPrice': d.get('invalidationPrice'),
                            'sellPlan': d.get('sellPlan'), 'held': sym in held_syms,
@@ -8905,14 +8801,14 @@ def _paper_autopilot_worker():
     last_other_id = None   # rotating cursor bookmark among non-strategy accounts
     try:
         # ── 1. Fetch eligible accounts: RUNNING for full processing,
-        #    plus paused accounts WITH open tickets (for protective exits only). ──
+        #    plus paused accounts WITH open positions (for protective exits only). ──
         all_accts = list(paper_accounts_col.find(
             {'archivedAt': None,
              '$or': [
                  {'runtimeState': 'RUNNING'},
                  {'runtimeState': {'$in': ['PAUSED_BY_USER', 'PAUSED_RISK_BREAKER',
                                            'HALTED_GOAL_ENTRIES', 'GOAL_CLOSE_PENDING']},
-                  'lots.0': {'$exists': True}}
+                  'positions.0': {'$exists': True}}
              ]}))
 
         # ── 2. Split into strategy-first + others, apply rotation ──
@@ -8928,7 +8824,7 @@ def _paper_autopilot_worker():
             other_accts = other_accts[idx:] + other_accts[:idx]
         ordered = strat_accts + other_accts
 
-        # Single execution path: always the ticket-based multi-asset worker.
+        # Single execution path: combined-position multi-asset worker.
         fn = _autopilot_process_account_multi
 
         for acct in ordered:
