@@ -262,12 +262,12 @@ export default function PaperTradingBot({ onNav }) {
               ['Marked equity', walletDetail.equity?.value != null ? usd(walletDetail.equity?.value) : 'Unavailable'],
               ['Open positions', String((walletDetail.positions || []).length)],
               ['Realized P/L', signed(walletDetail.performance?.realizedPnl)],
-              ['Ledger reconciliation', walletDetail.integrity?.ok === true ? 'MATCH' : walletDetail.integrity?.ok === false ? 'MISMATCH' : 'Unavailable']
+              ['Ledger reconciliation', walletDetail.integrity?.reconciliation === 'MATCH' ? 'MATCH' : walletDetail.integrity?.reconciliation === 'MISMATCH' ? 'MISMATCH' : 'Unavailable']
             ].map(([label, value]) => <div key={label} className="rounded-md border border-slate-700 bg-slate-950/50 p-2"><p className="text-[10px] uppercase text-slate-500">{label}</p><p className="mt-0.5 break-words font-semibold text-slate-100">{value}</p></div>)}
           </div>
           <div className="grid gap-3 md:grid-cols-2">
             <div className="rounded-md border border-slate-700 p-3"><p className="font-semibold text-white">Open holdings</p>
-              {(walletDetail.positions || []).length ? (walletDetail.positions || []).map((p) => <p key={p.paperPositionId || p.asset} className="mt-1.5">{p.asset} · {p.netQuantity} units · entry {usd(p.averageEntryPrice)} · {p.currentPrice ? `mark ${usd(p.currentPrice)}` : 'mark unavailable'} · unrealized {p.unrealizedPnl != null ? signed(p.unrealizedPnl) : 'unavailable'}</p>) : <p className="mt-1.5 text-slate-400">No open holdings in this wallet.</p>}
+              {(walletDetail.positions || []).length ? (walletDetail.positions || []).map((p) => <p key={p.symbol} className="mt-1.5">{p.symbol} · {p.netQuantity} units · entry {usd(p.averageEntryPrice)} · {p.currentPrice ? `mark ${usd(p.currentPrice)}` : 'mark unavailable'} · unrealized {p.unrealizedPnl != null ? signed(p.unrealizedPnl) : 'unavailable'}</p>) : <p className="mt-1.5 text-slate-400">No open holdings in this wallet.</p>}
             </div>
             <div className="rounded-md border border-slate-700 p-3"><p className="font-semibold text-white">Completed trade log</p>
               {(walletDetail.recentActivity || []).filter((e) => e.eventType === 'FILL').length ? (walletDetail.recentActivity || []).filter((e) => e.eventType === 'FILL').slice(0, 10).map((e, i) => <p key={e.ledgerEventId || i} className="mt-1.5">{e.side} {e.asset} · {e.qty} @ {usd(e.fillPx)} · {timeAgo(e.recordedAt || e.effectiveAt)}</p>) : <p className="mt-1.5 text-slate-400">No completed fills in this wallet’s recent ledger. </p>}
@@ -340,8 +340,8 @@ export default function PaperTradingBot({ onNav }) {
       <p className="flex items-start gap-1 text-[10.5px] leading-relaxed text-slate-600">
         <Info className="mt-0.5 h-3 w-3 shrink-0" />
         Paper trading only — virtual money, no exchange keys, and it can never place a live order. Each strategy trades
-        its own ring-fenced wallet, so results are never co-mingled. Execution costs, allocation limits, worker
-        diagnostics and the full evidence chain live in More → Technical Centre → Paper Engine.
+        its own ring-fenced wallet, so results are never co-mingled. Worker diagnostics and the full evidence chain
+        live in More → Technical Centre → Paper Engine.
       </p>
     </div>
   );

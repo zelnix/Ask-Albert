@@ -29,8 +29,8 @@ def _user(uid):
 def _mk_account(owner_uid):
     econ = core.new_account_economics(Decimal('100000'), Decimal('0'))
     a = {'paperAccountId': 'pa_d_' + uuid.uuid4().hex[:10], 'ownerId': 'u_' + owner_uid,
-         'name': 'd', 'baseCurrency': 'USDC', 'mode': 'OBSERVE', 'runtimeState': 'RUNNING',
-         'version': 0, 'archivedAt': None, 'lots': [],
+         'name': 'd', 'baseCurrency': 'USDC', 'runtimeState': 'RUNNING',
+         'version': 0, 'archivedAt': None,
          'createdAt': datetime.datetime.utcnow().isoformat(), **econ}
     server.paper_accounts_col.insert_one(dict(a))
     return a

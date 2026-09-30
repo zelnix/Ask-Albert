@@ -31,7 +31,6 @@ QTY_Q = Decimal('0.000000000001')
 PCT_Q = Decimal('0.01')
 MIN_NOTIONAL = Decimal('10')
 
-SUPPORTED_ENGINE_VERSIONS = {'albert-decide-v2', 'albert-decide-v3', 'albert-decide-v4'}
 DECISION_TTL_MIN = 30
 
 
@@ -119,20 +118,6 @@ def buy_sizing(asset, notional, mark_px, *, price_q=None):
             'notional': exact_notional, 'fillPx': fill_px, 'qty': qty, 'priceQ': pq}
 
 
-def sell_sizing(asset, qty, mark_px, *, price_q=None):
-    """Direct-price SELL sizing. No fees. Fill at observed market price."""
-    mark = D(mark_px)
-    if mark is None or not mark.is_finite() or mark <= 0:
-        return {'reject': 'INVALID_EXIT_PRICE'}
-    qty = round_tick(qty, QTY_Q)
-    if qty is None or not qty.is_finite() or qty <= 0:
-        return {'reject': 'BELOW_MIN_NOTIONAL'}
-    pq = price_q or _infer_price_q(mark)
-    fill_px = round_tick(mark, pq, ROUND_HALF_UP) if pq else mark
-    if fill_px is None or fill_px <= 0:
-        return {'reject': 'ZERO_PRICE_AFTER_ROUNDING'}
-    return {'reject': None, 'side': 'SELL', 'asset': (asset or '').upper(),
-            'qty': qty, 'fillPx': fill_px, 'priceQ': pq}
 
 
 # ============================ account state ================================== #
@@ -171,10 +156,6 @@ def open_position_count(acct):
     return len(open_positions(acct))
 
 
-def position_qty(acct, sym='BTC'):
-    """Total quantity held for a symbol (always from the one combined position)."""
-    pos = position_for(acct, sym)
-    return D(pos.get('qty')) or Decimal('0') if pos else Decimal('0')
 
 
 # ============================ equity / drawdown ============================== #
@@ -636,16 +617,3 @@ def update_high_water(col, acct_id, pid, equity):
                    {'$max': {'highWaterEquity': to128(q_cash(equity))}})
 
 
-def revalidate_ok(canonical, side, snapshot_id):
-    """True only if the CURRENT canonical decision still authorises this action."""
-    if not canonical:
-        return False
-    if canonical.get('decisionSnapshotId') != snapshot_id:
-        return False
-    if not canonical.get('actionable'):
-        return False
-    if canonical.get('action') != side:
-        return False
-    if not canonical.get('fresh'):
-        return False
-    return True

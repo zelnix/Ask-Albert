@@ -706,8 +706,8 @@ function PaperPanel({ sid, name, onChange }) {
             {p.positions.map((pos) => (
               <div key={pos.symbol} className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 text-[12px]">
                 <span className="font-semibold text-sky-300">{pos.symbol}</span>
-                <span className="text-slate-300">{parseFloat(pos.qty).toFixed(6)}</span>
-                <span className="text-slate-500">avg {usd(parseFloat(pos.avgEntry))}</span>
+                <span className="text-slate-300">{parseFloat(pos.netQuantity).toFixed(6)}</span>
+                <span className="text-slate-500">avg {usd(parseFloat(pos.averageEntryPrice))}</span>
                 <span className="text-slate-500">cost {usd(parseFloat(pos.costBasis))}</span>
                 {pos.stopLoss && <span className="text-rose-400/70">SL {usd(parseFloat(pos.stopLoss))}</span>}
                 {pos.takeProfit && <span className="text-emerald-400/70">TP {usd(parseFloat(pos.takeProfit))}</span>}

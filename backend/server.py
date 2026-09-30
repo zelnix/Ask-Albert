@@ -71,7 +71,7 @@ from config import (
     driver_alert_subs_col, driver_alert_state_col, driver_alerts_col,
     diagnostics_runs_col, diagnostics_reports_col,
     paper_accounts_col, paper_orders_col,
-    paper_positions_col, paper_ledger_col, paper_notif_col,
+    paper_notif_col,
     users_col, auth_sessions_col, GOOGLE_CLIENT_ID,
 )
 from email_service import send_email, resend_configured
@@ -7816,17 +7816,6 @@ PAPER_EXECUTION_MODEL = 'direct_price'
 
 
 
-def _paper_btc_mark():
-    """A BTC paper fill requires a recent, verified provider quote.
-
-    The old 48-hour dashboard-run close is historical context, not an executable
-    mark. Losing the ticker blocks BOTH entries and exits until a valid quote
-    returns; it never fabricates a price for an existing position.
-    """
-    obs = _market_observation('BTC')
-    return obs['price'], obs['fresh'], obs['ts']
-
-
 def _paper_ledger_add(acct_id, event_type, entity_type, entity_id, amount, currency, note=''):
     """Append a NON-ECONOMIC audit note (mode changes, observations, lifecycle)
     to the account's embedded ledger. All ECONOMIC ledger
@@ -7842,35 +7831,6 @@ def _paper_ledger_add(acct_id, event_type, entity_type, entity_id, amount, curre
         traceback.print_exc()
 
 
-def _paper_positions(acct):
-    """Open combined positions (accepts an id or a doc)."""
-    if isinstance(acct, str):
-        acct = paper_accounts_col.find_one({'paperAccountId': acct}) or {}
-    return [dict(p) for p in _paper_core.open_positions(acct)]
-
-
-def _paper_equity(acct, persist=False):
-    """Public equity view backed by exact-Decimal core valuation. Read-only by
-    default (GET/dashboard never writes). Only the background worker persists the
-    high-water mark, and ONLY from a complete, verified valuation."""
-    px, fresh, _ = _paper_btc_mark()
-    info = _paper_core.compute_equity(acct, px, fresh)
-    if persist and info['available'] and info['equity'] is not None:
-        _paper_core.update_high_water(paper_accounts_col, acct['paperAccountId'], acct['ownerId'], info['equity'])
-
-    def _s(v, q=_paper_core.CASH_Q):
-        return _paper_core.dstr(v, q) if v is not None else None
-
-    return {'available': info['available'], 'markStatus': info['markStatus'],
-            'value': info['equityStr'], 'cash': _s(info['cash']),
-            'protectedReserve': _s(info['protectedReserve']),
-            'deployableCash': _s(info['deployableCash']),
-            'realizedPnl': _s(info['realizedPnl']),
-            'unrealizedPnl': _s(info['unrealized']),
-            'drawdownPct': _s(info['drawdownPct'], _paper_core.PCT_Q),
-            'highWater': _s(info['highWater']),
-            '_fresh': fresh, '_px': info['markPx'], '_dd': info['drawdownPct'],
-            '_equity': info['equity']}
 
 
 def _envelope_to_canonical(env):
@@ -7925,23 +7885,6 @@ def _paper_hist_key(pid, account):
     return pid
 
 
-def _paper_canonical_decision(pid, account=None):
-    """Fetch the CURRENT immutable canonical BTC decision snapshot for this owner,
-    built from the given M5 account's portfolio when provided (blocker #2). Market
-    Driver Intelligence is NOT consulted. Returns None (fail CLOSED) when absent,
-    mutable, incomplete, unsupported or its ids/hash are missing."""
-    try:
-        key = _paper_hist_key(pid, account)
-        snap = _albert_decisions(pid, account=account)
-        try:
-            _decision_history_repo.reconcile(key, snap)  # stabilise ids
-        except Exception:  # noqa
-            pass
-        env = _decision_history_repo.get_current(key, 'BTC')
-    except Exception:  # noqa
-        traceback.print_exc()
-        return None
-    return _envelope_to_canonical(env)
 
 
 def _paper_canonical_decisions(pid, account=None):
@@ -7967,14 +7910,6 @@ def _paper_canonical_decisions(pid, account=None):
     return out
 
 
-def _paper_canonical_for(pid, asset, account=None):
-    """M6: the CURRENT canonical decision for ONE asset (used by manual
-    controls so they never fall back to the BTC-only decision)."""
-    asset = (asset or 'BTC').upper()
-    for c in _paper_canonical_decisions(pid, account=account):
-        if (c.get('asset') or '').upper() == asset:
-            return c
-    return None
 
 
 def _market_observation(sym):
@@ -9223,20 +9158,21 @@ def paper_trade_log(acct_id: str, user: dict = Depends(get_current_user)):
 def paper_trade_evidence(symbol: str, acct_id: str = None, user: dict = Depends(get_current_user)):
     pid = owner_pid(user)
     symbol = symbol.upper()
-    if acct_id:
-        a = paper_accounts_col.find_one({'paperAccountId': acct_id, 'ownerId': pid})
-        if not a:
-            raise HTTPException(status_code=404, detail='No such paper account.')
-    else:
-        a = paper_accounts_col.find_one({'ownerId': pid,
-                                         '$or': [{'positions.symbol': symbol}, {'closedPositions.symbol': symbol}]})
+    if not acct_id:
+        raise HTTPException(status_code=422, detail='acct_id query parameter is required.')
+    a = paper_accounts_col.find_one({'paperAccountId': acct_id, 'ownerId': pid})
     if not a:
-        raise HTTPException(status_code=404, detail='No such trade.')
+        raise HTTPException(status_code=404, detail='No such paper account or not owned by you.')
     pos = _paper_core.position_for(a, symbol)
     if not pos:
-        pos = next((c for c in (a.get('closedPositions') or []) if (c.get('symbol') or '').upper() == symbol), None)
+        pos = next((c for c in (a.get('closedPositions') or [])
+                     if (c.get('symbol') or '').upper() == symbol), None)
+    if not pos:
+        raise HTTPException(status_code=404, detail=f'No position for {symbol} in wallet {acct_id}.')
     fills = [e for e in (a.get('ledger') or []) if (e.get('asset') or '').upper() == symbol]
-    return {'status': 'ready', 'paperOnly': True, 'position': _paper_jsonify(pos),
+    return {'status': 'ready', 'paperOnly': True,
+            'paperAccountId': acct_id,
+            'position': _paper_jsonify(pos),
             'executionModel': PAPER_EXECUTION_MODEL, 'ledger': _paper_jsonify(fills),
             'note': 'Paper simulation evidence — not a live exchange fill.'}
 
@@ -11705,9 +11641,15 @@ def _ask_resolve_entity(pid, etype, eid):
         return None, {'kind': etype, 'available': False, 'reason': 'NO_ID'}
     try:
         if etype in ('position', 'trade', 'fill'):
-            sym = eid.upper()
-            a = paper_accounts_col.find_one(
-                {'ownerId': pid, '$or': [{'positions.symbol': sym}, {'closedPositions.symbol': sym}]})
+            # Format: SYMBOL or WALLET_ID:SYMBOL
+            parts = eid.split(':', 1)
+            if len(parts) == 2:
+                wallet_id, sym = parts[0].strip(), parts[1].strip().upper()
+                a = paper_accounts_col.find_one({'paperAccountId': wallet_id, 'ownerId': pid})
+            else:
+                sym = eid.upper()
+                a = paper_accounts_col.find_one(
+                    {'ownerId': pid, '$or': [{'positions.symbol': sym}, {'closedPositions.symbol': sym}]})
             if not a:
                 return None, {'kind': 'position', 'available': False, 'reason': 'NOT_FOUND_OR_NOT_OWNED'}
             pos = _paper_core.position_for(a, sym)
@@ -13202,7 +13144,7 @@ def _strategy_paper_public(doc, pid, acct=None):
             if unrealized is not None:
                 total_unrealized += unrealized
             pos_list.append({
-                'symbol': sym, 'qty': str(qty), 'avgEntry': str(entry),
+                'symbol': sym, 'netQuantity': str(qty), 'averageEntryPrice': str(entry),
                 'costBasis': str(cost), 'openedAt': pos.get('openedAt'),
                 'updatedAt': pos.get('updatedAt'),
                 'stopLoss': _paper_core.dstr(_paper_core.D(pos.get('stopLoss'))) if pos.get('stopLoss') else None,
@@ -13533,16 +13475,16 @@ def paper_overview(user: dict = Depends(get_current_user)):
     ledger_checks = []
     for a in owner_account_docs:
         try:
-            check = _paper_core.reconcile_multi(a)
+            check = _paper_core.reconcile(a)
             ledger_checks.append({'paperAccountId': a.get('paperAccountId'),
                                   'status': 'MATCH' if check['ok'] else 'MISMATCH'})
         except Exception:  # A failed read must not be reported as a matching ledger.
             ledger_checks.append({'paperAccountId': a.get('paperAccountId'), 'status': 'UNAVAILABLE'})
     strategies, positions, activity, recent_fills = [], [], [], []
     tot_value = Decimal('0'); tot_start = Decimal('0')
-    tot_cash = Decimal('0'); tot_risk = Decimal('0'); tot_risk_limit = Decimal('0')
+    tot_cash = Decimal('0')
     tot_protected = Decimal('0'); tot_deployable = Decimal('0')
-    value_known = True; cash_known = True; risk_known = True; reserve_known = True; wallets = 0
+    value_known = True; cash_known = True; reserve_known = True; wallets = 0
     realized = Decimal('0')
     closed_trades = 0; wins = 0
     # Build a lookup of strategies by paperAccountId for enrichment.
@@ -13596,14 +13538,6 @@ def paper_overview(user: dict = Depends(get_current_user)):
                 reserve_known = False
             else:
                 tot_protected += protected; tot_deployable += deployable
-            allocation_risk = (d.get('allocation') or {}).get('openRisk') or {}
-            risk_usd = _paper_core.D(allocation_risk.get('usd'))
-            limit_usd = _paper_core.D(allocation_risk.get('limitUsd'))
-            if risk_usd is None or limit_usd is None or v is None:
-                risk_known = False
-            else:
-                tot_risk += risk_usd
-                tot_risk_limit += limit_usd
             realized += (_paper_core.D(eq.get('realizedPnl')) or Decimal('0'))
             closed_trades += int(perf.get('closedTrades') or 0)
             wins += int(perf.get('wins') or 0)
@@ -13645,7 +13579,6 @@ def paper_overview(user: dict = Depends(get_current_user)):
     combined_usable = bool(wallets and value_known and tot_value > 0)
     cash_usable = bool(wallets and cash_known)
     reserve_usable = bool(combined_usable and reserve_known)
-    risk_usable = bool(combined_usable and risk_known)
     return {'status': 'ready', 'paperOnly': True,
             'asOf': datetime.datetime.utcnow().isoformat(),
             'accountResolution': {'status': 'RESOLVED', 'count': len(owned_accounts),
@@ -13664,29 +13597,18 @@ def paper_overview(user: dict = Depends(get_current_user)):
             'protectedCashAvailable': reserve_usable,
             'protectedCashTotal': _paper_core.dstr(tot_protected) if reserve_usable else None,
             'deployableCashTotal': _paper_core.dstr(tot_deployable) if reserve_usable else None,
-            'openRiskAvailable': risk_usable,
-            'openRiskUsd': _paper_core.dstr(tot_risk) if risk_usable else None,
-            'openRiskPct': _paper_core.dstr(tot_risk / tot_value * Decimal('100'), _paper_core.PCT_Q) if risk_usable else None,
-            'openRiskLimitPct': _paper_core.dstr(tot_risk_limit / tot_value * Decimal('100'), _paper_core.PCT_Q) if risk_usable else None,
-            'openRiskLimitSource': 'paper_profile_weighted' if risk_usable else None,
             'activity': activity[:25],
             'recentFills': _paper_jsonify(recent_fills[:2])}
 
 
 @app.post('/api/v1/albert/studio/strategies/{sid}/{cmd}')
 def studio_lifecycle(sid: str, cmd: str, payload: dict = Body(default={}), user: dict = Depends(get_current_user)):
-    """Lifecycle transitions (assign/unassign/activate/pause/close/archive). Owner-scoped,
-    confirm + idempotency required, illegal transitions rejected. Assigning makes the
-    strategy AVAILABLE to the paper engine but never creates a trade (that is M-E)."""
+    """Lifecycle transitions — only archive is supported. Assign/unassign/activate
+    are retired; use Strategy Studio review, Start and Stop instead."""
     pid = owner_pid(user)
     body = payload or {}
-    if cmd not in ('assign', 'unassign', 'activate', 'pause', 'close', 'archive'):
-        raise HTTPException(status_code=422, detail='Unknown command.')
     if cmd != 'archive':
         raise HTTPException(status_code=410, detail='Use Strategy Studio review, Start and Stop. Direct wallet assignment and activation are retired.')
-    doc = _studio_get(sid, pid)
-    if not doc:
-        raise HTTPException(status_code=404, detail='No such strategy.')
     if not body.get('confirm'):
         raise HTTPException(status_code=428, detail=f'Explicit confirmation is required to {cmd}.')
     idem = str(body.get('idempotencyKey') or '').strip()
@@ -13695,6 +13617,9 @@ def studio_lifecycle(sid: str, cmd: str, payload: dict = Body(default={}), user:
     prior = _studio_idem(pid, f'{cmd}:{sid}:{idem}')
     if prior is not None:
         return prior
+    doc = _studio_get(sid, pid)
+    if not doc:
+        raise HTTPException(status_code=404, detail='No such strategy.')
     cur = doc.get('status')
     allowed = STUDIO_TRANSITIONS.get(cur, {})
     if cmd not in allowed:
@@ -13707,37 +13632,6 @@ def studio_lifecycle(sid: str, cmd: str, payload: dict = Body(default={}), user:
             raise HTTPException(status_code=409, detail='Close or retain the open holdings; this wallet cannot be hidden while invested.')
     new_state = allowed[cmd]
     updates = {'status': new_state, 'updatedAt': datetime.datetime.utcnow().isoformat()}
-    if cmd == 'assign':
-        acct_id = str(body.get('paperAccountId') or '').strip()
-        acct = _paper_get(acct_id, pid) if acct_id else None
-        if not acct:
-            raise HTTPException(status_code=404, detail='No such paper account.')
-        # V1: one active/assigned strategy per paper account.
-        other = strategy_contracts_col.find_one({'ownerId': pid, 'assignedPaperAccountId': acct_id,
-                                                 'strategyId': {'$ne': sid},
-                                                 'status': {'$in': ['PAPER_ASSIGNED', 'PAPER_ACTIVE', 'PAUSED']}})
-        if other:
-            raise HTTPException(status_code=409,
-                                detail='This account already has a strategy assigned — unassign it first.')
-        _c, _h, _sv_err, _st_err = _studio_validate({'assets': doc['contract']['assets'],
-                                         **doc['contract']}, pid, account=acct); errs = _sv_err + _st_err
-        if _h != doc['contractHash']:
-            raise HTTPException(status_code=409, detail='Contract hash mismatch on assignment.')
-        if errs:
-            raise HTTPException(status_code=422, detail='Not compatible with this account: ' + '; '.join(errs))
-        if body.get('expectedVersion') is not None and int(body['expectedVersion']) != int(doc['version']):
-            raise HTTPException(status_code=409, detail='Strategy version changed — reload.')
-        updates['assignedPaperAccountId'] = acct_id
-    if cmd == 'unassign':
-        updates['assignedPaperAccountId'] = None
-    if cmd == 'activate':
-        acct = _strategy_acct(doc, pid)
-        if not acct:
-            raise HTTPException(status_code=409, detail='Assigned paper account is unavailable.')
-        _c, _h, _sv_err, _st_err = _studio_validate(doc.get('contract') or {}, pid, account=acct); errs = _sv_err + _st_err
-        if _h != doc.get('contractHash') or errs:
-            raise HTTPException(status_code=422, detail='Cannot activate: '
-                                + '; '.join(errs or ['contract hash mismatch']))
     strategy_contracts_col.update_one({'_id': doc['_id']}, {'$set': updates})
     fresh = _studio_get(sid, pid)
     result = {'status': 'ready', 'command': cmd, **_studio_public(fresh)}

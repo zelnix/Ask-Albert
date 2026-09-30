@@ -10,15 +10,8 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { money, signedPct, timeAgo, EvidenceButton, Limitations } from './common';
 
-const MODE = {
-  AUTOPILOT: { label: 'Autopilot', cls: 'text-violet-300 ring-violet-500/30' },
-  PAPER_AUTOPILOT: { label: 'Autopilot', cls: 'text-violet-300 ring-violet-500/30' },
-  OBSERVE: { label: 'Observe', cls: 'text-slate-300 ring-slate-500/30' },
-};
-
 function StrategyRow({ s, onNav }) {
   const live = !!s.isLive;
-  const mode = MODE[s.approvalMode] || null;
   const pnl = s.pnlUsd !== undefined && s.pnlUsd !== null ? Number(s.pnlUsd) : null;
   return (
     <button type="button" onClick={() => onNav && onNav('strategies')}
@@ -31,9 +24,6 @@ function StrategyRow({ s, onNav }) {
         <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${live ? 'bg-emerald-500/15 text-emerald-300' : 'bg-slate-800 text-slate-400'}`}>
           {s.paperStatusLabel || (live ? 'Paper trading' : 'Saved')}
         </span>
-        {mode ? (
-          <span className={`shrink-0 rounded-full bg-slate-950/70 px-2 py-0.5 text-[10px] font-semibold ring-1 ${mode.cls}`}>{mode.label}</span>
-        ) : null}
       </div>
       <p className="mt-1 truncate text-[11.5px] text-slate-500">
         {(s.assets || []).join(' · ') || 'Multi-asset'}
@@ -227,7 +217,7 @@ export default function StrategiesStream({ sop, onNav, onEvidence }) {
           </div>
         ) : null}
         <Limitations className="mt-2" items={[
-          'Paper trading only — no real order is ever placed, and Albert cannot approve a trade on your behalf.',
+          'Paper trading only — no real order is ever placed.',
         ]} />
       </Card>
     </div>
