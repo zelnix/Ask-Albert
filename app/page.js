@@ -15,7 +15,7 @@ import {
   Sparkles, Info, Lock, Compass, CandlestickChart, Layers, Landmark, Globe, Newspaper,
   Brain, Send, ShieldAlert, Scale, CalendarClock, ClipboardList, ShieldCheck,
   Volume2, VolumeX, Maximize2, Minimize2, SlidersHorizontal, Magnet, Plus, Clock,
-  ChevronDown, Coins, Fish, Zap, Loader2, LogOut, MessageSquarePlus, Copy, Search, Eye, EyeOff,
+  ChevronDown, Coins, Fish, Zap, Loader2, LogOut, MessageSquarePlus, Copy, Search, Eye, EyeOff, Settings2,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -2970,47 +2970,21 @@ function BreakerDemoCard({ passcode }) {
 
 function SettingsSection({ onManualRun }) {
   const symbol = React.useContext(SymbolContext);
-  const [pass, setPass] = React.useState('');
-  const [saved, setSaved] = React.useState(false);
-  const [showPass, setShowPass] = React.useState(false);
-  React.useEffect(() => {
-    if (typeof window !== 'undefined') setPass(window.localStorage.getItem('btciq_admin_passcode') || '');
-  }, []);
-  const save = () => { if (typeof window !== 'undefined') { window.localStorage.setItem('btciq_admin_passcode', pass); setSaved(true); setTimeout(() => setSaved(false), 2000); } };
   return (
     <div className="space-y-5">
       <SectionHead icon={Cpu} title="Settings" blurb={sec('settings').blurb} coin={symbol} />
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
-        <h3 className="mb-1 flex items-center gap-2 font-semibold text-white"><Lock className="h-4 w-4 text-amber-400" />Admin passcode</h3>
-        <p className="mb-3 text-xs text-slate-500">Required to trigger a manual CryptoMarkAI forecast run. Stored only in this browser. Manual runs are rate-limited and audit-logged.</p>
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="relative">
-            <input type={showPass ? 'text' : 'password'} value={pass} onChange={(e) => setPass(e.target.value)} placeholder="Enter admin passcode"
-              className="w-64 rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 pr-9 text-sm text-slate-100 focus:border-sky-500/50 focus:outline-none" />
-            <button type="button" onClick={() => setShowPass(!showPass)} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300" aria-label={showPass ? 'Hide passcode' : 'Show passcode'}>
-              {showPass ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-            </button>
-          </div>
-          <Button onClick={save} className="bg-sky-500 hover:bg-sky-400">Save</Button>
-          {saved && <span className="text-xs font-semibold text-emerald-400">Saved ✓</span>}
+        <div className="flex items-center gap-2 text-sm text-slate-400">
+          <Settings2 className="h-4 w-4 text-sky-400" />
+          <span>User settings (notifications, daily brief coins, admin passcode) have moved to your <strong className="text-white">profile menu</strong> — tap your avatar in the top-right corner.</span>
         </div>
       </Card>
-      <BreakerDemoCard passcode={pass} />
-      <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
-        <h3 className="mb-1 flex items-center gap-2 font-semibold text-white"><Bell className="h-4 w-4 text-sky-400" />Daily brief coins</h3>
-        <BriefWatchlistPanel />
-      </Card>
-      <NotificationSettings />
+      <BreakerDemoCard />
       <UATManagement />
-      <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
-        <h3 className="mb-2 font-semibold text-white">About & compliance</h3>
-        <p className="text-xs leading-relaxed text-slate-400">Ask Albert — Bitcoin Market Analysis, powered by CryptoCentAI, our Bitcoin-Centred Intelligence Engine. CryptoMarkAI measures the market and produces probability-based forecasts. Albert is Ask Albert’s HuCentAI Quant Analyst.</p>
-        <p className="mt-3 text-[11px] leading-relaxed text-slate-500">Ask Albert provides Bitcoin market analysis, probability-based forecasts and educational information. It does not provide personalised financial advice or guarantee future outcomes. Albert is an original fictional Ask Albert HuCentAI Quant character and does not represent any real or other fictional person or character.</p>
-        <a href="https://askalbert.app" target="_blank" rel="noopener noreferrer" className="mt-3 inline-flex items-center gap-1 text-[11px] font-semibold text-sky-400 hover:text-sky-300"><Globe className="h-3 w-3" />askalbert.app</a>
-      </Card>
     </div>
   );
 }
+
 
 function PerformanceHubSection({ d }) {
   const isBtc = React.useContext(SymbolContext) === 'BTC';
@@ -3297,43 +3271,115 @@ let __alertsCache = null;
 let __notifCache = null;
 
 
-// ---- Account menu (avatar + sign-out) shown in the top header ----
+// ---- Account menu (avatar + user settings panel) shown in the top header ----
 function AccountMenu({ user, onSignOut }) {
   const [open, setOpen] = useState(false);
+  const [tab, setTab] = useState('main'); // main | notifications | briefcoins | passcode
+  const [pass, setPass] = useState('');
+  const [saved, setSaved] = useState(false);
+  const [showPass, setShowPass] = useState(false);
+  useEffect(() => {
+    if (typeof window !== 'undefined') setPass(window.localStorage.getItem('btciq_admin_passcode') || '');
+  }, []);
+  const savePass = () => { if (typeof window !== 'undefined') { window.localStorage.setItem('btciq_admin_passcode', pass); setSaved(true); setTimeout(() => setSaved(false), 2000); } };
   if (!user) return null;
   const initial = (user.name || user.email || '?').slice(0, 1).toUpperCase();
   return (
     <div className="relative shrink-0">
       <button
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => { setOpen((o) => !o); setTab('main'); }}
         title={user.email}
         className="flex items-center gap-1.5 rounded-full border border-slate-700 bg-slate-900 py-1 pl-1 pr-2 text-slate-200 transition-colors hover:border-sky-500/50"
       >
         {user.picture
           ? <img src={user.picture} alt="" referrerPolicy="no-referrer" className="h-7 w-7 rounded-full ring-1 ring-slate-700" />
           : <span className="flex h-7 w-7 items-center justify-center rounded-full bg-sky-500/20 text-xs font-semibold text-sky-300">{initial}</span>}
-        <ChevronDown className="h-3.5 w-3.5 text-slate-400" />
+        <ChevronDown className={`h-3.5 w-3.5 text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
       {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 z-50 mt-2 w-60 rounded-xl border border-slate-700 bg-slate-900 p-1.5 shadow-2xl shadow-black/50">
-            <div className="flex items-center gap-3 rounded-lg px-3 py-2.5">
+          <div className="absolute right-0 z-50 mt-2 w-80 rounded-xl border border-slate-700 bg-slate-900 shadow-2xl shadow-black/50">
+            {/* Header: profile */}
+            <div className="flex items-center gap-3 rounded-t-xl border-b border-slate-800 px-4 py-3">
               {user.picture
-                ? <img src={user.picture} alt="" referrerPolicy="no-referrer" className="h-9 w-9 rounded-full ring-1 ring-slate-700" />
-                : <span className="flex h-9 w-9 items-center justify-center rounded-full bg-sky-500/20 text-sm font-semibold text-sky-300">{initial}</span>}
-              <div className="min-w-0">
+                ? <img src={user.picture} alt="" referrerPolicy="no-referrer" className="h-10 w-10 rounded-full ring-1 ring-slate-700" />
+                : <span className="flex h-10 w-10 items-center justify-center rounded-full bg-sky-500/20 text-sm font-semibold text-sky-300">{initial}</span>}
+              <div className="min-w-0 flex-1">
                 <div className="truncate text-sm font-semibold text-white">{user.name || 'Signed in'}</div>
                 <div className="truncate text-[11px] text-slate-500">{user.email}</div>
               </div>
             </div>
-            <div className="my-1 h-px bg-slate-800" />
-            <button
-              onClick={() => { setOpen(false); onSignOut && onSignOut(); }}
-              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-slate-300 transition-colors hover:bg-slate-800 hover:text-white"
-            >
-              <LogOut className="h-4 w-4" /> Sign out
-            </button>
+
+            {tab === 'main' && (
+              <div className="p-1.5">
+                <button onClick={() => setTab('notifications')}
+                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm text-slate-300 transition-colors hover:bg-slate-800 hover:text-white">
+                  <Bell className="h-4 w-4 text-sky-400" /> Notifications
+                </button>
+                <button onClick={() => setTab('briefcoins')}
+                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm text-slate-300 transition-colors hover:bg-slate-800 hover:text-white">
+                  <Coins className="h-4 w-4 text-amber-400" /> Daily brief coins
+                </button>
+                <button onClick={() => setTab('passcode')}
+                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm text-slate-300 transition-colors hover:bg-slate-800 hover:text-white">
+                  <Lock className="h-4 w-4 text-amber-400" /> Admin passcode
+                </button>
+                <div className="my-1 h-px bg-slate-800" />
+                <a href="https://askalbert.app" target="_blank" rel="noopener noreferrer"
+                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm text-slate-300 transition-colors hover:bg-slate-800 hover:text-white">
+                  <Globe className="h-4 w-4 text-slate-500" /> About Ask Albert
+                </a>
+                <div className="my-1 h-px bg-slate-800" />
+                <button
+                  onClick={() => { setOpen(false); onSignOut && onSignOut(); }}
+                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm text-red-400 transition-colors hover:bg-red-500/10 hover:text-red-300"
+                >
+                  <LogOut className="h-4 w-4" /> Sign out
+                </button>
+              </div>
+            )}
+
+            {tab === 'notifications' && (
+              <div className="p-4">
+                <button onClick={() => setTab('main')} className="mb-3 flex items-center gap-1 text-xs text-sky-400 hover:text-sky-300">
+                  <ChevronDown className="h-3 w-3 rotate-90" /> Back
+                </button>
+                <NotificationSettings />
+              </div>
+            )}
+
+            {tab === 'briefcoins' && (
+              <div className="max-h-80 overflow-y-auto p-4">
+                <button onClick={() => setTab('main')} className="mb-3 flex items-center gap-1 text-xs text-sky-400 hover:text-sky-300">
+                  <ChevronDown className="h-3 w-3 rotate-90" /> Back
+                </button>
+                <h4 className="mb-2 text-sm font-semibold text-white">Daily brief coins</h4>
+                <p className="mb-3 text-[11px] text-slate-500">Pick which coins get a daily brief and a bell notification. Bitcoin is always included.</p>
+                <BriefWatchlistPanel />
+              </div>
+            )}
+
+            {tab === 'passcode' && (
+              <div className="p-4">
+                <button onClick={() => setTab('main')} className="mb-3 flex items-center gap-1 text-xs text-sky-400 hover:text-sky-300">
+                  <ChevronDown className="h-3 w-3 rotate-90" /> Back
+                </button>
+                <h4 className="mb-1 text-sm font-semibold text-white">Admin passcode</h4>
+                <p className="mb-3 text-[11px] text-slate-500">Required to trigger a manual CryptoMarkAI forecast run. Stored only in this browser.</p>
+                <div className="flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <input type={showPass ? 'text' : 'password'} value={pass} onChange={(e) => setPass(e.target.value)} placeholder="Enter passcode"
+                      className="w-full rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 pr-9 text-sm text-slate-100 focus:border-sky-500/50 focus:outline-none" />
+                    <button type="button" onClick={() => setShowPass(!showPass)} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300">
+                      {showPass ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
+                  <Button onClick={savePass} size="sm" className="bg-sky-500 hover:bg-sky-400">Save</Button>
+                </div>
+                {saved && <span className="mt-1 text-xs font-semibold text-emerald-400">Saved ✓</span>}
+              </div>
+            )}
           </div>
         </>
       )}
