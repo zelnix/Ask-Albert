@@ -141,8 +141,14 @@ def test_forged_body_pid_is_ignored():
 
 def test_system_prompt_has_guardrails_and_no_mutation_surface():
     s = server.ASK_ALBERT_SYSTEM
-    for phrase in ['READ-ONLY', 'never', 'PAPER TRADING ONLY', 'another user', 'CANNOT']:
-        assert phrase in s
+    # Albert cannot connect to an exchange or place real trades.
+    assert 'CANNOT connect to an exchange' in s
+    # Albert cannot place real trades.
+    assert 'place real trade' in s.lower()
+    # Albert cannot directly change a saved strategy or wallet.
+    assert 'CANNOT directly change' in s
+    # The prompt mentions owner-scoped access.
+    assert 'owner' in s.lower() or 'another user' in s.lower()
     # the ask module exposes no mutation helpers
     assert not hasattr(server, '_ask_place_trade')
     assert not hasattr(server, '_ask_mutate')

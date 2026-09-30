@@ -31,12 +31,10 @@ export default function AlbertReplyMeta({ msg, onNav, sessionId }) {
     return () => window.removeEventListener('albert:strategy-saved', handler);
   }, [proposalId]);
 
-  // Detect strategy-like discussion (mentions portfolio, allocation, position) but NO structured data.
-  const text = (msg?.text || '').toLowerCase();
-  const hasStrategyDiscussion = !hasProposal && (
-    /\b(portfolio|allocation|position|strategy|basket|rebalance)\b/.test(text) &&
-    /\b(buy|sell|long|short|hold|weight|allocat)\b/.test(text)
-  );
+  // Strategy intent is now determined server-side and returned as an explicit field.
+  // If strategyIntent is true but no proposal was generated, show a retry button.
+  const hasStrategyDiscussion = !hasProposal && Boolean(msg?.strategyIntent);
+  const draftFailed = hasStrategyDiscussion && Boolean(msg?.strategyDraftFailed);
 
   const prepareProposal = async () => {
     setPreparing(true);
@@ -102,12 +100,12 @@ export default function AlbertReplyMeta({ msg, onNav, sessionId }) {
         </Button>
       )}
 
-      {/* Strategy-like discussion without structured data */}
+      {/* Strategy intent detected without structured data — offer extraction or retry */}
       {hasStrategyDiscussion && !hasProposal && (
         <Button size="sm" variant="outline" onClick={prepareProposal} disabled={preparing}
           className="h-7 gap-1.5 border-sky-500/40 text-[12px] text-sky-300 hover:bg-sky-500/10">
-          {preparing ? <Clock className="h-3.5 w-3.5 animate-spin" /> : <Bookmark className="h-3.5 w-3.5" />}
-          Prepare strategy for review
+          {preparing ? <Clock className="h-3.5 w-3.5 animate-spin" /> : draftFailed ? <RefreshCw className="h-3.5 w-3.5" /> : <Bookmark className="h-3.5 w-3.5" />}
+          {draftFailed ? 'Retry strategy proposal' : 'Prepare strategy for review'}
         </Button>
       )}
 

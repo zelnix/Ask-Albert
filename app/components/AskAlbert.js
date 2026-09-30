@@ -121,9 +121,10 @@ function ScopePanel({ sop, onNav }) {
     <div className="space-y-3">
       <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400"><Info className="h-3.5 w-3.5" />What Albert can and cannot do</p>
       <ul className="space-y-1.5 text-[12.5px] leading-relaxed text-slate-300">
-        <li className="flex gap-2"><ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" />He reads only your own paper state — never another account — and can check engine rules without showing or changing code.</li>
-        <li className="flex gap-2"><ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" />He never invents a number: every figure is quoted from the engine, with evidence.</li>
-        <li className="flex gap-2"><ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" />He cannot place, change or approve a trade. Anything that changes your account comes back as a card you confirm.</li>
+        <li className="flex gap-2"><ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" />Albert analyses the market and identifies opportunities — he gives clear opinions on timing, levels and risk.</li>
+        <li className="flex gap-2"><ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" />Albert can recommend and prepare paper-trading strategies for your review.</li>
+        <li className="flex gap-2"><ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" />Albert can read your paper wallets, strategy performance and trade history.</li>
+        <li className="flex gap-2"><ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />Albert cannot connect to an exchange or place a real trade. You review, save and start every strategy.</li>
       </ul>
       <div className="flex flex-col items-start gap-1.5 border-t border-slate-800 pt-2.5">
         <Link to="home">Your current status on Albert home</Link>
@@ -221,7 +222,7 @@ export default function AskAlbert({ onNav }) {
       <div className="flex items-center gap-2.5">
         <MessageCircle className="h-5 w-5 text-sky-400" />
         <h1 className="text-lg font-bold text-white">Ask Albert</h1>
-        <span className="text-[12px] text-slate-500">Your context-aware trading companion · paper only</span>
+        <span className="text-[12px] text-slate-500">Your crypto market and strategy companion</span>
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">

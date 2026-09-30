@@ -111,6 +111,7 @@ function proposalToDraft(proposal) {
     ...STUDIO_EXEC_RULES,
     // Preserve entry sizing from proposal; do NOT default — missing sizing = "Needs changes"
     entrySizing: proposal.entrySizing || undefined,
+    maxPositions: proposal.maxPositions != null ? Number(proposal.maxPositions) : undefined,
     portfolioGoals: proposal.portfolioGoals || undefined,
   };
 }

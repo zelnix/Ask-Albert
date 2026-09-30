@@ -81,10 +81,12 @@ export default function FloatingAlbert({ active, symbol, onExpand, onNav }) {
     // Deep dive uses the heavy reasoning model, which can take ~30s — give it room.
     // Non-deep is also given 60s so an inline basket build (Basket from Chat, ~30-45s) completes.
     const timer = setTimeout(() => ctrl.abort(), deep ? 95000 : 60000);
+    // Pass the selected paper wallet so Albert can read current cash / strategy.
+    const paperAcctId = (typeof window !== 'undefined' && window.sessionStorage.getItem('dashboard:paperAccountId')) || '';
     try {
       const r = await fetch(`${API_BASE}/v1/chat`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId, message: msg, symbol, section: active, deep, pid }),
+        body: JSON.stringify({ session_id: sessionId, message: msg, symbol, section: active, deep, pid, paperAccountId: paperAcctId }),
         signal: ctrl.signal,
       });
       if (r.status === 429) {
