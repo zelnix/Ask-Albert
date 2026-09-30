@@ -552,6 +552,32 @@ function PaperPanel({ sid, name, onChange }) {
     await load(); setBusy(false);
   };
 
+  const updateSL = async (symbol, value) => {
+    setBusy(true);
+    try {
+      const acctId = p.paperAccountId;
+      await fetch(`${API_BASE}/v1/albert/paper/accounts/${acctId}/positions/${symbol}/stop-loss`, {
+        method: 'PATCH', headers: {'Content-Type': 'application/json'},
+        credentials: 'include',
+        body: JSON.stringify({ stopLoss: value || null, reason: 'manual' }),
+      });
+    } catch (e) { /* noop */ }
+    await load(); setBusy(false);
+  };
+
+  const updateTP = async (symbol, value) => {
+    setBusy(true);
+    try {
+      const acctId = p.paperAccountId;
+      await fetch(`${API_BASE}/v1/albert/paper/accounts/${acctId}/positions/${symbol}/take-profit`, {
+        method: 'PATCH', headers: {'Content-Type': 'application/json'},
+        credentials: 'include',
+        body: JSON.stringify({ takeProfit: value || null, reason: 'manual' }),
+      });
+    } catch (e) { /* noop */ }
+    await load(); setBusy(false);
+  };
+
   if (!p) {
     return (
       <div className="mt-4 border-t border-slate-800 pt-3">
@@ -713,7 +739,17 @@ function PaperPanel({ sid, name, onChange }) {
                 {pos.takeProfit && <span className="text-emerald-400/70">TP {usd(parseFloat(pos.takeProfit))}</span>}
                 {pos.currentPrice && <span className="text-slate-400">now {usd(parseFloat(pos.currentPrice))}</span>}
                 {pos.unrealizedPnl && <span className={parseFloat(pos.unrealizedPnl) >= 0 ? 'text-emerald-400' : 'text-rose-400'}>{signed(parseFloat(pos.unrealizedPnl))}</span>}
-                <button disabled={busy} onClick={() => closePos(pos.symbol)} className="ml-auto rounded-md border border-slate-700 px-2 py-0.5 text-[11px] font-semibold text-slate-300 hover:text-white">Close</button>
+                <span className="ml-auto flex items-center gap-1">
+                  <button disabled={busy} onClick={() => {
+                    const v = prompt(`Stop-loss price for ${pos.symbol} (blank to clear):`, pos.stopLoss || '');
+                    if (v !== null) updateSL(pos.symbol, v || null);
+                  }} className="rounded-md border border-slate-700 px-2 py-0.5 text-[11px] font-semibold text-rose-300 hover:text-rose-200" title="Set stop-loss">SL</button>
+                  <button disabled={busy} onClick={() => {
+                    const v = prompt(`Take-profit price for ${pos.symbol} (blank to clear):`, pos.takeProfit || '');
+                    if (v !== null) updateTP(pos.symbol, v || null);
+                  }} className="rounded-md border border-slate-700 px-2 py-0.5 text-[11px] font-semibold text-emerald-300 hover:text-emerald-200" title="Set take-profit">TP</button>
+                  <button disabled={busy} onClick={() => closePos(pos.symbol)} className="rounded-md border border-slate-700 px-2 py-0.5 text-[11px] font-semibold text-slate-300 hover:text-white">Close</button>
+                </span>
               </div>
             ))}
           </div>

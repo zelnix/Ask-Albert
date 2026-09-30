@@ -9041,6 +9041,44 @@ def paper_close_position(acct_id: str, payload: dict = Body(default={}),
     return {'status': 'ready', 'closed': result}
 
 
+@app.patch('/api/v1/albert/paper/accounts/{acct_id}/positions/{symbol}/stop-loss')
+def paper_update_stop_loss(acct_id: str, symbol: str, payload: dict = Body(default={}),
+                           user: dict = Depends(get_current_user)):
+    """Set or clear the stop-loss on a combined position."""
+    pid = owner_pid(user)
+    a = _paper_get(acct_id, pid)
+    if not a:
+        raise HTTPException(status_code=404, detail='No such paper account.')
+    new_val = payload.get('stopLoss')  # null to clear
+    reason = str(payload.get('reason') or 'manual').strip()[:120]
+    result, err = _paper_core.update_stop_loss(paper_accounts_col, acct_id, pid,
+                                               symbol.upper(), new_val, reason=reason)
+    if err == 'NOT_FOUND':
+        raise HTTPException(status_code=404, detail='No such paper account.')
+    if err == 'NO_POSITION':
+        raise HTTPException(status_code=404, detail=f'No open {symbol.upper()} position.')
+    return {'status': 'ready', **result}
+
+
+@app.patch('/api/v1/albert/paper/accounts/{acct_id}/positions/{symbol}/take-profit')
+def paper_update_take_profit(acct_id: str, symbol: str, payload: dict = Body(default={}),
+                             user: dict = Depends(get_current_user)):
+    """Set or clear the take-profit on a combined position."""
+    pid = owner_pid(user)
+    a = _paper_get(acct_id, pid)
+    if not a:
+        raise HTTPException(status_code=404, detail='No such paper account.')
+    new_val = payload.get('takeProfit')  # null to clear
+    reason = str(payload.get('reason') or 'manual').strip()[:120]
+    result, err = _paper_core.update_take_profit(paper_accounts_col, acct_id, pid,
+                                                 symbol.upper(), new_val, reason=reason)
+    if err == 'NOT_FOUND':
+        raise HTTPException(status_code=404, detail='No such paper account.')
+    if err == 'NO_POSITION':
+        raise HTTPException(status_code=404, detail=f'No open {symbol.upper()} position.')
+    return {'status': 'ready', **result}
+
+
 @app.post('/api/v1/albert/paper/accounts/{acct_id}/{cmd}')
 def paper_lifecycle(acct_id: str, cmd: str, payload: dict = Body(default={}),
                     user: dict = Depends(get_current_user)):
@@ -17289,12 +17327,6 @@ def _normalize_basket_draft(raw):
         result['allocation'] = str(raw['allocation'])[:500]
     return result
 
-
-def _fallback_basket_draft(goal=''):
-    """DEPRECATED: No longer used. Generic baskets are not created as fallback.
-    Kept for backward compatibility with any existing callers."""
-    return {'error': 'Strategy generation failed — no generic fallback.',
-            'title': '', 'thesis': '', 'horizon_days': 30, 'legs': []}
 
 
 def _build_basket_draft(goal=''):
