@@ -255,10 +255,10 @@ ADMIN_PASSCODE = os.environ.get('ADMIN_PASSCODE', '')
 EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
 GEMINI_MODEL = os.environ.get('GEMINI_MODEL', 'gemini-3-flash-preview')
 # Ask Quant conversational model — Gemini 3 Flash (direct google-genai SDK)
-CHAT_MODEL = os.environ.get('CHAT_MODEL', 'gemini-3-flash-preview')
+CHAT_MODEL = os.environ.get('CHAT_MODEL_FLASH', os.environ.get('CHAT_MODEL', 'gemini-3-flash-preview'))
 # Interactive "Ask Albert" mentor model — deeper reasoning; grounded (Google
 # Search) requests auto-route to Flash. Called directly via the google-genai SDK.
-ALBERT_CHAT_MODEL = os.environ.get('ALBERT_CHAT_MODEL', 'gemini-3.1-pro-preview')
+ALBERT_CHAT_MODEL = os.environ.get('CHAT_MODEL_PRO', os.environ.get('ALBERT_CHAT_MODEL', 'gemini-3.1-pro-preview'))
 
 # ---- Google AI Studio Gemini TTS (Albert's spoken voice) ----
 # Uses a dedicated Google AI Studio API key (NOT the Emergent key). Key lives in
