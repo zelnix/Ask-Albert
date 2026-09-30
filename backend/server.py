@@ -8106,7 +8106,7 @@ def _paper_autopilot_status(a):
                    + datetime.timedelta(seconds=_AUTOPILOT['intervalSec'])).isoformat()
         except Exception:  # noqa
             nxt = None
-    return {'mode': a.get('mode'), 'runtimeState': a.get('runtimeState'),
+    return {'runtimeState': a.get('runtimeState'),
             'workerState': _AUTOPILOT['state'],
             'workerLastRunAt': _AUTOPILOT['lastRunAt'],
             'workerLastCompletedAt': _AUTOPILOT.get('lastCompletedAt'),
@@ -8209,14 +8209,11 @@ def _studio_entry_budget(strat, symbol, desired, acct, equity_info):
     deployable = cash - equity * max(reserve, account_reserve) / Decimal('100')
     if deployable < _paper_core.MIN_NOTIONAL:
         return None
-    # Position count check.
+    # Position count check — enforce at TICKET level (not just unique assets).
     risks = c.get('riskLimits') or {}
-    max_pos = int(risks.get('maxPositions') or len(c.get('assets') or []))
-    open_count = equity_info.get('openPositionsCount', 0)
-    # Only block new assets; a repeated BUY for a held coin still opens a new ticket.
-    held_syms = {(p.get('symbol') or '').upper() for p in (equity_info.get('positions') or [])
-                 if p.get('qty', 0) > 0}
-    if symbol.upper() not in held_syms and open_count >= max_pos:
+    max_tickets = int(risks.get('maxPositions') or len(c.get('assets') or []))
+    open_ticket_count = equity_info.get('openPositionsCount', 0)
+    if open_ticket_count >= max_tickets:
         return None
     if es and es.get('method') == 'FIXED_USD':
         budget = min(_paper_core.D(es.get('amount')) or Decimal('0'), deployable)
@@ -8224,8 +8221,9 @@ def _studio_entry_budget(strat, symbol, desired, acct, equity_info):
         pct = _paper_core.D(es.get('pct')) or Decimal('0')
         budget = min(deployable * pct / Decimal('100'), deployable)
     else:
-        # Legacy fallback: use the canonical recommended amount, capped by deployable cash.
-        budget = min(_paper_core.D(desired) or Decimal('0'), deployable)
+        # No reviewed entry sizing — cannot trade. Return None so the caller
+        # produces "Needs changes" rather than silently defaulting.
+        return None
     return budget if budget >= _paper_core.MIN_NOTIONAL else None
 
 
@@ -8386,6 +8384,7 @@ def _execute_goal_action(acct, trigger, reason, equity_info, marks):
     if action == 'CLOSE_ALL_AND_STOP':
         # Close ALL open tickets at observed market prices.
         unpriced_tickets = 0
+        failed_sells = 0
         for lot in list(acct.get('lots') or []):
             sym = (lot.get('asset') or '').upper()
             qty = _paper_core.D(lot.get('qty')) or Decimal('0')
@@ -8399,12 +8398,17 @@ def _execute_goal_action(acct, trigger, reason, equity_info, marks):
             if sizing.get('reject'):
                 unpriced_tickets += 1
                 continue
-            _paper_core.apply_sell_atomic(
+            result, err, _ = _paper_core.apply_sell_atomic(
                 paper_accounts_col, acct_id, pid, sizing, source='goal_close',
                 idem_key='goal:%s:%s:%s' % (lot.get('lotId'), trigger, now_iso),
                 asset=sym, ticket_id=lot.get('lotId'))
-        # If any tickets couldn't be closed (no mark), use GOAL_CLOSE_PENDING.
-        if unpriced_tickets > 0:
+            if err:
+                failed_sells += 1
+        # Re-read the account to verify remaining tickets after all sells.
+        acct = paper_accounts_col.find_one({'paperAccountId': acct_id, 'ownerId': pid}) or acct
+        remaining_open = sum(1 for l in (acct.get('lots') or [])
+                             if (_paper_core.D(l.get('qty')) or Decimal('0')) > 0)
+        if remaining_open > 0:
             new_state = 'GOAL_CLOSE_PENDING'
         else:
             new_state = 'HALTED_GOAL_CLOSED'
@@ -8437,11 +8441,10 @@ def _execute_goal_action(acct, trigger, reason, equity_info, marks):
 def _retry_goal_close_pending(acct, marks):
     """GOAL_CLOSE_PENDING: attempt to close any remaining open tickets that
     previously lacked a fresh mark. Transition to HALTED_GOAL_CLOSED once
-    every ticket is closed."""
+    every ticket is confirmed closed."""
     acct_id = acct['paperAccountId']
     pid = acct['ownerId']
     now_iso = datetime.datetime.utcnow().isoformat()
-    still_open = 0
     for lot in list(acct.get('lots') or []):
         sym = (lot.get('asset') or '').upper()
         qty = _paper_core.D(lot.get('qty')) or Decimal('0')
@@ -8449,17 +8452,19 @@ def _retry_goal_close_pending(acct, marks):
             continue
         px, fresh = marks.get(sym, (None, False))
         if px is None or not fresh:
-            still_open += 1
             continue
         sizing = _paper_core.ticket_sell_sizing(sym, qty, px)
         if sizing.get('reject'):
-            still_open += 1
             continue
         _paper_core.apply_sell_atomic(
             paper_accounts_col, acct_id, pid, sizing, source='goal_close_retry',
             idem_key='goalretry:%s:%s' % (lot.get('lotId'), now_iso),
             asset=sym, ticket_id=lot.get('lotId'))
-    if still_open == 0:
+    # Re-read the account to verify remaining open tickets after all sell attempts.
+    acct = paper_accounts_col.find_one({'paperAccountId': acct_id, 'ownerId': pid}) or acct
+    remaining_open = sum(1 for l in (acct.get('lots') or [])
+                         if (_paper_core.D(l.get('qty')) or Decimal('0')) > 0)
+    if remaining_open == 0:
         paper_accounts_col.update_one({'paperAccountId': acct_id, 'ownerId': pid},
             {'$set': {'runtimeState': 'HALTED_GOAL_CLOSED'}})
         _paper_ledger_add(acct_id, 'GOAL_HALT_CLOSED', 'account', acct_id, None, None,
@@ -8780,7 +8785,6 @@ def _autopilot_process_account_multi(acct):
 
     if not decisions:
         return
-    mode = acct.get('mode')
     processed = dict(acct.get('processedDecisionSnapshots') or {})   # {asset: snapshotId}
     cursors = dict(acct.get('marketObservationCursors') or {})       # {asset: ts}
     regime = next((d.get('regime') for d in decisions if d.get('regime')), 'RANGE')
@@ -8923,7 +8927,7 @@ def _autopilot_process_account_multi(acct):
                     import copy as _copy
                     _ticket_rules = _copy.deepcopy(_sell_rules)
             res, err, _ = _paper_core.apply_buy_atomic(
-                paper_accounts_col, acct_id, pid, acct.get('version'), idem, 'auto_%s_%s' % (sym, sid),
+                paper_accounts_col, acct_id, pid, acct.get('version'), idem,
                 sizing, can, base_currency=acct.get('baseCurrency', 'USDC'), asset=sym,
                 strategy_version=_strat['version'] if _strat else None,
                 strategy_hash=_strat['contractHash'] if _strat else None,
@@ -8952,7 +8956,7 @@ def _autopilot_process_account_multi(acct):
                 continue
             res, err, _ = _paper_core.apply_sell_atomic(
                 paper_accounts_col, acct_id, pid, sizing, source='auto_%s' % intent.get('reason', 'sell'),
-                idem_key=idem, proposal_id='auto_%s_%s' % (sym, sid), canonical=can,
+                idem_key=idem, canonical=can,
                 asset=sym, ticket_id=pos.get('ticketId'))
             if not err:
                 traded_syms.add(sym)
@@ -9132,8 +9136,8 @@ def _paper_jsonify(obj):
 def _paper_acct_public(acct):
     startc = acct.get('startingCash')
     return {k: acct.get(k) for k in ('paperAccountId', 'ownerId', 'name', 'baseCurrency',
-                                     'mode', 'runtimeState', 'mandateId', 'mandateVersion',
-                                     'executionProfileId', 'createdAt', 'archivedAt', 'version')} | {
+                                     'runtimeState', 'mandateId', 'mandateVersion',
+                                     'createdAt', 'archivedAt', 'version')} | {
         'startingCash': _paper_core.dstr(startc) if startc is not None else None,
         'paperOnly': True}
 
@@ -9171,10 +9175,6 @@ def _paper_get(acct_id, pid):
 @app.post('/api/v1/albert/paper/accounts')
 def paper_create_account(payload: dict = Body(...), user: dict = Depends(get_current_user)):
     pid = owner_pid(user)
-    mode = payload.get('mode', 'OBSERVE')  # default to the safest mode (Observe)
-    # Mode boundary: only OBSERVE + PAPER_AUTOPILOT.
-    if mode not in ('OBSERVE', 'PAPER_AUTOPILOT'):
-        raise HTTPException(status_code=422, detail='Unknown mode.')
     start = _paper_core.q_cash(payload.get('startingCash')) or Decimal('100000.00')
     try:
         mandate = _albert_deps.get_mandate(pid) or {}
@@ -9186,13 +9186,13 @@ def paper_create_account(payload: dict = Body(...), user: dict = Depends(get_cur
         'paperAccountId': 'pa_' + uuid.uuid4().hex[:12], 'ownerId': pid,
         'name': (payload.get('name') or 'BTC Forward Test')[:60],
         'baseCurrency': (payload.get('baseCurrency') or 'USDC')[:8],
-        'mode': mode, 'runtimeState': 'RUNNING', 'mandateId': payload.get('mandateId', 'default'),
+        'runtimeState': 'RUNNING', 'mandateId': payload.get('mandateId', 'default'),
         'mandateVersion': 0, 'executionModel': PAPER_EXECUTION_MODEL,
         'version': 0, 'createdAt': datetime.datetime.utcnow().isoformat(), 'archivedAt': None,
         **econ}
     paper_accounts_col.insert_one(dict(acct))
     _paper_ledger_add(acct['paperAccountId'], 'ACCOUNT_OPENED', 'account', acct['paperAccountId'],
-                      start, acct['baseCurrency'], 'Opened paper account in %s mode.' % mode)
+                      start, acct['baseCurrency'], 'Opened paper account.')
     return {'status': 'ready', **_paper_acct_public(acct)}
 
 
@@ -9302,7 +9302,6 @@ def _paper_dashboard_payload(a):
         'protectedUsdc': _s(_protected), 'freeUsdc': _s(pe['deployableCash']),
         'regimeDeployCeilingPct': str(_band['maxDeployPct'])}
     ranking_snapshot = rank_meta_top
-    # Proposals are retired — skip querying them.
     activity = sorted((a.get('ledger') or []), key=lambda e: e.get('recordedAt') or e.get('effectiveAt') or '',
                       reverse=True)[:20]
     activity = _paper_jsonify(activity)
@@ -9357,38 +9356,6 @@ def _paper_bound_strategy_public(acct):
             'status': s.get('status'),
             'assets': [a.get('symbol') for a in ((s.get('contract') or {}).get('assets') or [])]}
 
-
-@app.patch('/api/v1/albert/paper/accounts/{acct_id}/mode')
-def paper_set_mode(acct_id: str, payload: dict = Body(...), user: dict = Depends(get_current_user)):
-    a = _paper_get(acct_id, owner_pid(user))
-    if not a:
-        raise HTTPException(status_code=404, detail='No such paper account.')
-    mode = payload.get('mode')
-    if mode not in ('OBSERVE', 'PAPER_AUTOPILOT'):
-        raise HTTPException(status_code=422, detail='Unknown mode.')
-    if not payload.get('confirm'):
-        raise HTTPException(status_code=428, detail='Explicit confirmation is required to change mode.')
-    idem = str(payload.get('idempotencyKey') or '').strip()
-    if not idem:
-        raise HTTPException(status_code=422, detail='idempotencyKey is required.')
-    pid = owner_pid(user)
-    prior = _studio_idem(pid, f'mode:{acct_id}:{idem}')
-    if prior is not None:
-        return prior
-    if payload.get('expectedVersion') is not None and int(payload['expectedVersion']) != int(a.get('version') or 0):
-        raise HTTPException(status_code=409, detail='This account changed — reload and try again.')
-    if mode == 'PAPER_AUTOPILOT' and a.get('strategyId'):
-        bound = _strategy_for_account(a)
-        if not bound:
-            raise HTTPException(status_code=409, detail='Start the bound strategy before enabling Autopilot.')
-        _c, _h, _sv_err, _st_err = _studio_validate(bound.get('contract') or {}, pid, account=a); errors = _sv_err + _st_err
-        if errors or _h != bound.get('contractHash'):
-            raise HTTPException(status_code=422, detail='Autopilot cannot add exposure: '
-                                + '; '.join(errors or ['contract hash mismatch']))
-    paper_accounts_col.update_one({'paperAccountId': acct_id},
-                                  {'$set': {'mode': mode}, '$inc': {'version': 1}})
-    _paper_ledger_add(acct_id, 'MODE_CHANGED', 'account', acct_id, None, None, f"Mode set to {mode}.")
-    return _studio_idem(pid, f'mode:{acct_id}:{idem}', {'status': 'ready', 'mode': mode})
 
 
 @app.post('/api/v1/albert/paper/accounts/{acct_id}/{cmd}')
@@ -9500,13 +9467,6 @@ def paper_command(payload: dict = Body(...), user: dict = Depends(get_current_us
                     'Allows new paper entries again, within your strategy and mandate.',
                     {'method': 'POST', 'path': f'/api/v1/albert/paper/accounts/{acct_id}/resume',
                      'body': {'confirm': True, 'idempotencyKey': key}})
-    mode_map = {'observe': 'OBSERVE', 'autopilot': 'PAPER_AUTOPILOT'}
-    for kw, mode in mode_map.items():
-        if kw in msg:
-            return card('SET_MODE', f'Switch to {mode.replace("_", " ").title()}',
-                        f'Changes this account’s mode to {mode}.',
-                        {'method': 'PATCH', 'path': f'/api/v1/albert/paper/accounts/{acct_id}/mode',
-                         'body': {'mode': mode, 'confirm': True, 'idempotencyKey': key, 'expectedVersion': ver}})
     if any(w in msg for w in ('close', 'sell', 'exit', 'dump')):
         # asset-specific close — never assume BTC
         lot = None
@@ -9532,7 +9492,7 @@ def paper_command(payload: dict = Body(...), user: dict = Depends(get_current_us
                     {'method': 'POST', 'path': f"/api/v1/albert/paper/positions/{lot.get('lotId')}/close",
                      'body': {'confirm': True, 'idempotencyKey': key}}, preview=preview, asset=sym)
     return {'status': 'ready', 'card': None,
-            'message': 'I can pause or resume the account, change its mode, or close a specific position — tell me which and I’ll prepare a confirmation for you.'}
+            'message': 'I can pause or resume the account or close a specific position — tell me which and I’ll prepare a confirmation for you.'}
 
 
 @app.get('/api/v1/albert/paper/accounts/{acct_id}/trade-log')
@@ -9837,15 +9797,10 @@ def _sop_build(user, requested_account=None):
             }
             wh = dash.get('autopilot') or {}
             integ = dash.get('integrity') or {}
-            pend = dash.get('pendingProposals') or []
             paper = {
                 'selectedAccount': dash.get('account'),
-                'mode': (dash.get('account') or {}).get('mode'),
-                # M-F: the bound ACTIVE strategy comes from the canonical dashboard block
-                # (single source), so Albert never says "none assigned" while one is live.
                 'assignedStrategy': dash.get('strategy'),
                 'positions': dash.get('positions') or [],
-                'pendingProposals': pend,
                 'recentActivity': dash.get('recentActivity') or [],
                 'performance': dash.get('performance') or {},
                 'allocation': dash.get('allocation'),
@@ -12038,9 +11993,6 @@ def _ask_resolve_entity(pid, etype, eid):
     if not eid:
         return None, {'kind': etype, 'available': False, 'reason': 'NO_ID'}
     try:
-        if etype in ('proposal', 'pendingproposal'):
-            # Proposals are retired — return NOT_FOUND for any proposal lookup.
-            return None, {'kind': 'proposal', 'available': False, 'reason': 'PROPOSALS_RETIRED'}
         if etype in ('position', 'trade', 'fill'):
             a = paper_accounts_col.find_one(
                 {'ownerId': pid, '$or': [{'lots.lotId': eid}, {'closedLots.lotId': eid}]})
@@ -12082,8 +12034,8 @@ def _ask_read_state_of_play(user, sop):
 def _ask_read_paper(user, sop):
     p = sop.get('paper') or {}
     positions = (p.get('positions') or [])[:8]
-    return {'data': {'account': p.get('selectedAccount'), 'mode': p.get('mode'),
-                     'positions': positions, 'pendingProposals': p.get('pendingProposals') or [],
+    return {'data': {'account': p.get('selectedAccount'),
+                     'positions': positions,
                      'performance': p.get('performance'), 'allocation': p.get('allocation'),
                      'recentActivity': (p.get('recentActivity') or [])[:8]},
             **_ask_meta('paper-account', sop.get('generatedAt'),
@@ -12224,7 +12176,7 @@ def _ask_resolve_context(pid, ctx):
                              json.dumps(_research_public(doc), default=str)[:2000]))
         else:
             blocks.append('[context:researchFinding %s] UNAVAILABLE: NOT_FOUND.' % fid)
-    for etype, key in (('strategy', 'strategyId'), ('proposal', 'proposalId'),
+    for etype, key in (('strategy', 'strategyId'),
                        ('position', 'positionId')):
         if ctx.get(key):
             dto, m = _ask_resolve_entity(pid, etype, ctx[key])
@@ -12512,13 +12464,6 @@ def _studio_canonical(draft):
         contract['objective'] = str(draft['objective']).strip()[:2000]
     if draft.get('protectedReserve'):
         contract['protectedReserve'] = str(draft['protectedReserve']).strip()[:100]
-    if draft.get('proposalId'):
-        contract['proposalId'] = str(draft['proposalId']).strip()[:60]
-    if draft.get('proposalRevision'):
-        try:
-            contract['proposalRevision'] = int(draft['proposalRevision'])
-        except (ValueError, TypeError):
-            pass
     if draft.get('unresolvedInstructions'):
         contract['unresolvedInstructions'] = [str(u).strip()[:500] for u in draft['unresolvedInstructions'][:10]]
     # Portfolio goals: profit target, equity floor, deadline, max trades, end action.
@@ -12859,44 +12804,92 @@ EVIDENCE_CATEGORIES = ['technical', 'tokenomics', 'sentiment', 'institutional', 
 
 def _assess_strategy_evidence(symbols, marks_obs=None):
     """Assess the availability of evidence across 5 categories for each symbol.
-    Returns a dict keyed by symbol, each value a dict of category -> status.
+    Returns a dict keyed by symbol, each value a dict of category -> {status, source, asOf}.
     Status values: 'available', 'stale', 'unavailable'.
     We NEVER invent missing evidence — only report what is actually available."""
+    now_iso = datetime.datetime.utcnow().isoformat()
     evidence = {}
     for sym in symbols:
         sym_upper = sym.upper()
         obs = (marks_obs or {}).get(sym_upper) or {}
-        cat_status = {}
-        # Technical: price data + indicators.
+        cat = {}
+
+        # ── Technical: current price, volume and supported indicators ──
         if obs.get('price') is not None and obs.get('fresh'):
-            cat_status['technical'] = 'available'
+            tech_sources = ['price']
+            if obs.get('volume24h'):
+                tech_sources.append('volume_24h')
+            # Check for indicator data availability.
+            try:
+                history = _verified_market.daily(sym_upper, limit=30)
+                if history is not None and len(history) >= 14:
+                    tech_sources.extend(['RSI14', 'SMA20', 'EMA20'])
+            except Exception:
+                pass
+            cat['technical'] = {'status': 'available', 'source': ', '.join(tech_sources), 'asOf': now_iso}
         elif obs.get('price') is not None:
-            cat_status['technical'] = 'stale'
+            cat['technical'] = {'status': 'stale', 'source': 'price (stale)', 'asOf': now_iso}
         else:
-            cat_status['technical'] = 'unavailable'
-        # Tokenomics: check if market data (mcap, volume) is present.
-        if obs.get('mcap') or obs.get('volume24h'):
-            cat_status['tokenomics'] = 'available'
+            cat['technical'] = {'status': 'unavailable', 'source': None, 'asOf': now_iso}
+
+        # ── Tokenomics: circulating/max supply and dilution data ──
+        tok_sources = []
+        if obs.get('mcap'):
+            tok_sources.append('market_cap')
+        if obs.get('circulating_supply') or obs.get('circulatingSupply'):
+            tok_sources.append('circulating_supply')
+        if obs.get('max_supply') or obs.get('maxSupply') or obs.get('total_supply') or obs.get('totalSupply'):
+            tok_sources.append('total_supply')
+        if obs.get('fdv') or obs.get('fully_diluted_valuation'):
+            tok_sources.append('fdv')
+        if tok_sources:
+            cat['tokenomics'] = {'status': 'available', 'source': ', '.join(tok_sources), 'asOf': now_iso}
         else:
-            cat_status['tokenomics'] = 'unavailable'
-        # Sentiment: check for change data (proxy for market activity).
-        if obs.get('change_24h') is not None:
-            cat_status['sentiment'] = 'available'
-        else:
-            cat_status['sentiment'] = 'unavailable'
-        # Institutional: not directly tracked in this build; always mark honestly.
-        cat_status['institutional'] = 'unavailable'
-        # Whale / On-chain: check if we have whale data for this asset.
+            cat['tokenomics'] = {'status': 'unavailable', 'source': None, 'asOf': now_iso}
+
+        # ── Sentiment: genuine sentiment/news source — NOT price change ──
+        sent_source = None
         try:
-            from backend.albert.repositories.crypto_data import get_cached_or_fetch
-            whale_data = get_cached_or_fetch('whale_%s' % sym_upper, None, max_age=3600)
-            if whale_data:
-                cat_status['whale_onchain'] = 'available'
-            else:
-                cat_status['whale_onchain'] = 'unavailable'
+            # Check for genuine sentiment data (fear/greed, social, news).
+            fg = _albert_deps.fear_greed_col.find_one(sort=[('ts', -1)])
+            if fg and fg.get('value') is not None:
+                sent_source = 'fear_greed_index'
         except Exception:
-            cat_status['whale_onchain'] = 'unavailable'
-        evidence[sym_upper] = cat_status
+            pass
+        if sent_source:
+            cat['sentiment'] = {'status': 'available', 'source': sent_source, 'asOf': now_iso}
+        else:
+            cat['sentiment'] = {'status': 'unavailable', 'source': None, 'asOf': now_iso}
+
+        # ── Institutional: ETF/fund-flow evidence — otherwise unavailable ──
+        inst_source = None
+        try:
+            # Check for ETF/institutional flow data if available for this asset.
+            if sym_upper == 'BTC':
+                etf_doc = _albert_deps.regime_col.find_one({'_id': 'etf_flows'})
+                if etf_doc and etf_doc.get('netFlowUsd') is not None:
+                    inst_source = 'btc_etf_flows'
+        except Exception:
+            pass
+        if inst_source:
+            cat['institutional'] = {'status': 'available', 'source': inst_source, 'asOf': now_iso}
+        else:
+            cat['institutional'] = {'status': 'unavailable', 'source': None, 'asOf': now_iso}
+
+        # ── Whale / On-chain: genuine on-chain data ──
+        whale_source = None
+        try:
+            whale_data = _albert_deps.whale_col.find_one({'symbol': sym_upper}, sort=[('ts', -1)])
+            if whale_data and whale_data.get('transactions'):
+                whale_source = 'whale_transactions'
+        except Exception:
+            pass
+        if whale_source:
+            cat['whale_onchain'] = {'status': 'available', 'source': whale_source, 'asOf': now_iso}
+        else:
+            cat['whale_onchain'] = {'status': 'unavailable', 'source': None, 'asOf': now_iso}
+
+        evidence[sym_upper] = cat
     return evidence
 
 
@@ -13083,7 +13076,16 @@ def studio_draft(payload: dict = Body(...), user: dict = Depends(get_current_use
         raise HTTPException(status_code=503, detail='Albert could not draft a strategy; nothing was replaced or saved.')
     # Assess evidence availability for confidence grounding.
     asset_syms = [a['symbol'] for a in c.get('assets', [])]
-    evidence = _assess_strategy_evidence(asset_syms)
+    # Build live market observations for evidence assessment.
+    _ev_obs = {}
+    for _es in asset_syms:
+        try:
+            _epx, _efresh, _eobs = _paper_mark(_es)
+            if _eobs:
+                _ev_obs[_es.upper()] = _eobs
+        except Exception:
+            pass
+    evidence = _assess_strategy_evidence(asset_syms, marks_obs=_ev_obs)
     return {'status': 'ready' if not errors else 'needs_changes',
             'draft': {**draft, 'name': draft.get('name') or 'New strategy'},
             'contract': c, 'contractHash': chash, 'summary': _studio_summary(c),
@@ -13266,9 +13268,16 @@ def studio_save(payload: dict = Body(...), user: dict = Depends(get_current_user
     readiness = 'ready' if not final_start_errors else 'needs_changes'
     # Assess and persist evidence availability for confidence grounding.
     asset_syms = [a['symbol'] for a in c.get('assets', [])]
-    evidence = _assess_strategy_evidence(asset_syms)
-    now_evidence = datetime.datetime.utcnow().isoformat()
-    evidence_record = {sym: {**cats, 'asOf': now_evidence} for sym, cats in evidence.items()}
+    _ev_obs = {}
+    for _es in asset_syms:
+        try:
+            _epx, _efresh, _eobs = _paper_mark(_es)
+            if _eobs:
+                _ev_obs[_es.upper()] = _eobs
+        except Exception:
+            pass
+    evidence = _assess_strategy_evidence(asset_syms, marks_obs=_ev_obs)
+    evidence_record = evidence  # Already contains {status, source, asOf} per category per symbol
     doc = {'_id': f'{sid}:v{version}', 'strategyId': sid, 'ownerId': pid,
            'name': str(body.get('name') or draft.get('name') or 'Untitled')[:80],
            'status': 'REVIEWED', 'readiness': readiness,
@@ -13359,20 +13368,6 @@ def studio_backtest_endpoint(sid: str, payload: dict = Body(default={}), user: d
 # NOTE: these routes MUST be declared before the generic /{sid}/{cmd} route below,
 # otherwise the catch-all would swallow them.
 STRATEGY_PAPER_START_CASH = Decimal('100000.00')
-# Legacy maps — retained only so references in _strategy_paper_public don't crash.
-# No new code should use these.
-APPROVAL_TO_ACCT_MODE = {'AUTOPILOT': 'PAPER_AUTOPILOT'}
-ACCT_MODE_TO_APPROVAL = {'PAPER_AUTOPILOT': 'AUTOPILOT', 'OBSERVE': 'OBSERVE'}
-
-# ── Startup migration: pause any RUNNING accounts still using the retired
-# APPROVAL_REQUIRED mode. Users must manually restart under Auto Run. ──
-_ar_paused = paper_accounts_col.update_many(
-    {'mode': 'APPROVAL_REQUIRED', 'runtimeState': 'RUNNING'},
-    {'$set': {'runtimeState': 'PAUSED_BY_USER'}})
-if _ar_paused.modified_count:
-    print('MIGRATION: paused %d RUNNING APPROVAL_REQUIRED accounts — restart under Auto Run.'
-          % _ar_paused.modified_count)
-
 PAPER_STATUS_LABEL = {'SAVED': 'Saved · not trading', 'STOPPED': 'Stopped',
                       'LIVE': 'Paper trading', 'WAIT': 'WAIT · awaiting conditions or data',
                       'UNAVAILABLE': 'Paper worker unavailable',
@@ -13384,7 +13379,7 @@ PAPER_STATUS_LABEL = {'SAVED': 'Saved · not trading', 'STOPPED': 'Stopped',
                       'GOAL_CLOSE_PENDING': 'Goal reached — closing remaining tickets'}
 
 
-def _studio_mode_blocker(approval=None):
+def _studio_worker_blocker():
     """Do not promise paper execution when the environment safety switch is off,
     or when the worker is genuinely not running."""
     if not PAPER_EXECUTION_ENABLED:
@@ -13425,7 +13420,7 @@ def _strategy_paper_status(doc, acct):
     if st == 'PAPER_ACTIVE':
         rs = (acct or {}).get('runtimeState')
         if rs == 'RUNNING':
-            if _studio_mode_blocker():
+            if _studio_worker_blocker():
                 return 'UNAVAILABLE'
             assessment = (acct or {}).get('strategyAssessment') or {}
             if (assessment.get('strategyVersion') == doc.get('version') and
@@ -13452,7 +13447,7 @@ def _strategy_paper_public(doc, pid, acct=None):
         blockers.append('The assigned paper wallet is unavailable; Start cannot open a second wallet.')
     if status == 'HALTED_RISK':
         blockers.append('The drawdown breaker requires a reviewed reset.')
-    modes_ready = not _studio_mode_blocker()
+    worker_ready = not _studio_worker_blocker()
     blockers = [b for b in blockers if b]
     capabilities = [_studio_capability_row(a['symbol'], _get_mandate(pid))
                     for a in (doc.get('contract') or {}).get('assets') or []]
@@ -13492,9 +13487,9 @@ def _strategy_paper_public(doc, pid, acct=None):
             })
     ap = _paper_autopilot_status(acct) if acct else {}
     return {'paperStatus': status, 'paperStatusLabel': PAPER_STATUS_LABEL.get(status, status),
-            'canStart': not blockers and modes_ready and status != 'ARCHIVED',
+            'canStart': not blockers and worker_ready and status != 'ARCHIVED',
             'entryBlockers': blockers, 'startErrors': _st_err, 'saveErrors': _sv_err,
-            'workerUnavailable': not modes_ready,
+            'workerUnavailable': not worker_ready,
             'assessment': assessment, 'assetCapabilities': capabilities,
             'walletName': (acct or {}).get('name') or (doc.get('contract') or {}).get('walletName'),
             'startingCash': (_paper_core.dstr((acct or {}).get('startingCash')) if acct else
@@ -13513,10 +13508,9 @@ def _strategy_paper_public(doc, pid, acct=None):
             'paperOnly': True}
 
 
-def _paper_new_wallet_for_strategy(pid, doc, _acct_mode=None):
+def _paper_new_wallet_for_strategy(pid, doc):
     """Open exactly one named, independent virtual wallet with reviewed starting cash.
-    No automatic 100k fallback — the user's stated amount is preserved as agreed.
-    Mode parameter is retired; _acct_mode is accepted but ignored for backward compat."""
+    No automatic 100k fallback — the user's stated amount is preserved as agreed."""
     contract = doc.get('contract') or {}
     raw_cash = contract.get('startingCash')
     if raw_cash is None:
@@ -13582,7 +13576,7 @@ def studio_start_paper(sid: str, payload: dict = Body(default={}),
         raise HTTPException(status_code=404, detail='No such strategy.')
     if doc.get('status') == 'ARCHIVED':
         raise HTTPException(status_code=409, detail='This strategy is archived.')
-    blocker = _studio_mode_blocker()
+    blocker = _studio_worker_blocker()
     if blocker:
         raise HTTPException(status_code=503, detail=blocker)
     key = _studio_guard(doc, body, pid, 'startpaper')
@@ -13621,7 +13615,7 @@ def studio_start_paper(sid: str, payload: dict = Body(default={}),
         if claimed.modified_count != 1:
             raise HTTPException(status_code=409, detail='Strategy Start is already underway; reload its latest version.')
         try:
-            acct = _paper_new_wallet_for_strategy(pid, doc, None)
+            acct = _paper_new_wallet_for_strategy(pid, doc)
         except Exception:
             strategy_contracts_col.update_one({'_id': doc['_id'], 'status': 'STARTING'},
                                               {'$set': {'status': 'REVIEWED'}})
@@ -13710,9 +13704,7 @@ def _filter_strategy_activity(activity, strat):
     strat_syms_lower = {s.lower() for s in strat_syms}
     filtered = []
     # Entity types that are always relevant (account-level, not coin-specific).
-    always_keep = {'ACCOUNT_OPENED', 'MODE_CHANGED', 'AUTO_DISABLED', 'RISK_BREAKER',
-                   'PROPOSAL_CREATED', 'PROPOSAL_SUPERSEDED', 'PROPOSAL_CANCELLED',
-                   'PROPOSAL_REVALIDATION_FAILED', 'GOAL_HALT_ENTRIES', 'GOAL_HALT_CLOSED'}
+    always_keep = {'ACCOUNT_OPENED', 'GOAL_HALT_ENTRIES', 'GOAL_HALT_CLOSED'}
     for entry in activity:
         et = entry.get('eventType', '')
         if et in always_keep:
@@ -13748,7 +13740,7 @@ def studio_strategy_paper(sid: str, user: dict = Depends(get_current_user)):
            'version': doc.get('version'), **_strategy_paper_public(doc, pid, acct)}
     if not acct:
         return {**out, 'dashboard': None, 'performance': None,
-                'positions': [], 'pendingApprovals': [], 'activity': [], 'proposalHistory': []}
+                'positions': [], 'activity': []}
     d = _paper_dashboard_payload(dict(acct))
     eq = d.get('equity') or {}
     startc = (d.get('account') or {}).get('startingCash')
@@ -13877,11 +13869,11 @@ def paper_overview(user: dict = Depends(get_current_user)):
             wins += int(perf.get('wins') or 0)
             last = (d.get('recentActivity') or [{}])[0] or {}
             tag = {'paperAccountId': paid, 'strategyName': strategy_by_account.get(paid, (None, None, {}))[2].get('name') or a_doc.get('name') or 'Paper wallet'}
-            # Apply the same strategy-scoped activity filtering as the individual endpoint.
-            strat_doc = strategy_by_account.get(paid, (None, None, {}))[2]
+            # Use the FULL strategy doc (which has .contract) for filtering.
+            strat_full_doc = strategy_by_account.get(paid, (None, None, {}))[0]
             raw_activity = d.get('recentActivity') or []
-            if strat_doc and strat_doc.get('contract'):
-                filtered = _filter_strategy_activity(raw_activity, strat_doc)
+            if strat_full_doc and strat_full_doc.get('contract'):
+                filtered = _filter_strategy_activity(raw_activity, strat_full_doc)
             else:
                 filtered = raw_activity
             positions += [{**p, **tag} for p in (d.get('positions') or [])]
@@ -13937,7 +13929,7 @@ def paper_overview(user: dict = Depends(get_current_user)):
             'openRiskPct': _paper_core.dstr(tot_risk / tot_value * Decimal('100'), _paper_core.PCT_Q) if risk_usable else None,
             'openRiskLimitPct': _paper_core.dstr(tot_risk_limit / tot_value * Decimal('100'), _paper_core.PCT_Q) if risk_usable else None,
             'openRiskLimitSource': 'paper_profile_weighted' if risk_usable else None,
-            'pendingApprovals': [], 'activity': activity[:25],
+            'activity': activity[:25],
             'recentFills': _paper_jsonify(recent_fills[:2])}
 
 
@@ -15735,21 +15727,6 @@ def chat_prepare_proposal(payload: dict = Body(...), user: dict = Depends(get_cu
     # ── Flow 1: explicit structured proposal passed from the chat card ──
     proposal = payload.get('proposal')
     if proposal and isinstance(proposal, dict) and (proposal.get('legs') or proposal.get('assets')):
-        if not proposal.get('proposalId'):
-            proposal['proposalId'] = f'prop_{uuid.uuid4().hex[:12]}'
-        if not proposal.get('revision'):
-            proposal['revision'] = 1
-        # Persist the proposal linkage so it survives reloads.
-        try:
-            from config import paper_proposals_col
-            paper_proposals_col.update_one(
-                {'proposalId': proposal['proposalId'], 'ownerId': pid},
-                {'$set': {'proposalId': proposal['proposalId'], 'ownerId': pid,
-                          'sessionId': session_id, 'proposal': proposal,
-                          'updatedAt': datetime.datetime.utcnow().isoformat()}},
-                upsert=True)
-        except Exception:
-            pass
         return {'basket_draft': proposal, 'error': None}
 
     # ── Flow 2: build from the full conversation thread ──
@@ -15773,10 +15750,6 @@ def chat_prepare_proposal(payload: dict = Body(...), user: dict = Depends(get_cu
     draft = _build_basket_draft(goal)
     if draft.get('error'):
         return {'error': draft['error'], 'basket_draft': None}
-    # Tag the generated proposal with an identity.
-    if not draft.get('proposalId'):
-        draft['proposalId'] = f'prop_{uuid.uuid4().hex[:12]}'
-    draft['revision'] = 1
     return {'basket_draft': draft, 'error': None}
 
 
@@ -17718,9 +17691,6 @@ def _build_basket_draft(goal=''):
         if not draft.get('legs'):
             return {'error': 'Could not extract strategy assets from the conversation. Ask Albert to specify the coins, allocations and rules.',
                     'title': '', 'thesis': '', 'horizon_days': 30, 'legs': []}
-        # Attach proposal metadata.
-        draft['proposalId'] = f'prop_{uuid.uuid4().hex[:12]}'
-        draft['revision'] = 1
         return draft
     except Exception:  # noqa
         traceback.print_exc()

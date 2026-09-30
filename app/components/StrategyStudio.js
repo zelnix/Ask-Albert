@@ -107,15 +107,10 @@ function proposalToDraft(proposal) {
     reservePct: proposal.reservePct != null ? Number(proposal.reservePct) : (proposal.protectedReserve != null ? Number(proposal.protectedReserve) : undefined),
     horizonDays: proposal.horizon_days || proposal.horizonDays || undefined,
     objective: proposal.objective || proposal.thesis || '',
-    proposalId: proposal.proposalId || undefined,
-    proposalRevision: proposal.revision || 1,
-    // Preserve wallet name from proposal; fall back to strategy-derived default
     walletName: proposal.walletName || undefined,
-    // Canonical execution gates — supply standard values so validation passes
     ...STUDIO_EXEC_RULES,
-    // Default entry sizing — 25% of available cash per trade
-    entrySizing: proposal.entrySizing || { method: 'PCT_AVAILABLE_CASH', pct: 25 },
-    // Portfolio goals from proposal
+    // Preserve entry sizing from proposal; do NOT default — missing sizing = "Needs changes"
+    entrySizing: proposal.entrySizing || undefined,
     portfolioGoals: proposal.portfolioGoals || undefined,
   };
 }
@@ -291,12 +286,11 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
     setBusy(true); setErr('');
     try {
       const r = await post('/v1/albert/studio/save', { draft, name: draft.name, strategyId: revisionId,
-        confirm: true, idempotencyKey: saveKey, expectedHash: review.hash,
-        proposalId: draft.proposalId || null, proposalRevision: draft.proposalRevision || null });
+        confirm: true, idempotencyKey: saveKey, expectedHash: review.hash });
       const j = await r.json();
-      if (r.ok) onSaved(j.strategyId, draft.proposalId);
+      if (r.ok) onSaved(j.strategyId);
       else setErr(j.detail || 'Save failed.');
-    } catch (e) { setErr('Save failed — your proposal and edits are preserved. Try again.'); }
+    } catch (e) { setErr('Save failed — your edits are preserved. Try again.'); }
     finally { setBusy(false); setInflight(false); }
   };
 
@@ -390,21 +384,22 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
           <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-[12px] text-slate-300">
             <p className="font-semibold text-white">Entry sizing · how much per BUY ticket</p>
             <div className="mt-2 flex flex-wrap items-center gap-3">
-              <select value={(draft.entrySizing?.method) || 'PCT_AVAILABLE_CASH'}
-                onChange={(e) => updateDraft({ ...draft, entrySizing: { method: e.target.value, ...(e.target.value === 'FIXED_USD' ? { amount: draft.entrySizing?.amount || '' } : { pct: draft.entrySizing?.pct || 25 }) } })}
+              <select value={(draft.entrySizing?.method) || ''}
+                onChange={(e) => updateDraft({ ...draft, entrySizing: e.target.value ? { method: e.target.value, ...(e.target.value === 'FIXED_USD' ? { amount: draft.entrySizing?.amount || '' } : { pct: draft.entrySizing?.pct || '' }) } : undefined })}
                 className="rounded-md bg-slate-800 p-1.5 text-white">
+                <option value="">— select sizing —</option>
                 <option value="FIXED_USD">Fixed USD per trade</option>
                 <option value="PCT_AVAILABLE_CASH">% of available cash</option>
               </select>
-              {(draft.entrySizing?.method || 'PCT_AVAILABLE_CASH') === 'FIXED_USD' && (
+              {draft.entrySizing?.method === 'FIXED_USD' && (
                 <label className="flex items-center gap-1 text-slate-400">$
                   <input type="number" min="1" step="1" value={draft.entrySizing?.amount ?? ''} onChange={(e) => updateDraft({ ...draft, entrySizing: { ...draft.entrySizing, amount: e.target.value ? Number(e.target.value) : '' } })}
                     placeholder="500" className="w-28 rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-white" />
                 </label>
               )}
-              {(draft.entrySizing?.method || 'PCT_AVAILABLE_CASH') === 'PCT_AVAILABLE_CASH' && (
+              {draft.entrySizing?.method === 'PCT_AVAILABLE_CASH' && (
                 <label className="flex items-center gap-1 text-slate-400">
-                  <input type="number" min="1" max="100" value={draft.entrySizing?.pct ?? 25} onChange={(e) => updateDraft({ ...draft, entrySizing: { ...draft.entrySizing, pct: e.target.value ? Number(e.target.value) : '' } })}
+                  <input type="number" min="1" max="100" value={draft.entrySizing?.pct ?? ''} onChange={(e) => updateDraft({ ...draft, entrySizing: { ...draft.entrySizing, pct: e.target.value ? Number(e.target.value) : '' } })}
                     className="w-20 rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-white" /> % of cash
                 </label>
               )}
@@ -574,7 +569,6 @@ function PaperPanel({ sid, name, onChange }) {
   const runningButUnavailable = ['UNAVAILABLE', 'NEEDS_CHANGES', 'RESTRICTED_IN_WALLET'].includes(p.paperStatus);
   const positions = p.positions || [];
   const activity = p.activity || [];
-  const proposalHistory = p.proposalHistory || [];
   const stale = p.marketData === 'STALE';
 
   return (
@@ -777,18 +771,6 @@ function PaperPanel({ sid, name, onChange }) {
               ))}
             </div>
           ) : <p className="text-[12px] text-slate-500">Nothing has happened on this strategy yet.</p>}
-        </div>
-      )}
-      {proposalHistory.length > 0 && (
-        <div>
-          <p className="mb-1 text-[11px] font-bold uppercase tracking-wider text-slate-500">Earlier Review proposals · history only</p>
-          <div className="space-y-1">
-            {proposalHistory.map((pr) => (
-              <p key={pr.proposalId} className="text-[11px] text-slate-400">
-                v{pr.strategyVersion} · {pr.side} {pr.asset} · {String(pr.status || '').replace(/_/g, ' ').toLowerCase()}
-              </p>
-            ))}
-          </div>
         </div>
       )}
     </div>
@@ -1079,10 +1061,9 @@ export default function StrategyStudio({ chatGoal = '', chatDraftKey = null, cha
           {building ? <Builder key={revision ? `${revision.id}:v${revision.version}` : chatDraftKey || 'new'}
               initialGoal={revision ? revision.goal : chatGoal} initialDraft={revision?.draft || null} revisionId={revision?.id || null}
               onCancel={() => { setBuilding(false); if (revision) setSel(revision.id); setRevision(null); onChatDismiss?.(); }}
-              onSaved={(sid, savedProposalId) => {
+              onSaved={(sid) => {
                 setBuilding(false); setRevision(null); onChatDismiss?.(); load(); setSel(sid);
-                // Notify chat cards that this proposal was saved, including proposal identity.
-                try { window.dispatchEvent(new CustomEvent('albert:strategy-saved', { detail: { strategyId: sid, proposalId: savedProposalId || null } })); } catch (x) { /* noop */ }
+                try { window.dispatchEvent(new CustomEvent('albert:strategy-saved', { detail: { strategyId: sid } })); } catch (x) { /* noop */ }
               }} />
             : sel ? <Detail key={sel} sid={sel} onChange={load} onRevise={revise} />
             : <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800"><p className="text-[13px] text-slate-400">Select a strategy, or build a new one with Albert.</p></Card>}
