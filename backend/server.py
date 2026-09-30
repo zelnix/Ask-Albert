@@ -4425,7 +4425,8 @@ def _feed_iso(col, _id):
 
 def compute_data_health(source, crossmarket, policy, dominance, news_doc, core_iso=None):
     now_iso = datetime.datetime.utcnow().isoformat()
-    core_iso = core_iso or now_iso  # when the core feeds were actually refreshed (last run)
+    # A missing core run means the age is genuinely unknown — do not pretend it is fresh.
+    # core_iso stays None when no core run exists; individual feeds will report unknown freshness.
     feeds = []
 
     def add(fid, label, provider, ok, updated_iso, fresh_min, methodology, core=True):
@@ -4433,7 +4434,9 @@ def compute_data_health(source, crossmarket, policy, dominance, news_doc, core_i
         if not ok:
             status, conf = 'down', 10
         elif age is None:
-            status, conf = 'live', 95
+            # Missing or unparseable source timestamp — freshness is genuinely unknown.
+            # Do not treat missing evidence as healthy.
+            status, conf = 'unknown', 0
         elif age <= fresh_min:
             status, conf = 'live', 97
         elif age <= fresh_min * 3:
@@ -4475,23 +4478,33 @@ def compute_data_health(source, crossmarket, policy, dominance, news_doc, core_i
         'Crowd sentiment 0-100 from the alternative.me Fear & Greed index.', core=False)
 
     # Odds-fade + headline score are driven by the CORE feeds only (unchanged behaviour).
+    # Exclude feeds with unknown freshness (conf == 0) from the healthy-average calculation
+    # so that missing evidence does not artificially appear healthy.
     core_feeds = [f for f in feeds if f.get('core')]
-    conf_vals = [f['confidence'] for f in core_feeds]
-    score = int(round(sum(conf_vals) / len(conf_vals)))
+    known_conf = [f['confidence'] for f in core_feeds if f['status'] != 'unknown']
+    conf_vals = known_conf if known_conf else [f['confidence'] for f in core_feeds]
+    score = int(round(sum(conf_vals) / len(conf_vals))) if conf_vals else 0
     live = sum(1 for f in core_feeds if f['status'] == 'live')
     degraded = sum(1 for f in core_feeds if f['status'] == 'degraded')
     stale = sum(1 for f in core_feeds if f['status'] in ('stale', 'down'))
+    unknown = sum(1 for f in core_feeds if f['status'] == 'unknown')
     # Auxiliary feed rollup (surfaced but non-fading).
     aux_feeds = [f for f in feeds if not f.get('core')]
-    aux_issues = [f['label'] for f in aux_feeds if f['status'] in ('stale', 'down')]
+    aux_issues = [f['label'] for f in aux_feeds if f['status'] in ('stale', 'down', 'unknown')]
     level = 'High' if score >= 90 else 'Good' if score >= 75 else 'Degraded' if score >= 55 else 'Low'
     faded = stale > 0 or score < 70
-    if stale == 0 and degraded == 0:
+    if stale == 0 and degraded == 0 and unknown == 0:
         note = 'All core data feeds are live and fresh — full model confidence.'
+    elif unknown > 0 and stale == 0 and degraded == 0:
+        note = f'{unknown} core feed(s) have unknown freshness — source timestamps missing or unparseable.'
     elif faded:
         note = f'{stale} core feed(s) stale/down, {degraded} degraded — odds are faded and confidence reduced.'
+        if unknown:
+            note += f' {unknown} with unknown freshness.'
     else:
         note = f'{degraded} core feed(s) slightly delayed — minor confidence reduction.'
+        if unknown:
+            note += f' {unknown} with unknown freshness.'
     if aux_issues:
         note += f' Auxiliary data unavailable: {", ".join(aux_issues)}.'
     return {'feeds': feeds, 'score': score, 'level': level, 'live': live, 'degraded': degraded,
@@ -5907,6 +5920,184 @@ def _lightweight_reassess():
 _analysis_jobs = AnalysisJobs(misc_col, _ANALYSIS_POOL)
 
 
+# --------------- Engine adapter: Prediction Ledger ---------------
+def _prediction_ledger_work():
+    """Synchronous grading: resolve matured forecasts against current closed candles
+    and publish the current scorecard. No model training or backtest seeding."""
+    try:
+        df, source = fetch_ohlcv()
+        # Use only closed candles — drop today's still-forming bar
+        if df is not None and len(df) and df['timestamp'].iloc[-1].date() >= datetime.datetime.utcnow().date():
+            df = df.iloc[:-1].reset_index(drop=True)
+        if df is None or len(df) < 30:
+            return {'status': 'failed', 'message': 'Could not obtain closed candle data for grading.'}
+
+        close_by_date = {ts.strftime('%Y-%m-%d'): float(c)
+                         for ts, c in zip(df['timestamp'], df['close'])}
+        latest_date = df['timestamp'].iloc[-1].strftime('%Y-%m-%d')
+
+        # Count unresolved before grading so we can report newly graded count
+        unresolved_before = predictions_col.count_documents({'resolved': False})
+
+        resolve_predictions(close_by_date, latest_date)
+
+        unresolved_after = predictions_col.count_documents({'resolved': False})
+        newly_graded = max(0, unresolved_before - unresolved_after)
+
+        scorecard = compute_scorecard()
+        total_resolved = (scorecard or {}).get('n', 0)
+        pending_count = len((scorecard or {}).get('pending', []))
+
+        msg = (f'Graded {newly_graded} newly matured forecast(s).' if newly_graded > 0
+               else 'No newly matured forecasts to grade.')
+        if total_resolved:
+            msg += f' Scorecard covers {total_resolved} resolved prediction(s).'
+        if pending_count:
+            msg += f' {pending_count} forecast(s) still open.'
+
+        return {
+            'status': 'succeeded',
+            'message': msg,
+            'dataObservedAt': latest_date,
+            'publishedAt': datetime.datetime.utcnow().isoformat(),
+        }
+    except Exception:
+        traceback.print_exc()
+        return {'status': 'failed', 'message': 'Prediction ledger grading failed.'}
+
+
+# --------------- Engine adapter: Scenario Evaluation ---------------
+def _scenario_evaluation_work(asset='BTC', horizon='P7D'):
+    """Synchronous scenario evaluation for the registered provider and asset/horizon.
+    Uses the canonical history, runs the evaluation, publishes the result."""
+    try:
+        horizon_days = SCENARIO_HORIZONS.get(horizon)
+        if not horizon_days:
+            return {'status': 'failed', 'message': f'Unknown horizon {horizon}.'}
+
+        _candles, dates, closes = _scenario_series(asset, days=60)
+        if not closes or len(closes) < 30:
+            return {'status': 'failed',
+                    'message': f'Insufficient history for {asset} {horizon} scenario evaluation.'}
+
+        res = _mkt_scenario.evaluate(closes=closes, dates=dates, horizon=horizon_days)
+
+        key = _scenario_eval_key(asset, horizon)
+        now_s = _mkt_meta.now_iso()
+        last_evaluated = dates[-1] if dates else None
+
+        if not res or res.get('ok') is False:
+            reason = (res or {}).get('reason', 'Unknown evaluation failure')
+            # Record the failure but allow a retry — use $set, not $setOnInsert.
+            # Preserve any previous attempt in a history sub-array.
+            existing = scenario_evals_col.find_one({'_id': key})
+            update = {
+                '$set': {
+                    'assetId': asset, 'horizon': horizon,
+                    'modelVersion': _mkt_scenario.MODEL_VERSION,
+                    'computedAt': now_s, 'result': res,
+                },
+            }
+            if existing and existing.get('result'):
+                update['$push'] = {'previousAttempts': {
+                    'computedAt': existing.get('computedAt'),
+                    'result': existing['result'],
+                }}
+            scenario_evals_col.update_one({'_id': key}, update, upsert=True)
+            return {'status': 'failed', 'message': f'Scenario evaluation failed: {reason}',
+                    'dataObservedAt': last_evaluated, 'publishedAt': now_s}
+
+        # Successful evaluation — publish with $set to allow retry-after-failure
+        existing = scenario_evals_col.find_one({'_id': key})
+        update = {
+            '$set': {
+                'assetId': asset, 'horizon': horizon,
+                'modelVersion': _mkt_scenario.MODEL_VERSION,
+                'computedAt': now_s, 'result': res,
+                'lastEvaluatedAt': last_evaluated,
+            },
+        }
+        if existing and existing.get('result') and existing.get('result', {}).get('ok') is False:
+            update.setdefault('$push', {})['previousAttempts'] = {
+                'computedAt': existing.get('computedAt'),
+                'result': existing['result'],
+            }
+        scenario_evals_col.update_one({'_id': key}, update, upsert=True)
+        _SCENARIO_BAND_CACHE.pop(f'{asset}|{horizon}', None)
+
+        return {
+            'status': 'succeeded',
+            'message': f'Scenario evaluation completed for {asset} {horizon} (model {_mkt_scenario.MODEL_VERSION}).',
+            'dataObservedAt': last_evaluated,
+            'publishedAt': now_s,
+        }
+    except Exception:
+        traceback.print_exc()
+        return {'status': 'failed',
+                'message': f'Scenario evaluation for {asset} {horizon} raised an exception.'}
+
+
+# --------------- Engine adapter: Alert Engine ---------------
+def _alert_engine_work():
+    """Synchronous alert scan with explicit outcome reporting. Zero new alerts
+    after successful scans = success. Disabled = skipped. Partial failures reported."""
+    try:
+        st = _get_alert_settings()
+        if not st.get('enabled'):
+            return {'status': 'skipped', 'message': 'Alert engine is disabled in settings.'}
+
+        watchlist = st.get('watchlist', [])
+        if not watchlist:
+            return {'status': 'skipped', 'message': 'Alert engine watchlist is empty.'}
+
+        succeeded_syms = []
+        failed_syms = []
+        total_pushed = 0
+        latest_candle_date = None
+        corr_state = {}
+
+        for sym in watchlist:
+            try:
+                result = _scan_symbol(sym, st, fire=True, corr_state=corr_state)
+                if result.get('error'):
+                    failed_syms.append(sym)
+                else:
+                    succeeded_syms.append(sym)
+                    total_pushed += len(result.get('pushed', []))
+                    readings = result.get('readings') or {}
+                    candle_date = readings.get('candle_date')
+                    if candle_date and (not latest_candle_date or candle_date > latest_candle_date):
+                        latest_candle_date = candle_date
+            except Exception:
+                traceback.print_exc()
+                failed_syms.append(sym)
+
+        ok_count = len(succeeded_syms)
+        fail_count = len(failed_syms)
+        total = len(watchlist)
+
+        if ok_count == 0:
+            status = 'failed'
+            msg = f'All {total} symbol(s) failed to scan.'
+        elif fail_count > 0:
+            status = 'partial'
+            msg = (f'{ok_count}/{total} symbol(s) scanned; {fail_count} failed '
+                   f'({", ".join(failed_syms)}). {total_pushed} new alert(s).')
+        else:
+            status = 'succeeded'
+            msg = f'{ok_count} symbol(s) scanned successfully. {total_pushed} new alert(s) fired.'
+
+        return {
+            'status': status,
+            'message': msg,
+            'dataObservedAt': latest_candle_date,
+            'publishedAt': datetime.datetime.utcnow().isoformat(),
+        }
+    except Exception:
+        traceback.print_exc()
+        return {'status': 'failed', 'message': 'Alert engine scan raised an exception.'}
+
+
 def _analysis_steps(scope, symbols, pid):
     steps = []
     if scope in ('market', 'full'):
@@ -5916,14 +6107,11 @@ def _analysis_steps(scope, symbols, pid):
         steps.append(('news', 'News', _news_refresh_work))
     if scope in ('engine', 'full'):
         steps.append(('engine_snapshot', 'Sector and alert evidence snapshot', _engine_snapshot_work))
-        # These engines need explicit completion contracts from their engine owner.
-        # Do not substitute the lightweight snapshot for these separate executions.
-        for key, label, reason in (
-            ('prediction_ledger', 'Prediction Ledger', 'Manual grading is still coupled to the daily model run.'),
-            ('scenario_evaluation', 'Scenario Evaluation', 'A tracked scenario evaluation refresh is not connected.'),
-            ('alert_engine', 'Alert Engine', 'The alert scanner does not yet report a verified scan outcome.'),
-        ):
-            steps.append((key, label, lambda reason=reason: {'status': 'skipped', 'message': reason}))
+        # Each engine runs its own synchronous work function with an explicit outcome.
+        steps.append(('prediction_ledger', 'Prediction Ledger', _prediction_ledger_work))
+        steps.append(('scenario_evaluation', 'Scenario Evaluation',
+                       lambda: _scenario_evaluation_work('BTC', 'P7D')))
+        steps.append(('alert_engine', 'Alert Engine', _alert_engine_work))
     if scope in ('strategy', 'full'):
         steps.append(('strategy', 'Your strategy assessment', lambda: _analysis_strategy_work(pid)))
     if scope in ('engine', 'full'):
@@ -11997,35 +12185,40 @@ def albert_ask(request: Request, payload: dict = Body(...), user: dict = Depends
         return refresh
     if not (LLM_READY_KEY and _HAS_LLM):
         return {'status': 'error', 'reply': 'Albert’s chat model is not configured on this server.'}
-    ctx, evidence, used, sop, engine_review = _ask_gather(user, message, entity=entity, context=context)
-    system = ASK_ALBERT_SYSTEM.format(ctx=ctx)
-    text, model, sources = _albert_answer('', message, session_id, deep=deep, system_override=system, grounded=False)
-    if not text:
-        text = ("I couldn’t compose an answer just now — my model call didn’t come back in time. "
-                "Please try again in a moment.")
-    text = re.sub(r'\[REFRESH_ANALYSIS:[^\]]*\]', '', _engine_code_safe_reply(text, engine_review)).strip()
-    public_review = _engine_code_public_meta(engine_review)
-    # N-F: the conclusion is bound to the EXACT evidence set it was produced from, so the
-    # user can open what Albert actually saw rather than a screen that merely looks related.
-    answer_snapshot = _evidence_snapshot_put(
-        'albertAnswer',
-        {'question': message, 'reply': text, 'model': model,
-         'stateId': sop.get('stateId'), 'sessionId': session_id,
-         'contextFunctions': used, 'evidence': evidence,
-         'engineReview': public_review,
-         'requestedContext': context,
-         'note': ('Albert explains authoritative values and never recalculates them. This '
-                  'snapshot records the bounded state evidence and opaque source digest; '
-                  'raw engine source is not stored or shown to users. Source inspection '
-                  'is partial and is not a test run.')},
-        owner_pid=owner_pid(user), as_of=sop.get('generatedAt'),
-        title='Albert answer evidence set')
-    return {'status': 'ready', 'reply': text, 'model': model, 'sources': sources,
-            'evidence': evidence, 'contextFunctions': used, 'sessionId': session_id,
-            'engineReview': public_review, 'stateId': sop.get('stateId'),
-            'answerSnapshotId': answer_snapshot,
-            'answerDeepLink': _evidence_deep_link(answer_snapshot),
-            'resolvedContext': bool(context), 'paperOnly': True}
+    try:
+        ctx, evidence, used, sop, engine_review = _ask_gather(user, message, entity=entity, context=context)
+        system = ASK_ALBERT_SYSTEM.format(ctx=ctx)
+        text, model, sources = _albert_answer('', message, session_id, deep=deep, system_override=system, grounded=False)
+        if not text:
+            text = ("I couldn’t compose an answer just now — my model call didn’t come back in time. "
+                    "Please try again in a moment.")
+        text = re.sub(r'\[REFRESH_ANALYSIS:[^\]]*\]', '', _engine_code_safe_reply(text, engine_review)).strip()
+        public_review = _engine_code_public_meta(engine_review)
+        # N-F: the conclusion is bound to the EXACT evidence set it was produced from, so the
+        # user can open what Albert actually saw rather than a screen that merely looks related.
+        answer_snapshot = _evidence_snapshot_put(
+            'albertAnswer',
+            {'question': message, 'reply': text, 'model': model,
+             'stateId': sop.get('stateId'), 'sessionId': session_id,
+             'contextFunctions': used, 'evidence': evidence,
+             'engineReview': public_review,
+             'requestedContext': context,
+             'note': ('Albert explains authoritative values and never recalculates them. This '
+                      'snapshot records the bounded state evidence and opaque source digest; '
+                      'raw engine source is not stored or shown to users. Source inspection '
+                      'is partial and is not a test run.')},
+            owner_pid=owner_pid(user), as_of=sop.get('generatedAt'),
+            title='Albert answer evidence set')
+        return {'status': 'ready', 'reply': text, 'model': model, 'sources': sources,
+                'evidence': evidence, 'contextFunctions': used, 'sessionId': session_id,
+                'engineReview': public_review, 'stateId': sop.get('stateId'),
+                'answerSnapshotId': answer_snapshot,
+                'answerDeepLink': _evidence_deep_link(answer_snapshot),
+                'resolvedContext': bool(context), 'paperOnly': True}
+    except Exception:
+        traceback.print_exc()
+        return {'status': 'error',
+                'reply': 'Albert could not gather or compose an answer. The backend logs have the details. Please try again.'}
 
 
 @app.get('/api/v1/albert/ask/evidence')
@@ -18335,15 +18528,8 @@ def _scan_symbol(symbol, settings=None, fire=False, corr_state=None):
 
 
 def _alert_engine_job():
-    st = _get_alert_settings()
-    if not st.get('enabled'):
-        return
-    corr_state = {}
-    for sym in st.get('watchlist', []):
-        try:
-            _scan_symbol(sym, st, fire=True, corr_state=corr_state)
-        except Exception:  # noqa
-            traceback.print_exc()
+    """Scheduled alert scan — routes through the tracked execution path."""
+    return _analysis_jobs.execute_engine('alert_engine', _alert_engine_work)
 
 
 def _backtest_detector(df, st):
