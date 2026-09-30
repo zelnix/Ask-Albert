@@ -254,7 +254,7 @@ export default function PaperTradingBot({ onNav }) {
         {walletState === 'loading' && <p role="status" className="mt-3 text-sm text-slate-400">Loading this wallet’s holdings and ledger…</p>}
         {walletState === 'error' && <div role="alert" className="mt-3 flex items-center gap-3 text-sm text-amber-200">Wallet data unavailable; no zero balance inferred. <button type="button" onClick={() => loadWallet(selectedWalletId)} className="font-semibold underline">Retry wallet read</button></div>}
         {walletState === 'ready' && walletDetail && <div className="mt-3 space-y-3 text-xs text-slate-300">
-          <p className="text-[11px] text-slate-400">Wallet ledger read {relative(walletDetail.asOf)} · ID {walletDetail.account?.paperAccountId} · {walletDetail.account?.runtimeState || 'state unavailable'}</p>
+          <p className="text-[11px] text-slate-400">Wallet ledger read {timeAgo(walletDetail.asOf)} · ID {walletDetail.account?.paperAccountId} · {walletDetail.account?.runtimeState || 'state unavailable'}</p>
           <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
             {[
               ['Starting virtual cash', usd(walletDetail.account?.startingCash)],
@@ -270,7 +270,7 @@ export default function PaperTradingBot({ onNav }) {
               {(walletDetail.positions || []).length ? (walletDetail.positions || []).map((p) => <p key={p.paperPositionId || p.asset} className="mt-1.5">{p.asset} · {p.netQuantity} units · entry {usd(p.averageEntryPrice)} · {p.currentPrice ? `mark ${usd(p.currentPrice)}` : 'mark unavailable'} · unrealized {p.unrealizedPnl != null ? signed(p.unrealizedPnl) : 'unavailable'}</p>) : <p className="mt-1.5 text-slate-400">No open holdings in this wallet.</p>}
             </div>
             <div className="rounded-md border border-slate-700 p-3"><p className="font-semibold text-white">Completed trade log</p>
-              {(walletDetail.recentActivity || []).filter((e) => e.eventType === 'FILL').length ? (walletDetail.recentActivity || []).filter((e) => e.eventType === 'FILL').slice(0, 10).map((e, i) => <p key={e.ledgerEventId || i} className="mt-1.5">{e.side} {e.asset} · {e.qty} @ {usd(e.fillPx)} · {relative(e.recordedAt || e.effectiveAt)}</p>) : <p className="mt-1.5 text-slate-400">No completed fills in this wallet’s recent ledger. </p>}
+              {(walletDetail.recentActivity || []).filter((e) => e.eventType === 'FILL').length ? (walletDetail.recentActivity || []).filter((e) => e.eventType === 'FILL').slice(0, 10).map((e, i) => <p key={e.ledgerEventId || i} className="mt-1.5">{e.side} {e.asset} · {e.qty} @ {usd(e.fillPx)} · {timeAgo(e.recordedAt || e.effectiveAt)}</p>) : <p className="mt-1.5 text-slate-400">No completed fills in this wallet’s recent ledger. </p>}
               {(walletDetail.recentActivity || []).length >= 20 && <p className="mt-2 text-amber-200">Latest 20 ledger entries shown. Open Paper Engine for the full audit.</p>}
             </div>
           </div>

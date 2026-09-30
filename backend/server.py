@@ -7745,8 +7745,7 @@ def albert_diagnostics_report(run_id: str, payload: dict = Body(default={}),
 
 # ===================== Paper-Trading Bot (v1, paper-only) =====================
 # Simulates Albert's DETERMINISTIC engine decisions against live marks — with NO
-# exchange keys and NO live orders, ever. Modes: OBSERVE (log only),
-# PAPER_AUTOPILOT (auto-execute). Direct-price fills (zero fee/slippage);
+# exchange keys and NO live orders, ever. Direct-price fills (zero fee/slippage);
 # append-only ledger; stale data pauses entries. Paper results are never
 # conflated with backtests or real portfolios.
 PAPER_ENGINE_VERSION = 'paper-bot-v1.0.0'
@@ -7754,8 +7753,8 @@ PAPER_ENGINE_VERSION = 'paper-bot-v1.0.0'
 # Simulated paper trading ONLY (no exchange creds, no live orders, no real money).
 # BUYs require immutable canonical decisions plus reviewed strategy conditions;
 # typed reviewed SELL exits are reduce-only, with no exchange orders. Money is
-# Decimal-exact; approvals are single-document atomic + idempotent. Execution
-# obeys PAPER_EXECUTION_ENABLED (disabled environments cannot simulate fills).
+# Decimal-exact. Execution obeys PAPER_EXECUTION_ENABLED (disabled environments
+# cannot simulate fills).
 from albert.paper import core as _paper_core  # noqa: E402
 from albert.paper import portfolio as _paper_portfolio  # noqa: E402
 from albert.paper import profiles as _paper_profiles  # noqa: E402
@@ -7829,8 +7828,8 @@ def _paper_btc_mark():
 
 
 def _paper_ledger_add(acct_id, event_type, entity_type, entity_id, amount, currency, note=''):
-    """Append a NON-ECONOMIC audit note (mode changes, observations, lifecycle,
-    proposal lifecycle) to the account's embedded ledger. All ECONOMIC ledger
+    """Append a NON-ECONOMIC audit note (mode changes, observations, lifecycle)
+    to the account's embedded ledger. All ECONOMIC ledger
     entries (fills) are written atomically inside the account doc by core.*."""
     try:
         paper_accounts_col.update_one({'paperAccountId': acct_id}, {'$push': {'ledger': {
@@ -7969,7 +7968,7 @@ def _paper_canonical_decisions(pid, account=None):
 
 
 def _paper_canonical_for(pid, asset, account=None):
-    """M6: the CURRENT canonical decision for ONE asset (used by approval + manual
+    """M6: the CURRENT canonical decision for ONE asset (used by manual
     controls so they never fall back to the BTC-only decision)."""
     asset = (asset or 'BTC').upper()
     for c in _paper_canonical_decisions(pid, account=account):
@@ -8192,7 +8191,7 @@ def _studio_rule_check(strat, sym, side, px, acct, obs=None):
     pos = _paper_core.position_for(acct, sym)
     peak = None  # Peak tracking simplified for combined positions
     completed_targets = set()
-    result = _strategy_rules.evaluate(rules, side, sym, px, history=history, lot=pos, peak=peak,
+    result = _strategy_rules.evaluate(rules, side, sym, px, history=history, position=pos, peak=peak,
                                       change_pct_24h=(obs or {}).get('changePct24h'),
                                       completed_targets=completed_targets)
     result['dataSource'] = {'price': (obs or {}).get('source') or (obs or {}).get('provider') or 'market-adapter',
@@ -8305,9 +8304,9 @@ def _check_portfolio_goals(acct, equity_info, marks, mark_obs):
 def _execute_goal_action(acct, trigger, reason, equity_info, marks):
     """Execute the portfolio goal end action: close-all-and-stop or stop-entries.
     
-    GOAL_CLOSE_PENDING: When CLOSE_ALL_AND_STOP is the action but some tickets
+    GOAL_CLOSE_PENDING: When CLOSE_ALL_AND_STOP is the action but some positions
     lack a fresh mark, we enter GOAL_CLOSE_PENDING instead of HALTED_GOAL_CLOSED.
-    The worker will retry closing unpriced tickets on each cycle until all are done.
+    The worker will retry closing unpriced positions on each cycle until all are done.
     """
     acct_id = acct['paperAccountId']
     pid = acct['ownerId']
@@ -8336,7 +8335,7 @@ def _execute_goal_action(acct, trigger, reason, equity_info, marks):
         else:
             new_state = 'HALTED_GOAL_CLOSED'
     else:
-        # Stop new entries but keep managing open tickets.
+        # Stop new entries but keep managing open positions.
         new_state = 'HALTED_GOAL_ENTRIES'
 
     paper_accounts_col.update_one({'paperAccountId': acct_id, 'ownerId': pid},
@@ -8351,12 +8350,12 @@ def _execute_goal_action(acct, trigger, reason, equity_info, marks):
     _paper_ledger_add(acct_id, 'GOAL_HALT', 'account', acct_id, None, None,
                       'Portfolio goal triggered: %s. Action: %s.%s' % (
                           reason, action,
-                          ' Some tickets await a mark for closure.' if new_state == 'GOAL_CLOSE_PENDING' else ''))
+                          ' Some positions await a mark for closure.' if new_state == 'GOAL_CLOSE_PENDING' else ''))
     _autopilot_notify(pid, acct_id, 'Portfolio goal reached',
                       '%s. %s. Paper only.' % (reason,
                           'All positions closed and strategy stopped.' if new_state == 'HALTED_GOAL_CLOSED'
-                          else 'Closing positions — some tickets await a fresh mark.' if new_state == 'GOAL_CLOSE_PENDING'
-                          else 'New entries stopped; open tickets will continue to be managed.'),
+                          else 'Closing positions — some await a fresh mark.' if new_state == 'GOAL_CLOSE_PENDING'
+                          else 'New entries stopped; open positions will continue to be managed.'),
                       'success' if trigger == 'PROFIT_TARGET' else 'warning')
 
 
@@ -8615,8 +8614,6 @@ def _autopilot_process_account_multi(acct):
         return
     processed = dict(acct.get('processedDecisionSnapshots') or {})
     cursors = dict(acct.get('marketObservationCursors') or {})
-    regime = next((d.get('regime') for d in decisions if d.get('regime')), 'RANGE')
-    holding_scores = {(d.get('asset') or '').upper(): d.get('score') for d in decisions}
 
     candidates = []
     newly_seen = {}
@@ -8668,8 +8665,7 @@ def _autopilot_process_account_multi(acct):
     paused = acct.get('runtimeState') not in ('RUNNING',)
     alloc_candidates = [c for c in candidates if c['action'] == 'SELL' or not paused]
     alloc = _paper_portfolio.allocate(acct=acct, equity_info=equity_info,
-                                      candidates=alloc_candidates, regime=regime, marks=marks,
-                                      holding_scores=holding_scores)
+                                      candidates=alloc_candidates, marks=marks)
     funded = {i['symbol'] for i in alloc['intents'] if i.get('action') == 'BUY'}
     for c in alloc_candidates:
         if c['action'] == 'BUY' and c['symbol'] not in funded:
@@ -8853,7 +8849,7 @@ def _paper_autopilot_worker():
             try:
                 fresh_acct = paper_accounts_col.find_one({'paperAccountId': acct_id}) or acct
                 # Re-check runtimeState after fresh read (may have been paused between query and lease).
-                # Paused accounts with open lots still need exit processing; skip only fully idle ones.
+                # Paused accounts with open positions still need exit processing; skip only fully idle ones.
                 _fresh_state = fresh_acct.get('runtimeState')
                 _has_open_positions = any((_paper_core.D(l.get('qty')) or Decimal('0')) > 0
                                      for l in _paper_core.open_positions(fresh_acct))
@@ -9416,20 +9412,18 @@ def _sop_briefing(pid, market, market_light, paper_aggregate, strategies, attent
         live = tot.get('liveStrategies') or 0
         add('briefing.portfolio',
             'Across your %d strategy %s that %s paper trading, the combined wallet value is '
-            '$%s from $%s of starting cash, with %s open %s and %s awaiting your approval.'
+            '$%s from $%s of starting cash, with %s open %s.'
             % (live, 'wallet' if live == 1 else 'wallets',
                'is' if live == 1 else 'are',
                tot.get('value'), tot.get('startingCash'), tot.get('openPositions'),
-               'position' if tot.get('openPositions') == 1 else 'positions',
-               tot.get('pendingApprovals')),
+               'position' if tot.get('openPositions') == 1 else 'positions'),
             _mkt_meta.OBSERVED_FACT,
             snapshot={'totals': tot, 'note': (paper_aggregate or {}).get('note'),
                       'accounting': 'equity = cash + marked positions; figures are quoted '
                                     'from the paper engine and never recomputed here.'},
             kind_name='paperAggregate', owner=pid, as_of=None,
-            stable='paperAgg|%s|%s|%s|%s' % (pid, tot.get('value'),
-                                             tot.get('openPositions'),
-                                             tot.get('pendingApprovals')))
+            stable='paperAgg|%s|%s|%s' % (pid, tot.get('value'),
+                                           tot.get('openPositions')))
 
     # 5. What needs a decision.
     acts = [a for a in (attention or []) if a.get('severity') == 'ACTION']
@@ -12165,7 +12159,7 @@ def _studio_canonical(draft):
     if 'startingCash' in draft:
         cash = _strategy_rules.decimal(draft.get('startingCash'))
         contract['startingCash'] = str(cash) if cash is not None else None
-    # Preserve proposal metadata and extended fields.
+    # Preserve strategy metadata and extended fields.
     if draft.get('currency'):
         contract['currency'] = str(draft['currency']).strip().upper()[:10]
     if draft.get('horizonDays'):
@@ -12197,7 +12191,7 @@ def _studio_canonical(draft):
             goals['endAction'] = str(pg['endAction'])
         if goals:
             contract['portfolioGoals'] = goals
-    # Entry sizing: how much to deploy per BUY ticket.
+    # Entry sizing: how much to deploy per BUY.
     if draft.get('entrySizing'):
         es = draft['entrySizing']
         sizing_obj = {}
@@ -12226,7 +12220,7 @@ def _studio_validate(draft, pid, account=None):
                   but do NOT prevent saving ("Needs changes — not trading").
 
     Transient provider outages do not invalidate a saved plan: they force WAIT in
-    the engine and block entry at proposal/approval/execution, not Start.
+    the engine and block entry at execution time, not Start.
     """
     draft = draft if isinstance(draft, dict) else {}
     c = _studio_canonical(draft)
@@ -12370,7 +12364,7 @@ def _studio_summary(c):
     return (f"A paper strategy across {legs}, checked on the normal paper cycle. "
             f"At most {c['riskLimits']['maxPositions']} positions; entry sizing: {sizing_desc}; "
             f"protected reserve {c['reservePct']:g}%. Canonical BUY and risk gates still apply. "
-            f"Executable additional conditions: {terms or 'none'}. SELL triggers close the targeted ticket; "
+            f"Executable additional conditions: {terms or 'none'}. SELL triggers close the targeted position; "
             f"Auto Run executes paper trades after the reviewed rules and risk gates pass.{wallet}{goals_desc} "
             f"Macro and tokenomics are advisory context only.")
 
@@ -12820,7 +12814,7 @@ STUDIO_REVISE_SYSTEM = (
     "entrySizing, reservePct, riskLimits, portfolioGoals, unsupportedInstructions. "
     "If the user adds or removes coins, update assets accordingly. "
     "If the user changes entry sizing, update entrySizing. "
-    "If the user changes exit rules, only new tickets will use them — existing tickets keep their entry-time rules. "
+    "If the user changes exit rules, only new positions will use them — existing positions keep their entry-time rules. "
     "Return the COMPLETE revised strategy JSON, not a partial diff."
 )
 
@@ -12897,7 +12891,7 @@ def studio_revise_draft(payload: dict = Body(...), user: dict = Depends(get_curr
             'originalStrategyId': sid,
             'originalVersion': doc.get('version'),
             'note': 'Review the revised strategy. Save it to apply the changes. '
-                    'Existing tickets retain their entry-time exit rules.'}
+                    'Existing positions retain their entry-time exit rules.'}
 
 
 
@@ -12959,7 +12953,7 @@ def studio_save(payload: dict = Body(...), user: dict = Depends(get_current_user
         if acct and (acct.get('strategyId') != sid or not acct.get('dedicatedToStrategy')):
             raise HTTPException(status_code=409, detail='This wallet belongs to a different strategy.')
         # Claim the latest version before writing anything economic. The worker
-        # and approval endpoint both reject a non-latest contract for new trades.
+        # rejects a non-latest contract for new trades.
         result = strategy_contracts_col.update_one(
             {'_id': parent['_id'], 'ownerId': pid, 'latest': True},
             {'$set': {'latest': False,
@@ -13089,7 +13083,7 @@ PAPER_STATUS_LABEL = {'SAVED': 'Saved · not trading', 'STOPPED': 'Stopped',
                       'HALTED_RISK': 'Halted — drawdown limit', 'ARCHIVED': 'Archived',
                       'HALTED_GOAL_CLOSED': 'Goal reached — all closed',
                       'HALTED_GOAL_ENTRIES': 'Goal reached — managing exits',
-                      'GOAL_CLOSE_PENDING': 'Goal reached — closing remaining tickets'}
+                      'GOAL_CLOSE_PENDING': 'Goal reached — closing remaining positions'}
 
 
 def _studio_worker_blocker():
@@ -13437,7 +13431,7 @@ def studio_stop_paper(sid: str, payload: dict = Body(default={}),
 def _filter_strategy_activity(activity, strat):
     """Filter activity (ledger) entries to those relevant to the strategy's own
     coins. Non-decision events (ACCOUNT_OPENED, MODE_CHANGED, etc.) are always
-    kept. OBSERVED/PROPOSAL events are filtered to the strategy's asset symbols."""
+    kept. Decision events are filtered to the strategy's asset symbols."""
     strat_syms = _strategy_syms(strat) or set()
     if not strat_syms:
         return activity  # no filter needed
@@ -13470,7 +13464,7 @@ def _filter_strategy_activity(activity, strat):
 
 @app.get('/api/v1/albert/studio/strategies/{sid}/paper')
 def studio_strategy_paper(sid: str, user: dict = Depends(get_current_user)):
-    """Everything the strategy card needs: status, trade approval, activity and
+    """Everything the strategy card needs: status, activity and
     performance for THIS strategy's own paper wallet. Read-only."""
     pid = owner_pid(user)
     doc = _studio_get(sid, pid)
@@ -14401,7 +14395,7 @@ def _score_asset(symbol, regime):
 
 def _portfolio_summary_from_account(a):
     """M6 blocker #2: build the engine portfolio summary from an M5 paper account's
-    EMBEDDED cash + lots (the single source of truth), valued at live spot. Same shape
+    EMBEDDED cash + positions (the single source of truth), valued at live spot. Same shape
     as _portfolio_summary so build_decisions can consume it interchangeably."""
     pid = a.get('ownerId')
     m = _get_mandate(pid)
@@ -15003,7 +14997,7 @@ def _albert_notifications(pid, limit=40):
     """Build the merged, most-recent-first per-pid notification list."""
     seen = _notif_seen_ids(pid)
     items = []
-    # -1) Paper Auto Run trade/approval notifications (background worker).
+    # -1) Paper Auto Run trade notifications (background worker).
     try:
         for a in paper_notif_col.find({'pid': pid}).sort('ts', -1).limit(20):
             items.append({'id': a.get('_id'), 'category': 'paper', 'severity': a.get('severity', 'info'),

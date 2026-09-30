@@ -294,7 +294,7 @@ def _indicator(name, prices):
     return None
 
 
-def evaluate(rules, side, symbol, mark, *, history=None, lot=None, peak=None, change_pct_24h=None, completed_targets=None):
+def evaluate(rules, side, symbol, mark, *, history=None, position=None, peak=None, change_pct_24h=None, completed_targets=None):
     """Return matching/wait reason with per-rule evidence; never manufacture a fill.
     BUY: all explicit conditions must pass. SELL: any one exit condition may pass.
 
@@ -340,8 +340,8 @@ def evaluate(rules, side, symbol, mark, *, history=None, lot=None, peak=None, ch
                 observed = None
         elif kind == 'INDICATOR':
             observed = _indicator(r['indicator'], closes) if closes and all(x is not None and x > 0 for x in closes) else None
-        elif lot and decimal(lot.get('avgEntry')):
-            entry = decimal(lot['avgEntry'])
+        elif position and decimal(position.get('avgEntry')):
+            entry = decimal(position['avgEntry'])
             if kind == 'STOP_LOSS_PCT': observed = (entry - px) / entry * 100
             elif kind == 'TAKE_PROFIT_PCT': observed = (px - entry) / entry * 100
         if observed is None:

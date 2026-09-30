@@ -3,7 +3,7 @@
 Uses combined positions (one per coin). No tickets, lots, regime bands,
 profile limits, risk haircuts or hidden allocation scaling.
 """
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal
 
 from albert.paper import core
 
@@ -28,8 +28,7 @@ def rank_opportunities(candidates):
     return sorted(candidates, key=key)
 
 
-def allocate(*, acct, equity_info, candidates, regime, marks,
-             profile=None, holding_scores=None):
+def allocate(*, acct, equity_info, candidates, marks):
     """Produce per-asset trade intents from ranked canonical opportunities.
 
     The reviewed strategy sizing is authoritative. This allocator ranks and
@@ -66,7 +65,6 @@ def allocate(*, acct, equity_info, candidates, regime, marks,
         return {'intents': intents, 'diagnostics': diag}
 
     deployable = equity_info.get('deployableCash') or Decimal('0')
-    open_count = equity_info.get('openPositionsCount') or 0
 
     ranked = rank_opportunities([c for c in candidates if c.get('action') == 'BUY'])
 
