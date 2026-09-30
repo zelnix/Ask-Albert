@@ -7962,6 +7962,7 @@ from albert.paper import core as _paper_core  # noqa: E402
 from albert.paper import portfolio as _paper_portfolio  # noqa: E402
 from albert.paper import profiles as _paper_profiles  # noqa: E402
 from albert.paper import strategy_rules as _strategy_rules  # noqa: E402
+from albert.paper import edge_validator as _edge_validator  # noqa: E402
 from albert import asset_capabilities as _asset_caps  # noqa: E402
 from albert import market_adapter as _verified_market  # noqa: E402
 
@@ -13868,6 +13869,78 @@ def paper_overview(user: dict = Depends(get_current_user)):
             'deployableCashTotal': _paper_core.dstr(tot_deployable) if reserve_usable else None,
             'activity': activity[:25],
             'recentFills': _paper_jsonify(recent_fills[:2])}
+
+
+@app.post('/api/v1/albert/backtest')
+def albert_backtest(payload: dict = Body(...), user: dict = Depends(get_current_user)):
+    """Walk-forward backtest of a saved strategy against historical OHLCV data.
+    This endpoint does not execute trades — it replays the deterministic decision
+    engine to evaluate historical edge. Paper trading mode is not affected."""
+    pid = owner_pid(user)
+    strategy_id = (payload.get('strategyId') or '').strip()
+    if not strategy_id:
+        raise HTTPException(status_code=422, detail='strategyId is required.')
+    # Load the saved strategy
+    doc = _studio_get(strategy_id, pid)
+    if not doc:
+        raise HTTPException(status_code=404, detail='No such strategy.')
+    strategy = doc.get('contract') or doc
+    rules = strategy.get('rules') or doc.get('rules', [])
+    if not rules:
+        raise HTTPException(status_code=422, detail='Strategy has no executable rules.')
+    strategy_for_sim = {
+        'rules': rules,
+        'version': doc.get('version') or strategy_id,
+        'assets': strategy.get('assets', ['BTC']),
+    }
+    # Get historical candles
+    symbol = strategy_for_sim['assets'][0] if strategy_for_sim['assets'] else 'BTC'
+    try:
+        df, source = fetch_ohlcv()
+        if df is None or len(df) < 60:
+            return {'status': 'error', 'reason': 'Insufficient historical data for backtest.'}
+        candles = [
+            _edge_validator.Candle(
+                timestamp=row['timestamp'].isoformat() if hasattr(row['timestamp'], 'isoformat') else str(row['timestamp']),
+                open=float(row['open']),
+                high=float(row['high']),
+                low=float(row['low']),
+                close=float(row['close']),
+                volume=float(row.get('volume', 0)),
+            )
+            for _, row in df.iterrows()
+        ]
+    except Exception:
+        traceback.print_exc()
+        return {'status': 'error', 'reason': 'Could not load historical candle data.'}
+    # Walk-forward test
+    train_bars = int(payload.get('trainBars', 180))
+    test_bars = int(payload.get('testBars', 60))
+    start_cash = float(payload.get('startCash', 10000))
+    fee_rate = float(payload.get('feeRate', 0.001))
+    max_dd = float(payload.get('maxDrawdownPct', 20))
+    try:
+        wf = _edge_validator.walk_forward(
+            candles, strategy_for_sim,
+            train_bars=train_bars, test_bars=test_bars, step_bars=test_bars,
+            start_cash=start_cash, fee_rate=fee_rate, max_drawdown_pct=max_dd)
+        weakness = _edge_validator.weakness_analysis(
+            _edge_validator.stitch([]) if not wf.folds else _edge_validator.stitch(
+                [_edge_validator.simulate(candles[f.fold_index * test_bars + train_bars:f.fold_index * test_bars + train_bars + test_bars],
+                                          strategy_for_sim, start_cash, fee_rate, max_drawdown_pct=max_dd)
+                 for f in wf.folds if f.test_trades > 0]))
+        return {
+            'status': 'ready',
+            'strategyId': strategy_id,
+            'version': strategy_for_sim['version'],
+            'symbol': symbol,
+            'candleCount': len(candles),
+            'walkForward': wf.to_dict(),
+            'weakness': weakness,
+        }
+    except Exception:
+        traceback.print_exc()
+        return {'status': 'error', 'reason': 'Walk-forward backtest execution failed.'}
 
 
 @app.post('/api/v1/albert/studio/strategies/{sid}/{cmd}')
