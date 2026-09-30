@@ -479,11 +479,11 @@ function Methodology({ bt, contractHash }) {
   return (
     <div>
       <button onClick={() => setOpen((o) => !o)} className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-500 hover:text-slate-300">
-        <ChevronDown className={`h-3.5 w-3.5 transition-transform ${open ? 'rotate-180' : ''}`} />Methodology, costs &amp; integrity
+        <ChevronDown className={`h-3.5 w-3.5 transition-transform ${open ? 'rotate-180' : ''}`} />Methodology &amp; integrity
       </button>
       {open && (
         <div className="mt-1.5 grid grid-cols-2 gap-x-4 gap-y-1.5 rounded-lg border border-slate-800 bg-slate-950/60 p-2.5 text-[11px] sm:grid-cols-3">
-          {[['Benchmark', bt.benchmark], ['Fees paid', `$${bt.feesPaidUsd}`], ['Slippage', `${bt.slippageBps} bps`],
+          {[['Benchmark', bt.benchmark],
             ['Data coverage', `${bt.dataCoveragePct}%`], ['Sample', `${bt.sampleSizeDays} days`],
             ['Backtest version', bt.backtestVersion], ['Contract hash', contractHash], ['Data hash', bt.dataHash]].map(([k, v]) => (
             <div key={k} className="min-w-0">
@@ -802,6 +802,9 @@ function Detail({ sid, onChange, onRevise }) {
   const [btBusy, setBtBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const [reviseInput, setReviseInput] = useState('');
+  const [revising, setRevising] = useState(false);
+  const [reviseOpen, setReviseOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoadError('');
@@ -837,6 +840,23 @@ function Detail({ sid, onChange, onRevise }) {
     } catch (e) { setErr(`${cmd} failed.`); }
     finally { setBusy(false); }
   };
+  const doReviseWithAlbert = async () => {
+    if (!reviseInput.trim()) return;
+    setRevising(true); setErr('');
+    try {
+      const r = await post('/v1/albert/studio/revise-draft', {
+        strategyId: sid, revisionRequest: reviseInput.trim() });
+      const j = await r.json();
+      if (r.ok && j.revisedDraft) {
+        // Open the Builder with the revised draft for review — never auto-save.
+        setReviseOpen(false); setReviseInput('');
+        onRevise?.({ ...s, contract: j.revisedDraft, _revision: true, _revisionNote: j.note });
+      } else {
+        setErr(j.detail || 'Revision failed.');
+      }
+    } catch (e) { setErr('Revision failed.'); }
+    finally { setRevising(false); }
+  };
 
   if (!s) return (
     <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
@@ -856,8 +876,27 @@ function Detail({ sid, onChange, onRevise }) {
         <h3 className="text-base font-bold text-white">{s.name}</h3>
         <Badge variant="outline" className={`border-slate-700 text-[11px] ${meta.color}`}>{meta.label}</Badge>
         <span className="text-[11px] text-slate-500">v{s.version}</span>
-        {s.paperStatus !== 'ARCHIVED' && <Button size="sm" variant="outline" onClick={() => onRevise?.(s)} className="ml-auto h-7 border-slate-700 text-[12px] text-slate-200">Revise plan</Button>}
+        {s.paperStatus !== 'ARCHIVED' && <>
+          <Button size="sm" variant="outline" onClick={() => onRevise?.(s)} className="ml-auto h-7 border-slate-700 text-[12px] text-slate-200">Revise plan</Button>
+          <Button size="sm" variant="outline" onClick={() => setReviseOpen(!reviseOpen)} className="h-7 border-indigo-700 text-[12px] text-indigo-300">Revise with Albert</Button>
+        </>}
       </div>
+      {/* Revise with Albert chat panel */}
+      {reviseOpen && (
+        <div className="mb-3 rounded-lg border border-indigo-700/50 bg-indigo-950/30 p-3">
+          <p className="mb-2 text-[12px] text-indigo-200">Tell Albert what to change. Albert will return a complete revised strategy for your review. Nothing is saved until you explicitly save.</p>
+          <div className="flex gap-2">
+            <input value={reviseInput} onChange={(e) => setReviseInput(e.target.value)}
+              placeholder="e.g. Add SOL, change entry sizing to $500 per trade, add a 5% stop-loss on all positions"
+              className="flex-1 rounded-md border border-slate-700 bg-slate-900 px-3 py-1.5 text-[13px] text-white placeholder-slate-500"
+              onKeyDown={(e) => e.key === 'Enter' && !revising && doReviseWithAlbert()} />
+            <Button size="sm" onClick={doReviseWithAlbert} disabled={revising || !reviseInput.trim()}
+              className="h-8 gap-1 bg-indigo-600 text-[12px] hover:bg-indigo-500">
+              {revising ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Send'}
+            </Button>
+          </div>
+        </div>
+      )}
       <p className="text-[13px] text-slate-300">{s.summary}</p>
       <div className="mt-2 flex flex-wrap gap-1.5">
         {(s.assetCapabilities || []).map((cap) => <CoinCapability key={cap.symbol} item={cap} />)}

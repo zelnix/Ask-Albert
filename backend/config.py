@@ -212,17 +212,12 @@ except Exception:  # noqa
 
 # Paper-Trading Bot (paper-only; NO exchange keys, NO live orders ever).
 paper_accounts_col = db['albert_paper_accounts']
-paper_proposals_col = db['albert_paper_proposals']
 paper_orders_col = db['albert_paper_orders']
 paper_positions_col = db['albert_paper_positions']
 paper_ledger_col = db['albert_paper_ledger']
-# M5.1: rotation audit records (reduce-then-buy capital rotations).
-paper_rotations_col = db['albert_paper_rotations']
 try:
     paper_accounts_col.create_index([('ownerId', 1), ('createdAt', -1)])
-    paper_proposals_col.create_index([('paperAccountId', 1), ('status', 1)])
     paper_ledger_col.create_index([('paperAccountId', 1), ('accountSequence', 1)], unique=True)
-    paper_rotations_col.create_index([('paperAccountId', 1), ('at', -1)])
 except Exception:  # noqa
     pass
 

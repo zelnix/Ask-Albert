@@ -284,8 +284,4 @@ def allocate(*, acct, equity_info, candidates, regime, marks,
     return {'intents': intents, 'diagnostics': diag}
 
 
-def plan_rotation(*, equity_info=None, unfunded_strong=None, candidates=None,
-                  marks=None, profile=None, existing_intents=None, holding_scores=None):
-    """RETIRED — rotation is no longer part of the execution model.
-    Returns None unconditionally. Kept as a stub so legacy callers don't error."""
-    return None
+

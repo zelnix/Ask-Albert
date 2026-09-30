@@ -70,8 +70,8 @@ from config import (
     equity_snapshots_col,
     driver_alert_subs_col, driver_alert_state_col, driver_alerts_col,
     diagnostics_runs_col, diagnostics_reports_col,
-    paper_accounts_col, paper_proposals_col, paper_orders_col,
-    paper_positions_col, paper_ledger_col, paper_notif_col, paper_rotations_col,
+    paper_accounts_col, paper_orders_col,
+    paper_positions_col, paper_ledger_col, paper_notif_col,
     users_col, auth_sessions_col, GOOGLE_CLIENT_ID,
 )
 from email_service import send_email, resend_configured
@@ -3868,9 +3868,6 @@ def _remediation_flag(name: str, default: bool) -> bool:
 
 # Paper execution emergency switch. Retained as the sole environment-level safety control.
 PAPER_EXECUTION_ENABLED = _remediation_flag('PAPER_EXECUTION_ENABLED', False)
-# Legacy flags — kept as True to avoid breaking existing references, scheduled for deletion.
-PAPER_AUTOPILOT_ENABLED = True
-PAPER_MULTI_ASSET_ENABLED = True
 PAPER_EXEC_DISABLED_MSG = ('Paper execution is disabled by the environment safety switch. '
                            'No simulated fills are placed.')
 
@@ -7815,9 +7812,8 @@ def _simulation_cg_get(path, params):
 
 _verified_market.configure_coingecko(_simulation_cg_get)
 
-PAPER_EXEC_PROFILE = {'executionProfileId': 'ep_direct_price_v2',
-                      'model': 'direct_price',
-                      'note': 'Paper trading fills at the observed market price with zero fees.'}
+# Execution model: direct observed-price fills. No execution profile to select.
+PAPER_EXECUTION_MODEL = 'direct_price'
 # PROPOSAL_TTL_MIN is retired; kept for historical reference only.
 PAPER_PROPOSAL_TTL_MIN = 30
 
@@ -8088,8 +8084,6 @@ def _paper_rank_for(sym, ranks, meta):
 
 
 
-def _paper_proposal_public(prop):
-    return {k: v for k, v in (prop or {}).items() if k != '_id'}
 
 
 # ------------------------- Background Paper Auto Run -------------------------
@@ -8123,9 +8117,8 @@ def _paper_autopilot_status(a):
             'lastDecisionProcessed': ap.get('lastDecisionProcessed'),
             'lastTradeAt': ap.get('lastTradeAt'),
             'nextEvalAt': nxt,
-            'autopilotEnabled': PAPER_AUTOPILOT_ENABLED, 'executionEnabled': PAPER_EXECUTION_ENABLED,
-            'multiAssetEnabled': PAPER_MULTI_ASSET_ENABLED,
-            'tradingProfile': _paper_profiles.AGGRESSIVE_EXPERIENCED_V1['profileId'] if PAPER_MULTI_ASSET_ENABLED else 'BTC_SPOT_V1',
+            'executionEnabled': PAPER_EXECUTION_ENABLED,
+            'executionModel': 'direct_price',
             'paperOnly': True}
 
 
@@ -8159,132 +8152,6 @@ def _autopilot_set_vis(acct_id, **fields):
     paper_accounts_col.update_one({'paperAccountId': acct_id},
                                   {'$set': {('autopilot.' + k): v for k, v in fields.items()}})
 
-
-def _autopilot_process_account(acct):
-    """Process ONE paper account for the current tick. Reused by the worker only."""
-    acct_id = acct['paperAccountId']; pid = acct['ownerId']
-    now_iso = datetime.datetime.utcnow().isoformat()
-    _autopilot_set_vis(acct_id, lastCheckAt=now_iso)
-    if acct.get('archivedAt'):
-        return
-    px, fresh, mark_obs = _paper_mark('BTC')
-    mark_ts = (mark_obs or {}).get('ts')
-    mandate = _albert_deps.get_mandate(pid) or {}
-    info = _paper_core.compute_equity(acct, px, fresh)
-
-    # 1) High-water + drawdown breaker (verified valuation only).
-    if info['available'] and info['equity'] is not None:
-        _paper_core.update_high_water(paper_accounts_col, acct_id, pid, info['equity'])
-        max_dd = _paper_core.D(mandate.get('max_drawdown_pct'))
-        if (max_dd is not None and info['drawdownPct'] is not None and info['drawdownPct'] <= (-max_dd)
-                and acct.get('runtimeState') == 'RUNNING'):
-            paper_accounts_col.update_one({'paperAccountId': acct_id},
-                                          {'$set': {'runtimeState': 'PAUSED_RISK_BREAKER'}})
-            _paper_ledger_add(acct_id, 'RISK_BREAKER', 'account', acct_id, None, None,
-                              'Drawdown %s%% breached your limit — new entries paused.'
-                              % _paper_core.dstr(info['drawdownPct'], _paper_core.PCT_Q))
-            _autopilot_notify(pid, acct_id, 'Paper drawdown breaker tripped',
-                              'New paper entries are paused; protective exits continue.', 'warning')
-
-    # 2) Protective invalidation exit — runs even when paused (safe exit).
-    acct = paper_accounts_col.find_one({'paperAccountId': acct_id}) or acct
-    lot = _paper_core._btc_lot(acct)
-    if (lot and px is not None and fresh and PAPER_EXECUTION_ENABLED and lot.get('invalidationPrice') is not None
-            and px < _paper_core.D(lot.get('invalidationPrice'))):
-        ex = _paper_core.run_exit_gates(acct=acct, mark_px=px, mark_fresh=fresh, full=True)
-        if not ex.get('reject'):
-            res, err, _ = _paper_core.apply_sell_atomic(paper_accounts_col, acct_id, pid, ex,
-                                                        source='auto_invalidation',
-                                                        idem_key='inv:%s:%s' % (lot.get('lotId'), mark_ts))
-            if not err:
-                _autopilot_set_vis(acct_id, lastTradeAt=now_iso)
-                _autopilot_notify(pid, acct_id, 'Paper position auto-exited (invalidation)',
-                                  'Price fell below the engine invalidation — position closed. Paper only.', 'warning')
-        acct = paper_accounts_col.find_one({'paperAccountId': acct_id}) or acct
-
-    # 3) New canonical decision (process each snapshot at most once).
-    canonical = _paper_canonical_decision(pid)
-    if not canonical:
-        return
-    sid = canonical['decisionSnapshotId']
-    if acct.get('lastProcessedDecisionSnapshotId') == sid:
-        return  # already handled this immutable snapshot
-    mode = acct.get('mode')
-
-    # Not actionable (WAIT/HOLD): record + mark processed (no trade, ever).
-    if not canonical['actionable']:
-        _paper_ledger_add(acct_id, 'OBSERVED', 'decision', sid, None, None,
-                          'Observed %s — no trade.' % canonical['action'])
-        _autopilot_set_vis(acct_id, lastDecisionProcessed=sid)
-        paper_accounts_col.update_one({'paperAccountId': acct_id}, {'$set': {'lastProcessedDecisionSnapshotId': sid}})
-        return
-
-    # Stale/expired decision or unverified mark: place NO trade; retry later (do NOT
-    # consume the snapshot so a later fresh, INDEPENDENT observation can act).
-    if not canonical['fresh'] or px is None or not fresh:
-        return
-    # Independent observation: execute only on a verified mark observed strictly
-    # AFTER the decision (and after the last used observation) — never the same data.
-    try:
-        if mark_ts and canonical.get('decisionTime') and not (mark_ts > canonical['decisionTime']):
-            return
-    except Exception:  # noqa
-        return
-    cursor = acct.get('marketObservationCursor')
-    if cursor and mark_ts and not (mark_ts > cursor):
-        return
-
-    if mode == 'OBSERVE':
-        _paper_ledger_add(acct_id, 'OBSERVED', 'decision', sid, None, None,
-                          'Observed %s signal — observe-only mode.' % canonical['action'])
-        _autopilot_set_vis(acct_id, lastDecisionProcessed=sid)
-        paper_accounts_col.update_one({'paperAccountId': acct_id}, {'$set': {'lastProcessedDecisionSnapshotId': sid}})
-        return
-
-    if mode == 'PAPER_AUTOPILOT':
-        # Paused: no new ENTRIES. (Protective exits already ran above.) Do not
-        # consume BUY snapshots so resume can still act while the decision is fresh.
-        paused = acct.get('runtimeState') != 'RUNNING'
-        if not (PAPER_EXECUTION_ENABLED and PAPER_AUTOPILOT_ENABLED):
-            _paper_ledger_add(acct_id, 'AUTO_DISABLED', 'decision', sid, None, None,
-                              'Autopilot is disabled by configuration — no trade.')
-            _autopilot_set_vis(acct_id, lastDecisionProcessed=sid)
-            paper_accounts_col.update_one({'paperAccountId': acct_id}, {'$set': {'lastProcessedDecisionSnapshotId': sid}})
-            return
-        idem = 'auto:%s:%s' % (acct_id, sid)   # restart/duplicate-safe
-        if canonical['action'] == 'BUY':
-            if paused or not _asset_caps.entry_allowed('BTC', mandate, data_ok=fresh)[0]:
-                return  # entries paused/unsupported; leave snapshot unconsumed
-            s = _paper_core.run_entry_gates(acct=acct, canonical=canonical, mark_px=px, mark_fresh=fresh,
-                                            mandate=mandate, equity_info=info, has_open_intent=False)
-            if s.get('reject'):
-                _paper_ledger_add(acct_id, 'AUTO_SKIPPED', 'decision', sid, None, None,
-                                  'Autopilot skipped BUY: %s.' % s['reject'])
-            else:
-                res, err, _ = _paper_core.apply_buy_atomic(paper_accounts_col, acct_id, pid, acct.get('version'),
-                                                          idem, 'auto_' + sid, s, canonical,
-                                                          base_currency=acct.get('baseCurrency', 'USDC'))
-                if not err:
-                    _autopilot_set_vis(acct_id, lastTradeAt=now_iso)
-                    paper_accounts_col.update_one({'paperAccountId': acct_id},
-                                                  {'$set': {'marketObservationCursor': mark_ts}})
-                    _autopilot_notify(pid, acct_id, 'Paper Auto Run bought BTC',
-                                      'Auto-executed a simulated BUY on a fresh decision. Paper only — no real money.')
-        else:  # SELL / EXIT / TRIM (reduce-only) — allowed even if paused
-            s = _paper_core.run_exit_gates(acct=acct, mark_px=px, mark_fresh=fresh,
-                                           canonical=canonical)
-            if not s.get('reject'):
-                res, err, _ = _paper_core.apply_sell_atomic(paper_accounts_col, acct_id, pid, s,
-                                                            source='auto', idem_key=idem, proposal_id='auto_' + sid,
-                                                            canonical=canonical)
-                if not err:
-                    _autopilot_set_vis(acct_id, lastTradeAt=now_iso)
-                    paper_accounts_col.update_one({'paperAccountId': acct_id},
-                                                  {'$set': {'marketObservationCursor': mark_ts}})
-                    _autopilot_notify(pid, acct_id, 'Paper Auto Run reduced BTC',
-                                      'Auto-executed a simulated %s. Paper only — no real money.' % canonical['action'])
-        _autopilot_set_vis(acct_id, lastDecisionProcessed=sid)
-        paper_accounts_col.update_one({'paperAccountId': acct_id}, {'$set': {'lastProcessedDecisionSnapshotId': sid}})
 
 
 # =====================================================================
@@ -8834,14 +8701,13 @@ def _autopilot_process_account_multi(acct):
                     rule_can = {'decisionSnapshotId': 'saved_rule', 'decisionId': rule_id,
                                 'decisionInputsHash': '', 'engineVersion': 'ticket_rules',
                                 'mandateVersion': '', 'invalidationPrice': None, 'expiresAt': None}
-                if acct.get('mode') == 'PAPER_AUTOPILOT' and PAPER_AUTOPILOT_ENABLED:
+                if PAPER_EXECUTION_ENABLED:
                     sv = _exit_strat['version'] if _exit_strat else None
                     sh = _exit_strat['contractHash'] if _exit_strat else None
                     result, err, _ = _paper_core.apply_sell_atomic(
                         paper_accounts_col, acct_id, pid, sizing, source='auto_strategy_rule',
                         idem_key='rule:%s:%s:%s' % (lot_id, rule_id, mark_obs[sym]['obsId']),
                         asset=sym, strategy_version=sv, strategy_hash=sh,
-                        required_mode='PAPER_AUTOPILOT' if _exit_strat else None,
                         completed_rule_id=rule_id if (is_partial or rule_id) else None,
                         ticket_id=lot_id)
                     if not err:
@@ -9000,7 +8866,7 @@ def _autopilot_process_account_multi(acct):
     alloc = _paper_portfolio.allocate(acct=acct, equity_info=equity_info,
                                       candidates=alloc_candidates, regime=regime, marks=marks,
                                       holding_scores=holding_scores)
-    funded = {i['symbol'] for i in alloc['intents'] if i.get('action') in ('BUY', 'ADD')}
+    funded = {i['symbol'] for i in alloc['intents'] if i.get('action') == 'BUY'}
     for c in alloc_candidates:
         if c['action'] == 'BUY' and c['symbol'] not in funded:
             _studio_wait_reason(acct, _strat, c['symbol'],
@@ -9016,7 +8882,7 @@ def _autopilot_process_account_multi(acct):
         prof = _paper_profiles.asset_profile(sym, _rk, tier=_tier,
                                               market=(mark_obs.get(sym) or {}).get('execution'))
         idem = 'auto:%s:%s:%s' % (acct_id, sym, sid)
-        if intent['action'] in ('BUY', 'ADD'):
+        if intent['action'] == 'BUY':
             # Allocators can introduce rotation targets, so recheck the
             # actual intent (not merely the candidate) before any fill.
             if not (_asset_caps.entry_allowed(sym, mandate, data_ok=fresh2)[0]
@@ -9067,14 +8933,13 @@ def _autopilot_process_account_multi(acct):
                 _materialize_sds(acct, _strat, can, mark_obs.get(sym), 'BUY', sym,
                                  sizing, sizing.get('trace', []), 'EXECUTED',
                                  rule_results=(actual_rule or {}).get('results'))
-                _paper_complete_rotation(acct_id, sym, intent, sizing)
                 _autopilot_notify(pid, acct_id, 'Paper Auto Run bought %s' % sym,
                                   'Auto-executed a simulated %s on %s. Paper only — no real money.'
                                   % (intent['action'], sym))
                 acct = paper_accounts_col.find_one({'paperAccountId': acct_id}) or acct
-        else:  # EXIT / SELL (reduce-only)
+        else:  # EXIT (ticket-specific full close)
             # Studio promises only canonical SELL (or the protective
-            # invalidation above); allocator rotation cannot add an exit rule.
+            # invalidation above); the allocator cannot add exit rules.
             if acct.get('strategyId') and can.get('action') != 'SELL':
                 continue
             pos = next((p for p in equity_info['positions'] if p['symbol'] == sym and p['qty'] > 0), None)
@@ -9091,9 +8956,6 @@ def _autopilot_process_account_multi(acct):
                 asset=sym, ticket_id=pos.get('ticketId'))
             if not err:
                 traded_syms.add(sym)
-                if intent.get('reason') == 'ROTATION':
-                    _paper_record_rotation_reduce(acct_id, pid, intent, dec_by_sym, rank_meta_top,
-                                                  regime, res)
                 _autopilot_notify(pid, acct_id, 'Paper Auto Run reduced %s' % sym,
                                   'Auto-executed a simulated %s on %s. Paper only — no real money.'
                                   % (intent['action'], sym))
@@ -9125,54 +8987,6 @@ def _persist_multi_cursors(acct_id, processed, newly_seen, cursors):
     paper_accounts_col.update_one(
         {'paperAccountId': acct_id},
         {'$set': {'processedDecisionSnapshots': processed, 'marketObservationCursors': cursors}})
-
-
-def _paper_record_rotation_reduce(acct_id, pid, intent, dec_by_sym, rank_meta, regime, sell_res):
-    """M5.1: open a rotation audit record when Autopilot REDUCES a laggard to fund a
-    stronger opportunity. The buy is a separate later canonical action; this record is
-    completed once the target actually buys (reduce-first, buy-only-after-cash)."""
-    reduced = (intent.get('symbol') or '').upper()
-    target = (intent.get('rotateFor') or '').upper()
-    rs = intent.get('reducedScore'); ts = intent.get('targetScore')
-    headline = ('Autopilot reduced %s and is rotating into %s — %s showed stronger relative '
-                'strength (score %s vs %s), higher opportunity quality and sufficient liquidity.'
-                % (reduced, target, target, _paper_core.dstr(ts, Decimal('0.1')) if ts is not None else '?',
-                   _paper_core.dstr(rs, Decimal('0.1')) if rs is not None else '?'))
-    try:
-        paper_rotations_col.insert_one({
-            '_id': 'rot_' + uuid.uuid4().hex[:16], 'paperAccountId': acct_id, 'ownerId': pid,
-            'reducedAsset': reduced, 'reducedScore': _paper_core.dstr(rs, Decimal('0.1')) if rs is not None else None,
-            'targetAsset': target, 'targetScore': _paper_core.dstr(ts, Decimal('0.1')) if ts is not None else None,
-            'regime': regime,
-            'reducedSnapshotId': (dec_by_sym.get(reduced) or {}).get('decisionSnapshotId'),
-            'targetSnapshotId': (dec_by_sym.get(target) or {}).get('decisionSnapshotId'),
-            'rankingSnapshotId': rank_meta.get('snapshotId'),
-            'primaryReason': 'STRONGER_RELATIVE_STRENGTH',
-            'reducedProceeds': (sell_res or {}).get('proceeds'),
-            'allocationMovedUsd': None, 'newPositionBoundBy': None,
-            'status': 'REDUCED', 'headline': headline,
-            'at': datetime.datetime.utcnow().isoformat(), 'completedAt': None, 'paperOnly': True})
-    except Exception:  # noqa
-        traceback.print_exc()
-
-
-def _paper_complete_rotation(acct_id, target_sym, intent, sizing):
-    """M5.1: complete a pending rotation record once the target opportunity is bought,
-    recording the capital actually moved + which risk limit bound the new position."""
-    try:
-        rec = paper_rotations_col.find_one(
-            {'paperAccountId': acct_id, 'targetAsset': (target_sym or '').upper(), 'status': 'REDUCED'},
-            sort=[('at', -1)])
-        if not rec:
-            return
-        paper_rotations_col.update_one({'_id': rec['_id']}, {'$set': {
-            'allocationMovedUsd': _paper_core.dstr(sizing.get('notional')),
-            'newPositionBoundBy': intent.get('boundBy'),
-            'status': 'COMPLETED', 'completedAt': datetime.datetime.utcnow().isoformat()}})
-    except Exception:  # noqa
-        traceback.print_exc()
-
-
 
 
 
@@ -9373,7 +9187,7 @@ def paper_create_account(payload: dict = Body(...), user: dict = Depends(get_cur
         'name': (payload.get('name') or 'BTC Forward Test')[:60],
         'baseCurrency': (payload.get('baseCurrency') or 'USDC')[:8],
         'mode': mode, 'runtimeState': 'RUNNING', 'mandateId': payload.get('mandateId', 'default'),
-        'mandateVersion': 0, 'executionProfileId': PAPER_EXEC_PROFILE['executionProfileId'],
+        'mandateVersion': 0, 'executionModel': PAPER_EXECUTION_MODEL,
         'version': 0, 'createdAt': datetime.datetime.utcnow().isoformat(), 'archivedAt': None,
         **econ}
     paper_accounts_col.insert_one(dict(acct))
@@ -9387,22 +9201,17 @@ def paper_list_accounts(user: dict = Depends(get_current_user)):
     pid = owner_pid(user)
     out = []
     for a in paper_accounts_col.find({'ownerId': pid}).sort('createdAt', -1):
-        if PAPER_MULTI_ASSET_ENABLED:
-            marks = {}
-            for l in (a.get('lots') or []):
-                if (_paper_core.D(l.get('qty')) or Decimal('0')) > 0:
-                    sym = (l.get('asset') or 'BTC').upper()
-                    mpx, mfresh, _ts = _paper_mark(sym)
-                    marks[sym] = (mpx, mfresh)
-            pe = _paper_portfolio.compute_portfolio_equity(a, marks)
-            out.append({**_paper_acct_public(a), 'equity': pe['equityStr'],
-                        'equityAvailable': pe['available'],
-                        'drawdownPct': _paper_core.dstr(pe['drawdownPct'], _paper_core.PCT_Q) if pe['drawdownPct'] is not None else None,
-                        'openPositions': pe['openPositionsCount']})
-        else:
-            eq = _paper_equity(a)
-            out.append({**_paper_acct_public(a), 'equity': eq['value'], 'equityAvailable': eq['available'],
-                        'drawdownPct': eq['drawdownPct'], 'openPositions': len(_paper_positions(a))})
+        marks = {}
+        for l in (a.get('lots') or []):
+            if (_paper_core.D(l.get('qty')) or Decimal('0')) > 0:
+                sym = (l.get('asset') or 'BTC').upper()
+                mpx, mfresh, _ts = _paper_mark(sym)
+                marks[sym] = (mpx, mfresh)
+        pe = _paper_portfolio.compute_portfolio_equity(a, marks)
+        out.append({**_paper_acct_public(a), 'equity': pe['equityStr'],
+                    'equityAvailable': pe['available'],
+                    'drawdownPct': _paper_core.dstr(pe['drawdownPct'], _paper_core.PCT_Q) if pe['drawdownPct'] is not None else None,
+                    'openPositions': pe['openPositionsCount']})
     return {'status': 'ready', 'accounts': out}
 
 
@@ -9422,98 +9231,77 @@ def _paper_dashboard_payload(a):
     a.pop('_id', None)
     # READ-ONLY: opening/refreshing the dashboard must never trade or re-evaluate.
     # All trading is done by the background worker (_paper_autopilot_worker).
-    if PAPER_MULTI_ASSET_ENABLED:
-        recon = _paper_core.reconcile_multi(a)
-        held_syms = [(l.get('asset') or 'BTC').upper() for l in (a.get('lots') or [])
-                     if (_paper_core.D(l.get('qty')) or Decimal('0')) > 0]
-        marks = {}
-        for sym in held_syms:
-            mpx, mfresh, _ts = _paper_mark(sym)
-            marks[sym] = (mpx, mfresh)
-        pe = _paper_portfolio.compute_portfolio_equity(a, marks)
-        live_ranks, rank_meta_top = _paper_live_ranks()   # M5.1 provenance for the panel
-        lots_by_id = {(l.get('asset') or '').upper(): l for l in (a.get('lots') or [])}
-        positions = []
-        unreal_total = Decimal('0'); unreal_known = True
-        btc_val = Decimal('0')
-        for p in pe['positions']:
-            sym = p['symbol']; lot = lots_by_id.get(sym, {})
-            _rk, _tier, _rmeta = _paper_rank_for(sym, live_ranks, rank_meta_top)
-            if p['unrealized'] is not None:
-                unreal_total += p['unrealized']
-            else:
-                unreal_known = False
-            if sym == 'BTC' and p.get('value') is not None:
-                btc_val = p['value']
-            positions.append({
-                'paperPositionId': lot.get('lotId'), 'asset': sym,
-                'netQuantity': _paper_core.qty_dstr(p['qty']),
-                'averageEntryPrice': str(p['avgEntry']),
-                'costBasis': _paper_core.dstr(lot.get('costBasis')),
-                'entryDecisionSnapshotId': lot.get('entryDecisionSnapshotId'),
-                'tier': _tier, 'marketCapRank': _rmeta.get('rank'),
-                'rankAvailable': _rmeta.get('available'), 'rankSource': _rmeta.get('source'),
-                'invalidationPrice': str(p['invalidation']) if p.get('invalidation') is not None else None,
-                'currentPrice': str(p['markPx']) if p['markFresh'] else None,
-                'unrealizedPnl': _paper_core.dstr(p['unrealized']) if p['unrealized'] is not None else None})
+    recon = _paper_core.reconcile_multi(a)
+    held_syms = [(l.get('asset') or 'BTC').upper() for l in (a.get('lots') or [])
+                 if (_paper_core.D(l.get('qty')) or Decimal('0')) > 0]
+    marks = {}
+    for sym in held_syms:
+        mpx, mfresh, _ts = _paper_mark(sym)
+        marks[sym] = (mpx, mfresh)
+    pe = _paper_portfolio.compute_portfolio_equity(a, marks)
+    live_ranks, rank_meta_top = _paper_live_ranks()
+    lots_by_id = {(l.get('asset') or '').upper(): l for l in (a.get('lots') or [])}
+    positions = []
+    unreal_total = Decimal('0'); unreal_known = True
+    btc_val = Decimal('0')
+    for p in pe['positions']:
+        sym = p['symbol']; lot = lots_by_id.get(sym, {})
+        _rk, _tier, _rmeta = _paper_rank_for(sym, live_ranks, rank_meta_top)
+        if p['unrealized'] is not None:
+            unreal_total += p['unrealized']
+        else:
+            unreal_known = False
+        if sym == 'BTC' and p.get('value') is not None:
+            btc_val = p['value']
+        positions.append({
+            'paperPositionId': lot.get('lotId'), 'asset': sym,
+            'netQuantity': _paper_core.qty_dstr(p['qty']),
+            'averageEntryPrice': str(p['avgEntry']),
+            'costBasis': _paper_core.dstr(lot.get('costBasis')),
+            'entryDecisionSnapshotId': lot.get('entryDecisionSnapshotId'),
+            'tier': _tier, 'marketCapRank': _rmeta.get('rank'),
+            'rankAvailable': _rmeta.get('available'), 'rankSource': _rmeta.get('source'),
+            'invalidationPrice': str(p['invalidation']) if p.get('invalidation') is not None else None,
+            'currentPrice': str(p['markPx']) if p['markFresh'] else None,
+            'unrealizedPnl': _paper_core.dstr(p['unrealized']) if p['unrealized'] is not None else None})
 
-        def _s(v, q=_paper_core.CASH_Q):
-            return _paper_core.dstr(v, q) if v is not None else None
-        eq = {'available': pe['available'],
-              'markStatus': 'CURRENT' if pe['available'] else ('STALE' if held_syms else 'FLAT'),
-              'value': pe['equityStr'], 'cash': _s(pe['cash']),
-              'protectedReserve': _s(pe['protectedReserve']), 'deployableCash': _s(pe['deployableCash']),
-              'realizedPnl': _s(pe['realizedPnl']), 'fees': _s(pe['fees']),
-              'unrealizedPnl': _s(unreal_total) if unreal_known else None,
-              'drawdownPct': _s(pe['drawdownPct'], _paper_core.PCT_Q), 'highWater': _s(pe['highWater'])}
+    def _s(v, q=_paper_core.CASH_Q):
+        return _paper_core.dstr(v, q) if v is not None else None
+    eq = {'available': pe['available'],
+          'markStatus': 'CURRENT' if pe['available'] else ('STALE' if held_syms else 'FLAT'),
+          'value': pe['equityStr'], 'cash': _s(pe['cash']),
+          'protectedReserve': _s(pe['protectedReserve']), 'deployableCash': _s(pe['deployableCash']),
+          'realizedPnl': _s(pe['realizedPnl']),
+          'unrealizedPnl': _s(unreal_total) if unreal_known else None,
+          'drawdownPct': _s(pe['drawdownPct'], _paper_core.PCT_Q), 'highWater': _s(pe['highWater'])}
 
-        # ---- M5.1 portfolio allocation panel (value vs limit) ----
-        try:
-            regime_now = (_albert_deps.regime_col.find_one({'_id': 'albert_regime'}) or {}).get('regime') or 'RANGE'
-        except Exception:  # noqa
-            regime_now = 'RANGE'
-        _prof = _paper_profiles.AGGRESSIVE_EXPERIENCED_V1
-        _band = _paper_profiles.regime_band(regime_now)
-        _equity = pe['equity']
+    # ---- Portfolio allocation panel (value vs limit) ----
+    try:
+        regime_now = (_albert_deps.regime_col.find_one({'_id': 'albert_regime'}) or {}).get('regime') or 'RANGE'
+    except Exception:  # noqa
+        regime_now = 'RANGE'
+    _prof = _paper_profiles.AGGRESSIVE_EXPERIENCED_V1
+    _band = _paper_profiles.regime_band(regime_now)
+    _equity = pe['equity']
 
-        def _pct(v):
-            if _equity is None or _equity <= 0 or v is None:
-                return None
-            return _paper_core.dstr(v / _equity * Decimal('100'), Decimal('0.1'))
-        _protected = (_equity * _prof['protectedUsdcPct'] / Decimal('100')) if _equity is not None else None
-        allocation_panel = {
-            'profile': _prof['profileId'], 'regime': regime_now, 'available': pe['available'],
-            'equity': pe['equityStr'],
-            'deployed': {'pct': _pct(pe['positionValueTotal']), 'limitPct': str(_band['maxDeployPct'])},
-            'btc': {'pct': _pct(btc_val), 'limitPct': str(_prof['btcAllocPct'])},
-            'altcoins': {'pct': _pct(pe['altcoinValueTotal']), 'limitPct': str(_band['altCeilingPct'])},
-            'openRisk': {'pct': _pct(pe['openRiskUsd']), 'usd': _s(pe['openRiskUsd']),
-                         'limitPct': str(_prof['maxCombinedOpenRiskPct']),
-                         'limitUsd': _s(_equity * _prof['maxCombinedOpenRiskPct'] / Decimal('100')) if _equity is not None else None},
-            'positions': {'count': pe['openPositionsCount'], 'limit': _prof['maxConcurrentPositions']},
-            'protectedUsdc': _s(_protected), 'freeUsdc': _s(pe['deployableCash']),
-            'regimeDeployCeilingPct': str(_band['maxDeployPct'])}
-        ranking_snapshot = rank_meta_top
-        rotations = [_paper_jsonify(r) for r in paper_rotations_col.find(
-            {'paperAccountId': acct_id}).sort('at', -1).limit(10)]
-    else:
-        allocation_panel = None; ranking_snapshot = None; rotations = []
-        recon = _paper_core.reconcile(a)
-        eq = _paper_equity(a, persist=False)
-        px = eq['_px']
-        positions = []
-        for p in _paper_positions(a):
-            qty = _paper_core.D(p.get('qty')) or Decimal('0')
-            avg = _paper_core.D(p.get('avgEntry')) or Decimal('0')
-            upnl = (qty * (px - avg)) if (px is not None and eq['_fresh']) else None
-            positions.append({
-                'paperPositionId': p.get('lotId'), 'asset': 'BTC',
-                'netQuantity': _paper_core.qty_dstr(qty), 'averageEntryPrice': _paper_core.dstr(avg),
-                'costBasis': _paper_core.dstr(p.get('costBasis')),
-                'entryDecisionSnapshotId': p.get('entryDecisionSnapshotId'),
-                'invalidationPrice': _paper_core.dstr(p.get('invalidationPrice')) if p.get('invalidationPrice') is not None else None,
-                'currentPrice': _paper_core.dstr(px) if (px is not None and eq['_fresh']) else None,
-                'unrealizedPnl': _paper_core.dstr(upnl) if upnl is not None else None})
+    def _pct(v):
+        if _equity is None or _equity <= 0 or v is None:
+            return None
+        return _paper_core.dstr(v / _equity * Decimal('100'), Decimal('0.1'))
+    _protected = (_equity * _prof['protectedUsdcPct'] / Decimal('100')) if _equity is not None else None
+    allocation_panel = {
+        'profile': _prof['profileId'], 'regime': regime_now, 'available': pe['available'],
+        'equity': pe['equityStr'],
+        'deployed': {'pct': _pct(pe['positionValueTotal']), 'limitPct': str(_band['maxDeployPct'])},
+        'btc': {'pct': _pct(btc_val), 'limitPct': str(_prof['btcAllocPct'])},
+        'altcoins': {'pct': _pct(pe['altcoinValueTotal']), 'limitPct': str(_band['altCeilingPct'])},
+        'openRisk': {'pct': _pct(pe['openRiskUsd']), 'usd': _s(pe['openRiskUsd']),
+                     'limitPct': str(_prof['maxCombinedOpenRiskPct']),
+                     'limitUsd': _s(_equity * _prof['maxCombinedOpenRiskPct'] / Decimal('100')) if _equity is not None else None},
+        'positions': {'count': pe['openPositionsCount'], 'limit': _prof['maxConcurrentPositions']},
+        'protectedUsdc': _s(_protected), 'freeUsdc': _s(pe['deployableCash']),
+        'regimeDeployCeilingPct': str(_band['maxDeployPct'])}
+    ranking_snapshot = rank_meta_top
     # Proposals are retired — skip querying them.
     activity = sorted((a.get('ledger') or []), key=lambda e: e.get('recordedAt') or e.get('effectiveAt') or '',
                       reverse=True)[:20]
@@ -9550,8 +9338,6 @@ def _paper_dashboard_payload(a):
                           'lastReconciledAt': datetime.datetime.utcnow().isoformat() if recon['ok'] else None,
                           'executionEnabled': PAPER_EXECUTION_ENABLED,
                           'primaryPauseReason': pause_reason},
-            'allocation': allocation_panel, 'rankingSnapshot': ranking_snapshot,
-            'rotations': rotations,
             'strategy': _paper_bound_strategy_public(a),
             'autopilot': _paper_autopilot_status(a)}
 
@@ -9778,7 +9564,7 @@ def paper_trade_evidence(position_id: str, user: dict = Depends(get_current_user
             'deepLinks': {'canonicalDecision': f'/?section=briefing&decision={dec_sid}' if dec_sid else None,
                           'strategy': (f'/?section=strategies&strategy={sds.get("strategyId")}' if sds else None),
                           'observation': (sds.get('marketObservationId') if sds else None)},
-            'executionProfile': PAPER_EXEC_PROFILE, 'ledger': _paper_jsonify(fills),
+            'executionModel': PAPER_EXECUTION_MODEL, 'ledger': _paper_jsonify(fills),
             'note': 'Paper simulation evidence — not a live exchange fill.'}
 
 # =====================================================================
@@ -10063,7 +9849,6 @@ def _sop_build(user, requested_account=None):
                 'recentActivity': dash.get('recentActivity') or [],
                 'performance': dash.get('performance') or {},
                 'allocation': dash.get('allocation'),
-                'rotations': dash.get('rotations') or [],
                 'workerHealth': {**wh, 'primaryPauseReason': integ.get('primaryPauseReason'),
                                  'marketData': integ.get('marketData'),
                                  'reconciliation': integ.get('reconciliation')},
@@ -12254,13 +12039,8 @@ def _ask_resolve_entity(pid, etype, eid):
         return None, {'kind': etype, 'available': False, 'reason': 'NO_ID'}
     try:
         if etype in ('proposal', 'pendingproposal'):
-            prop = paper_proposals_col.find_one({'proposalId': eid}, {'_id': 0})
-            acct = _paper_get(prop['paperAccountId'], pid) if prop else None
-            if not prop or not acct:
-                return None, {'kind': 'proposal', 'available': False, 'reason': 'NOT_FOUND_OR_NOT_OWNED'}
-            dto = _paper_proposal_public(prop) if callable(globals().get('_paper_proposal_public')) else prop
-            return dto, _ask_meta('proposal:' + eid, prop.get('createdAt'),
-                                  'FRESH', f'/?section=paper&proposal={eid}')
+            # Proposals are retired — return NOT_FOUND for any proposal lookup.
+            return None, {'kind': 'proposal', 'available': False, 'reason': 'PROPOSALS_RETIRED'}
         if etype in ('position', 'trade', 'fill'):
             a = paper_accounts_col.find_one(
                 {'ownerId': pid, '$or': [{'lots.lotId': eid}, {'closedLots.lotId': eid}]})
@@ -12940,7 +12720,7 @@ def _studio_summary(c):
 def _studio_public(doc):
     return {k: doc.get(k) for k in ('strategyId', 'name', 'version', 'contract',
             'contractHash', 'summary', 'createdAt', 'updatedAt', 'assignedPaperAccountId',
-            'backtestRunId', 'backtestVersion', 'readiness', 'startErrors')} | {'lifecycleState': doc.get('status'), 'paperOnly': True}
+            'backtestRunId', 'backtestVersion', 'readiness', 'startErrors', 'evidence')} | {'lifecycleState': doc.get('status'), 'paperOnly': True}
 
 
 def _studio_idem(pid, key, result=None, expected_hash=None):
@@ -12994,20 +12774,10 @@ def _studio_backtest(contract):
     # Same conservative paper cost model per asset. A one-size BTC fee/spread
     # silently understates altcoin costs and would misrepresent the strategy.
     assets = contract['assets']
+    # Paper simulator uses direct observed-price fills; no fee/friction simulation.
     costs = {}
     for a in assets:
-        item = _asset_caps.candidate(a['symbol']) or {}
-        evidence = (_asset_caps.FROZEN.get('verification') or {}).get(item.get('id'), {})
-        profile = _paper_profiles.asset_profile(a['symbol'], item.get('rank'),
-                                                 market=evidence.get('execution'))
-        costs[a['symbol']] = {
-            'feeBps': float(profile['feeBps']),
-            'spreadBps': float(profile['spreadBps']),
-            'slippageBps': float(profile['slippageBps']),
-            'nature': profile['costNature'],
-            'providerTakerFeeBps': profile['providerTakerFeeBps'],
-            'providerObservedSpreadBps': profile['providerObservedSpreadBps'],
-            'model': profile['model']}
+        costs[a['symbol']] = {'model': 'direct_price', 'note': 'Paper trading: zero fees.'}
     series = {}
     missing = []
     for a in assets:
@@ -13047,12 +12817,8 @@ def _studio_backtest(contract):
     w = {a['symbol']: a['weightPct'] / 100.0 for a in assets}
     px = {s: [series[s][ts] for ts in dates] for s in syms}
     equity = 100000.0
-    def _cost_fraction(sym):
-        cfg = costs[sym]
-        return (cfg['feeBps'] + cfg['spreadBps'] + cfg['slippageBps']) / 10000.0
-    units = {s: (equity * w[s]) / px[s][0] * (1 - _cost_fraction(s)) for s in syms}
-    fees_paid = sum(equity * w[s] * costs[s]['feeBps'] / 10000.0 for s in syms)
-    friction_paid = sum(equity * w[s] * _cost_fraction(s) for s in syms)
+    # Direct-price model: no synthetic friction or fee deduction.
+    units = {s: (equity * w[s]) / px[s][0] for s in syms}
     curve = []
     peak = equity
     max_dd = 0.0
@@ -13063,14 +12829,9 @@ def _studio_backtest(contract):
         peak = max(peak, val)
         dd = (peak - val) / peak * 100 if peak else 0.0
         max_dd = max(max_dd, dd)
-        if i > 0 and i % rebal_every == 0:  # deterministic monthly rebalance
+        if i > 0 and i % rebal_every == 0:
             target = {s: val * w[s] for s in syms}
-            turnover = {s: abs(target[s] - units[s] * px[s][i]) for s in syms}
-            fees_paid += sum(turnover[s] * costs[s]['feeBps'] / 10000.0 for s in syms)
-            friction = sum(turnover[s] * _cost_fraction(s) for s in syms)
-            friction_paid += friction
-            net = val - friction
-            units = {s: (net * w[s]) / px[s][i] for s in syms}
+            units = {s: (val * w[s]) / px[s][i] for s in syms}
     total_ret = round((curve[-1] / 100000.0 - 1) * 100, 2)
     bench_ret = None
     if bench:
@@ -13083,8 +12844,7 @@ def _studio_backtest(contract):
     return {
         'backtestVersion': STUDIO_BACKTEST_VERSION, 'sampleSizeDays': n,
         'totalReturnPct': total_ret, 'benchmarkReturnPct': bench_ret, 'benchmark': 'BTC buy-and-hold',
-        'maxDrawdownPct': round(max_dd, 2), 'feesPaidUsd': round(fees_paid, 2),
-        'estimatedTotalFrictionUsd': round(friction_paid, 2),
+        'maxDrawdownPct': round(max_dd, 2),
         'perAssetExecutionCosts': costs, 'dataSources': sources,
         'dataCoveragePct': coverage,
         'assetsWithData': syms, 'finalEquity': curve[-1], 'startEquity': 100000.0,
@@ -13152,7 +12912,8 @@ STUDIO_DRAFT_SYSTEM = (
     "walletName, startingCash, unsupportedInstructions:[]. "
     "For entrySizing: if user specifies a dollar amount per trade, use FIXED_USD with that amount. "
     "If user specifies a percentage of available cash, use PCT_AVAILABLE_CASH with that pct. "
-    "If not specified, default to PCT_AVAILABLE_CASH with pct=25 (25% of available cash per entry). "
+    "If the user does not specify entry sizing, do NOT invent one — omit entrySizing entirely "
+    "so the server returns 'Needs changes' and the user must decide. "
     "Do not invent, substitute or omit requested coins, weights, wallet amounts or instructions. "
     "The server parses literal price/rolling-24-hour-change/RSI14/SMA20/EMA20/MACD histogram and percentage-exit "
     "rules into a separate typed contract. Do NOT rewrite them into canonical presets. "
@@ -13305,9 +13066,7 @@ def studio_draft(payload: dict = Body(...), user: dict = Depends(get_current_use
             parsed_sizing = _strategy_rules.extract_entry_sizing(goal)
             if parsed_sizing:
                 candidate.setdefault('entrySizing', {}).update(parsed_sizing)
-            # Default entry sizing when neither LLM nor parser provided one.
-            if not candidate.get('entrySizing') or not candidate['entrySizing'].get('method'):
-                candidate['entrySizing'] = {'method': 'PCT_AVAILABLE_CASH', 'pct': 25}
+            # DO NOT default entry sizing — if missing, validation will return "Needs changes."
             # Explicitly supplied wallet name takes precedence; LLM default only when absent.
             candidate['walletName'] = requested_wallet or str(candidate.get('walletName') or (candidate.get('name') or 'New strategy') + ' wallet')[:60]
             candidate['startingCash'] = requested_cash or candidate.get('startingCash') or '100000.00'
@@ -13407,9 +13166,11 @@ def studio_revise_draft(payload: dict = Body(...), user: dict = Depends(get_curr
     # Preserve immutable fields from the original contract.
     candidate['walletName'] = current_contract.get('walletName')
     candidate['startingCash'] = current_contract.get('startingCash')
-    # Default entry sizing when neither LLM nor parser provided one.
+    # Default entry sizing when neither LLM nor parser provided one: keep original.
     if not candidate.get('entrySizing') or not candidate['entrySizing'].get('method'):
-        candidate['entrySizing'] = current_contract.get('entrySizing') or {'method': 'PCT_AVAILABLE_CASH', 'pct': 25}
+        if current_contract.get('entrySizing'):
+            candidate['entrySizing'] = current_contract['entrySizing']
+        # else: leave missing — validation will flag it as "Needs changes"
     # Preserve portfolio goals unless explicitly revised.
     if not candidate.get('portfolioGoals') and current_contract.get('portfolioGoals'):
         candidate['portfolioGoals'] = current_contract['portfolioGoals']
@@ -13497,18 +13258,17 @@ def studio_save(payload: dict = Body(...), user: dict = Depends(get_current_user
             aid = acct['paperAccountId']
             paper_accounts_col.update_one({'paperAccountId': aid, 'ownerId': pid, 'runtimeState': 'RUNNING'},
                                           {'$set': {'runtimeState': 'PAUSED_BY_USER'}, '$inc': {'version': 1}})
-            superseded = paper_proposals_col.update_many(
-                {'paperAccountId': aid, 'ownerId': pid, 'strategyId': sid, 'status': 'CREATED'},
-                {'$set': {'status': 'SUPERSEDED', 'supersededAt': now}})
-            if superseded.modified_count:
-                _paper_ledger_add(aid, 'PROPOSALS_SUPERSEDED', 'strategy', sid, None, None,
-                                  f'{superseded.modified_count} unexecuted proposal(s) superseded by version {version}.')
             strategy_contracts_col.update_many({'ownerId': pid, 'strategyId': sid,
                                                 '_id': {'$ne': parent['_id']}}, {'$set': {'latest': False}})
     # Every version is immutable; only one reviewed version drives this wallet.
     # For revisions, use the wallet-validated start_errors; for new strategies, use the outer ones.
     final_start_errors = list(_st_err)
     readiness = 'ready' if not final_start_errors else 'needs_changes'
+    # Assess and persist evidence availability for confidence grounding.
+    asset_syms = [a['symbol'] for a in c.get('assets', [])]
+    evidence = _assess_strategy_evidence(asset_syms)
+    now_evidence = datetime.datetime.utcnow().isoformat()
+    evidence_record = {sym: {**cats, 'asOf': now_evidence} for sym, cats in evidence.items()}
     doc = {'_id': f'{sid}:v{version}', 'strategyId': sid, 'ownerId': pid,
            'name': str(body.get('name') or draft.get('name') or 'Untitled')[:80],
            'status': 'REVIEWED', 'readiness': readiness,
@@ -13516,7 +13276,7 @@ def studio_save(payload: dict = Body(...), user: dict = Depends(get_current_user
            'version': version, 'contract': c, 'contractHash': chash,
            'summary': _studio_summary(c), 'createdAt': now, 'updatedAt': now,
            'assignedPaperAccountId': (acct or {}).get('paperAccountId'),
-           'proposalId': str(body.get('proposalId') or draft.get('proposalId') or '')[:40],
+           'evidence': evidence_record,
            'backtestRunId': None, 'backtestVersion': None, 'latest': True}
     try:
         strategy_contracts_col.insert_one(dict(doc))
@@ -13779,7 +13539,7 @@ def _paper_new_wallet_for_strategy(pid, doc, _acct_mode=None):
     acct = {'paperAccountId': 'pa_' + uuid.uuid4().hex[:12], 'ownerId': pid,
             'name': name, 'baseCurrency': 'USDC',
             'runtimeState': 'RUNNING', 'mandateId': 'default',
-            'mandateVersion': 0, 'executionProfileId': PAPER_EXEC_PROFILE['executionProfileId'],
+            'mandateVersion': 0, 'executionModel': PAPER_EXECUTION_MODEL,
             'version': 0, 'createdAt': datetime.datetime.utcnow().isoformat(), 'archivedAt': None,
             'strategyId': doc['strategyId'], 'strategyVersion': doc['version'],
             'strategyContractHash': doc['contractHash'], 'dedicatedToStrategy': True, **econ}
@@ -13936,13 +13696,6 @@ def studio_stop_paper(sid: str, payload: dict = Body(default={}),
     result = {'status': 'ready', 'command': 'stop-paper', **_studio_public(fresh),
               **_strategy_paper_public(fresh, pid, acct)}
     return _studio_idem(pid, key, result)
-
-
-@app.post('/api/v1/albert/studio/strategies/{sid}/approval-mode')
-def studio_set_approval_mode(sid: str, payload: dict = Body(default={}),
-                             user: dict = Depends(get_current_user)):
-    """RETIRED — trade approval modes no longer exist. Returns 410 Gone."""
-    raise HTTPException(status_code=410, detail='Trade approval modes are retired. Use Start Auto Run / Stop Auto Run.')
 
 
 
