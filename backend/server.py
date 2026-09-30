@@ -5920,6 +5920,586 @@ def _lightweight_reassess():
 _analysis_jobs = AnalysisJobs(misc_col, _ANALYSIS_POOL)
 
 
+# --------------- Engine adapter: Price & Candles ---------------
+def _price_candle_work(symbol='BTC'):
+    """Refresh OHLCV candle data and cache the latest close + features df."""
+    try:
+        df, source = fetch_ohlcv()
+        if df is None or len(df) < 30:
+            return {'status': 'failed', 'message': 'Could not fetch OHLCV candles.'}
+        df = build_features(df)
+        df = df.dropna().reset_index(drop=True)
+        live_row = df.iloc[[-1]].copy()
+        last_close = float(live_row['close'].iloc[0])
+        as_of = live_row['timestamp'].iloc[0].strftime('%Y-%m-%d')
+        # Cache for sub-steps
+        _reassessment_cache.update(df=df, source=source, live_row=live_row, last_close=last_close,
+                                   feats=live_row.iloc[0], as_of=as_of, ready=False, doc=None, ts=time.time())
+        return {'status': 'succeeded', 'dataObservedAt': as_of,
+                'message': f'{symbol} candles refreshed. Last close ${last_close:,.2f} ({as_of}).'}
+    except Exception:
+        traceback.print_exc()
+        return {'status': 'failed', 'message': 'Candle data fetch failed.'}
+
+
+# --------------- Engine adapter: On-chain metrics ---------------
+def _onchain_metrics_work(symbol='BTC'):
+    """Refresh on-chain valuation metrics (MVRV, SOPR, active addresses, Fear & Greed)."""
+    try:
+        sm = build_smart_money_engine(None) if symbol == 'BTC' else None
+        doc_id = 'btc' if symbol == 'BTC' else f'onchain_{symbol}'
+        existing = onchain_col.find_one({'_id': doc_id}) or {}
+        onchain_col.update_one({'_id': doc_id}, {'$set': {
+            'symbol': symbol, 'fetched_ts': time.time(),
+            'fetched_at': datetime.datetime.utcnow().isoformat(),
+            'smart_money': sm, 'institutional': existing.get('institutional')}}, upsert=True)
+        metrics = [m for m in (sm or {}).get('metrics', [])]
+        observed = [m for m in metrics if m.get('value') is not None and m.get('source')]
+        return {'status': 'succeeded' if observed else 'partial' if sm else 'failed',
+                'dataObservedAt': min((str(m['as_of']) for m in observed), default=None),
+                'message': f'{len(observed)} on-chain metrics have sourced observations.'}
+    except Exception:
+        traceback.print_exc()
+        return {'status': 'failed', 'message': 'On-chain metrics refresh failed.'}
+
+
+# --------------- Engine adapter: Derivatives & leverage ---------------
+def _derivatives_work(symbol='BTC'):
+    """Refresh derivatives/leverage panel (funding, OI, taker ratio, ETF summary)."""
+    try:
+        dv = build_derivatives_engine(symbol)
+        doc_id = 'btc' if symbol == 'BTC' else f'onchain_{symbol}'
+        existing = onchain_col.find_one({'_id': doc_id}) or {}
+        onchain_col.update_one({'_id': doc_id}, {'$set': {
+            'symbol': symbol, 'fetched_ts': time.time(),
+            'fetched_at': datetime.datetime.utcnow().isoformat(),
+            'smart_money': existing.get('smart_money'), 'institutional': dv}}, upsert=True)
+        metrics = [m for m in (dv or {}).get('metrics', [])]
+        observed = [m for m in metrics if m.get('value') is not None and m.get('source')]
+        return {'status': 'succeeded' if observed else 'partial' if dv else 'failed',
+                'dataObservedAt': min((str(m['as_of']) for m in observed), default=None),
+                'message': f'{len(observed)} derivatives metrics have sourced observations.'}
+    except Exception:
+        traceback.print_exc()
+        return {'status': 'failed', 'message': 'Derivatives data refresh failed.'}
+
+
+# --------------- Engine adapter: ETF flows ---------------
+def _refresh_etf_work():
+    """Synchronous ETF flow refresh with explicit outcome reporting."""
+    try:
+        data = _fetch_tftc_etf() or _parse_bitbo_etf()
+        if data and data.get('daily'):
+            data['_id'] = 'btc'
+            data['fetched_ts'] = time.time()
+            data['fetched_at'] = datetime.datetime.utcnow().isoformat()
+            etf_col.update_one({'_id': 'btc'}, {'$set': data}, upsert=True)
+            latest = data['daily'][0] if data['daily'] else {}
+            return {'status': 'succeeded',
+                    'dataObservedAt': latest.get('date'),
+                    'publishedAt': data['fetched_at'],
+                    'message': f'{len(data["daily"])} days of ETF flow data refreshed. Latest: {latest.get("date")}.'}
+        return {'status': 'failed', 'message': 'No ETF flow data could be fetched from any source.'}
+    except Exception:
+        traceback.print_exc()
+        return {'status': 'failed', 'message': 'ETF flow refresh failed.'}
+
+
+# --------------- Engine adapter: Whale-wallet balances ---------------
+def _refresh_whales_work():
+    """Synchronous whale balance refresh with explicit outcome reporting."""
+    try:
+        if _whale_state.get('running'):
+            return {'status': 'busy', 'message': 'Whale balance refresh is already running.'}
+        _whale_state['running'] = True
+        try:
+            today = datetime.date.today().isoformat()
+            pj = _engine_get('https://api.coingecko.com/api/v3/simple/price',
+                             params={'ids': 'bitcoin', 'vs_currencies': 'usd'})
+            price = None
+            try:
+                price = float(pj['bitcoin']['usd'])
+            except Exception:
+                pass
+            refreshed = 0
+            for w in WHALE_SEED:
+                b = _addr_balance(w['address'])
+                if not b:
+                    continue
+                bal = round(b['balance'], 4)
+                doc = whale_col.find_one({'_id': w['address']}) or {}
+                hist = doc.get('history') or []
+                prev_bal = hist[-1]['bal'] if hist else None
+                if not hist or hist[-1]['d'] != today:
+                    if prev_bal is not None and abs(bal - prev_bal) >= 1000:
+                        _fire_whale_alert(w, round(bal - prev_bal))
+                    hist.append({'d': today, 'bal': bal})
+                    hist = hist[-90:]
+                else:
+                    hist[-1]['bal'] = bal
+                whale_col.update_one({'_id': w['address']}, {'$set': {
+                    'address': w['address'], 'name': w['name'], 'category': w['category'],
+                    'balance': bal, 'tx_count': b.get('tx_count'), 'history': hist,
+                    'updated': datetime.datetime.utcnow().isoformat()}}, upsert=True)
+                refreshed += 1
+                time.sleep(0.5)
+            whale_col.update_one({'_id': '_meta'}, {'$set': {
+                'fetched_ts': time.time(), 'price': price,
+                'fetched_at': datetime.datetime.utcnow().isoformat()}}, upsert=True)
+            return {'status': 'succeeded' if refreshed else 'failed',
+                    'dataObservedAt': today, 'publishedAt': datetime.datetime.utcnow().isoformat(),
+                    'message': f'{refreshed}/{len(WHALE_SEED)} whale entities refreshed.'}
+        finally:
+            _whale_state['running'] = False
+    except Exception:
+        traceback.print_exc()
+        return {'status': 'failed', 'message': 'Whale balance refresh failed.'}
+
+
+# --------------- Engine adapter: Whale-transaction feed ---------------
+def _refresh_whale_tx_work():
+    """Synchronous whale-transaction feed refresh with explicit outcome reporting."""
+    try:
+        if _whale_tx_state.get('running'):
+            return {'status': 'busy', 'message': 'Whale TX feed refresh is already running.'}
+        _whale_tx_state['running'] = True
+        try:
+            data = _build_whale_tx_feed(50.0)
+            data['_id'] = 'feed'
+            data['fetched_ts'] = time.time()
+            whale_tx_col.update_one({'_id': 'feed'}, {'$set': data}, upsert=True)
+            now = time.time()
+            for e in (data.get('feed') or []):
+                if (e.get('amount') or 0) >= WHALE_TX_ALERT_MIN and e.get('time') \
+                   and (now - e['time']) <= WHALE_TX_ALERT_MAX_AGE:
+                    _fire_whale_tx_alert(e)
+            count = len(data.get('feed') or [])
+            return {'status': 'succeeded' if count else 'partial',
+                    'publishedAt': datetime.datetime.utcnow().isoformat(),
+                    'message': f'{count} whale transactions in the feed.'}
+        finally:
+            _whale_tx_state['running'] = False
+    except Exception:
+        traceback.print_exc()
+        return {'status': 'failed', 'message': 'Whale transaction feed refresh failed.'}
+
+
+# =====================================================================
+# CORE NON-TRAINING REASSESSMENT — chart, forecasts, regime, drivers,
+# opportunity scoring, decision and risk. Runs the full pipeline using
+# the EXISTING trained model signal (never retrains).
+# =====================================================================
+_reassessment_cache = {'df': None, 'source': None, 'live_row': None, 'last_close': None,
+                       'feats': None, 'as_of': None, 'ready': False, 'doc': None, 'ts': 0}
+
+
+def _run_core_reassessment():
+    """Internal: execute the full non-training reassessment once, cache the result.
+    Sub-steps read their portion from the cache.
+    """
+    if _reassessment_cache.get('ready') and (time.time() - _reassessment_cache.get('ts', 0)) < 60:
+        return _reassessment_cache['doc']
+
+    df = _reassessment_cache.get('df')
+    source = _reassessment_cache.get('source')
+    live_row = _reassessment_cache.get('live_row')
+    last_close = _reassessment_cache.get('last_close')
+    feats = _reassessment_cache.get('feats')
+
+    if df is None or live_row is None:
+        df, source = fetch_ohlcv()
+        df = build_features(df)
+        df = df.dropna().reset_index(drop=True)
+        live_row = df.iloc[[-1]].copy()
+        last_close = float(live_row['close'].iloc[0])
+        feats = live_row.iloc[0]
+
+    prev_close = float(df['close'].iloc[-2]) if len(df) > 1 else last_close
+    day_change = round((last_close - prev_close) / prev_close * 100, 2) if prev_close else 0
+
+    # Read last ML signal (NOT retraining)
+    prev_run = runs_col.find_one(sort=[('created_at', -1)]) or {}
+    pred = 1 if prev_run.get('signal') == 'UP' else 0
+    confidence = prev_run.get('confidence', 50.0)
+
+    # --- Quant Score, Market Regime, multi-horizon forecasts ---
+    quant = compute_quant_analysis(df, feats, last_close, live_row['timestamp'].iloc[0])
+
+    # --- Chart intelligence ---
+    chart = None
+    try:
+        chart = compute_chart_intelligence(df)
+    except Exception:
+        traceback.print_exc()
+
+    # --- Cycle context, dominance ---
+    cycle = dominance = market_intel = None
+    try:
+        cycle = compute_cycle_context(last_close, quant['regime']['regime'])
+    except Exception:
+        traceback.print_exc()
+    try:
+        dominance = fetch_dominance(day_change)
+    except Exception:
+        traceback.print_exc()
+    try:
+        market_intel = build_market_intel(quant, quant['forecasts'], cycle, dominance, chart)
+    except Exception:
+        traceback.print_exc()
+
+    # --- Cross-market correlations, Policy & Liquidity ---
+    crossmarket = policy = None
+    try:
+        crossmarket, _raw = compute_crossmarket()
+        policy = compute_policy(_raw)
+    except Exception:
+        traceback.print_exc()
+
+    # --- News signal + forecast link ---
+    news_sig = news_forecast_link = None
+    try:
+        news_doc = news_col.find_one(sort=[('created_at', -1)])
+        news_sig = compute_news_signal(news_doc)
+        news_forecast_link = apply_news_link(quant['forecasts'], news_sig)
+    except Exception:
+        traceback.print_exc()
+    all_outlook = list(quant['forecasts']) + list(quant.get('long_outlook', []))
+
+    # --- Dynamic Regime-Switching engine (Gaussian HMM) ---
+    regime_analysis = None
+    try:
+        regime_analysis = regime_engine.analyze(df, regime_col=regime_col)
+    except Exception:
+        traceback.print_exc()
+    dyn_weights = (regime_analysis or {}).get('active_weights') if regime_analysis else None
+
+    # --- Decision engine ---
+    decision = None
+    try:
+        decision = compute_decision_engine(quant, all_outlook, policy, news_sig, chart, cycle,
+                                           dominance, weights=dyn_weights, regime_info=regime_analysis)
+        if regime_analysis and regime_analysis.get('available') and decision:
+            try:
+                bands = regime_engine.recompute_confidence(
+                    regime_analysis['current_regime'], decision['overall_score'],
+                    regime_analysis.get('realized_vol_daily_pct', 2.0))
+                if bands:
+                    regime_analysis['confidence_24h'] = bands
+                    decision['regime_engine'] = regime_analysis
+            except Exception:
+                traceback.print_exc()
+    except Exception:
+        traceback.print_exc()
+
+    # --- Data Trust Layer ---
+    data_health = None
+    try:
+        news_doc_latest = news_col.find_one(sort=[('created_at', -1)])
+        data_health = compute_data_health(source, crossmarket, policy, dominance, news_doc_latest)
+        apply_data_fade(decision, data_health)
+    except Exception:
+        traceback.print_exc()
+
+    # --- Scenarios block ---
+    try:
+        if decision is not None:
+            decision['scenarios_block'] = compute_scenarios(chart, decision, last_close, feats, regime_analysis)
+    except Exception:
+        traceback.print_exc()
+
+    # --- Event Calendar ---
+    event_calendar = None
+    try:
+        event_calendar = compute_event_calendar(cycle, policy)
+    except Exception:
+        traceback.print_exc()
+
+    # --- Risk Engine ---
+    risk = None
+    try:
+        risk = compute_risk_engine(quant, chart, decision, data_health, event_calendar, last_close, feats,
+                                   observed_at=_observation_time(live_row['timestamp'].iloc[0].isoformat()))
+    except Exception:
+        traceback.print_exc()
+
+    # --- On-chain panels (already refreshed by earlier steps) ---
+    smart_money = institutional = None
+    try:
+        _panels = get_onchain_panels()
+        smart_money = _panel_real_only(_panels.get('smart_money'), 'smart_money')
+        institutional = _panel_real_only(_panels.get('institutional'), 'institutional')
+    except Exception:
+        traceback.print_exc()
+
+    # --- Drift monitor ---
+    drift = None
+    try:
+        live_feats_map = {c: float(feats[c]) for c in FEATURE_COLS if c in feats}
+        drift = drift_monitor.assess(
+            df[FEATURE_COLS], FEATURE_COLS, feature_meta=FEATURE_META,
+            data_health=data_health, live_feats=live_feats_map,
+            ml_signal=('UP' if pred == 1 else 'DOWN'), ml_confidence=confidence)
+        if drift and drift.get('circuit_breaker') and decision is not None:
+            ov = decision.get('overall_score')
+            if ov is not None:
+                decision['overall_score_pre_breaker'] = ov
+                decision['overall_score'] = max(0, min(100, int(round(50 + (ov - 50) * 0.5))))
+                decision['label'] = _quant_score_label(decision['overall_score'])
+            decision['circuit_breaker'] = {
+                'active': True, 'model_mode': 'rule_based', 'confidence_level': 'Low',
+                'reasons': drift.get('reasons'), 'fallback_signal': drift.get('fallback_signal'),
+                'max_psi': drift.get('max_psi'),
+                'data_completeness_pct': drift.get('data_completeness_pct')}
+            decision['confidence_level'] = 'Low'
+        elif decision is not None:
+            decision['confidence_level'] = (drift or {}).get('confidence_level', 'Normal')
+            decision['circuit_breaker'] = {'active': False, 'model_mode': 'ml',
+                                           'confidence_level': (drift or {}).get('confidence_level', 'Normal')}
+    except Exception:
+        traceback.print_exc()
+
+    # --- CryptoMarkAI prediction core (1W–5Y) ---
+    bitmark = None
+    try:
+        bitmark = compute_bitmark(quant, cycle, last_close, trigger='scheduled')
+    except Exception:
+        traceback.print_exc()
+
+    # --- Cost basis + leverage snapshot ---
+    cost_basis = None
+    try:
+        def _vwap_reas(dd, nbars):
+            tail = dd.tail(nbars)
+            vol = tail['volume'].astype(float)
+            tot = float(vol.sum())
+            return float((tail['close'].astype(float) * vol).sum() / tot) if tot > 0 else float(tail['close'].astype(float).mean())
+        sth = round(_vwap_reas(df, 155), 2)
+        lth = round(_vwap_reas(df, 365), 2)
+        cost_basis = {'sth': sth, 'lth': lth, 'sth_window': 155, 'lth_window': 365,
+                      'price': round(last_close, 2), 'sth_reclaimed': bool(last_close >= sth),
+                      'lth_reclaimed': bool(last_close >= lth),
+                      'method': 'Volume-weighted average price proxy (keyless).'}
+    except Exception:
+        traceback.print_exc()
+    leverage_snapshot = None
+    try:
+        lv = get_leverage('4H') or {}
+        leverage_snapshot = {
+            'realOnlyVersion': 1,
+            'funding_rate': (lv.get('funding') or {}).get('rate'),
+            'funding_bias': (lv.get('funding') or {}).get('bias'),
+            'oi_change_tf_pct': (lv.get('open_interest') or {}).get('change_tf_pct'),
+            'oi_state': (lv.get('open_interest') or {}).get('state'),
+            'squeeze': None}
+    except Exception:
+        traceback.print_exc()
+
+    as_of = live_row['timestamp'].iloc[0].strftime('%Y-%m-%d')
+    doc = {
+        'id': str(uuid.uuid4()),
+        'created_at': datetime.datetime.utcnow().isoformat(),
+        'as_of': as_of, 'data_source': source, 'pair': 'BTC/USD',
+        'last_close': round(last_close, 2), 'day_change_pct': day_change,
+        'signal': prev_run.get('signal', 'UP'), 'confidence': confidence,
+        'prob_up': prev_run.get('prob_up', 50), 'prob_down': prev_run.get('prob_down', 50),
+        'overall_accuracy': prev_run.get('overall_accuracy', 0),
+        'quant_score': quant['quant_score'], 'quant_label': quant['quant_label'],
+        'quant_breakdown': quant['quant_breakdown'], 'regime': quant['regime'],
+        'forecasts': quant['forecasts'], 'long_outlook': quant.get('long_outlook', []),
+        'factors': quant['factors'], 'decision': decision,
+        'news_forecast_link': news_forecast_link, 'regime_analysis': regime_analysis,
+        'drift': drift, 'cost_basis': cost_basis, 'leverage_snapshot': leverage_snapshot,
+        'data_health': data_health, 'event_calendar': event_calendar, 'risk': risk,
+        'smart_money': smart_money, 'institutional': institutional, 'bitmark': bitmark,
+        'cycle': cycle, 'dominance': dominance, 'chart': chart, 'market_intel': market_intel,
+        'crossmarket': crossmarket, 'policy': policy, 'reassessment': True,
+        # Carry forward existing model artifacts so the dashboard stays populated
+        'cv_folds': prev_run.get('cv_folds', []), 'cv_mean': prev_run.get('cv_mean', 0),
+        'importances': prev_run.get('importances', []),
+        'performance': prev_run.get('performance', []),
+        'features': prev_run.get('features', []),
+        'n_samples': prev_run.get('n_samples', 0),
+        'history_days': prev_run.get('history_days', 0),
+        'first_date': prev_run.get('first_date'),
+        'predict_for_date': prev_run.get('predict_for_date'),
+        'scoreboard': prev_run.get('scoreboard'),
+        'trades': prev_run.get('trades', []),
+        'live_record': prev_run.get('live_record'),
+    }
+
+    # Smart alerts
+    try:
+        prev_doc = runs_col.find_one(sort=[('created_at', -1)])
+        compute_smart_alerts(doc, prev_doc)
+    except Exception:
+        traceback.print_exc()
+    doc['smart_alerts'] = get_smart_alerts()
+
+    to_store = dict(doc)
+    to_store['_id'] = doc['id']
+    runs_col.insert_one(to_store)
+
+    _reassessment_cache['doc'] = doc
+    _reassessment_cache['ready'] = True
+    _reassessment_cache['ts'] = time.time()
+    return doc
+
+
+def _chart_crossmarket_work():
+    """Cross-market correlations and chart pattern observations."""
+    try:
+        _reassessment_cache['ready'] = False  # Force fresh run
+        doc = _run_core_reassessment()
+        chart = doc.get('chart')
+        crossmarket = doc.get('crossmarket')
+        status = 'succeeded' if (chart and crossmarket) else 'partial' if (chart or crossmarket) else 'failed'
+        parts = []
+        if chart:
+            patterns = chart.get('patterns') or []
+            parts.append(f'{len(patterns)} chart pattern(s)')
+        if crossmarket:
+            parts.append('cross-market correlations computed')
+        return {'status': status, 'dataObservedAt': doc.get('as_of'),
+                'message': '; '.join(parts) + '.' if parts else 'No chart or cross-market data available.'}
+    except Exception:
+        traceback.print_exc()
+        return {'status': 'failed', 'message': 'Chart and cross-market observations failed.'}
+
+
+def _quant_forecasts_work():
+    """Fixed-model quantitative forecasts (EMA/momentum-based, not ML-trained)."""
+    try:
+        doc = _run_core_reassessment()
+        forecasts = doc.get('forecasts', [])
+        long_outlook = doc.get('long_outlook', [])
+        count = len(forecasts) + len(long_outlook)
+        if count:
+            return {'status': 'succeeded', 'dataObservedAt': doc.get('as_of'),
+                    'message': f'{count} horizon forecasts published (fixed-model, no retraining).'}
+        return {'status': 'failed', 'message': 'No quantitative forecasts could be computed.'}
+    except Exception:
+        traceback.print_exc()
+        return {'status': 'failed', 'message': 'Quantitative forecast computation failed.'}
+
+
+def _market_regime_work():
+    """Market regime identification (HMM-based regime switching)."""
+    try:
+        doc = _run_core_reassessment()
+        regime = doc.get('regime') or {}
+        regime_analysis = doc.get('regime_analysis')
+        if regime.get('regime'):
+            parts = [f"Regime: {regime['regime']}"]
+            if regime_analysis and regime_analysis.get('available'):
+                parts.append(f"confidence: {regime_analysis.get('current_regime', '')}")
+            return {'status': 'succeeded', 'dataObservedAt': doc.get('as_of'),
+                    'message': '. '.join(parts) + '.'}
+        return {'status': 'partial', 'message': 'Regime data incomplete.'}
+    except Exception:
+        traceback.print_exc()
+        return {'status': 'failed', 'message': 'Market regime computation failed.'}
+
+
+def _market_drivers_work():
+    """Market-driver analysis (cycle, dominance, news-forecast link)."""
+    try:
+        doc = _run_core_reassessment()
+        cycle = doc.get('cycle')
+        dominance = doc.get('dominance')
+        nfl = doc.get('news_forecast_link')
+        parts = []
+        if cycle:
+            parts.append(f"cycle phase: {cycle.get('phase', 'unknown')}")
+        if dominance:
+            parts.append(f"BTC dominance: {dominance.get('btc_pct', '?')}%")
+        if nfl:
+            parts.append('news-forecast link computed')
+        if parts:
+            return {'status': 'succeeded', 'dataObservedAt': doc.get('as_of'),
+                    'message': 'Drivers: ' + ', '.join(parts) + '.'}
+        return {'status': 'partial', 'message': 'Market-driver analysis produced partial results.'}
+    except Exception:
+        traceback.print_exc()
+        return {'status': 'failed', 'message': 'Market-driver analysis failed.'}
+
+
+def _opportunity_scoring_work():
+    """Opportunity scoring (quant score + factor analysis)."""
+    try:
+        doc = _run_core_reassessment()
+        qs = doc.get('quant_score')
+        ql = doc.get('quant_label')
+        if qs is not None:
+            return {'status': 'succeeded', 'dataObservedAt': doc.get('as_of'),
+                    'message': f'Quant score: {qs} ({ql}). Factor analysis published.'}
+        return {'status': 'failed', 'message': 'Opportunity scoring could not be computed.'}
+    except Exception:
+        traceback.print_exc()
+        return {'status': 'failed', 'message': 'Opportunity scoring failed.'}
+
+
+def _decision_risk_work():
+    """Decision engine and risk outputs."""
+    try:
+        doc = _run_core_reassessment()
+        decision = doc.get('decision')
+        risk = doc.get('risk')
+        parts = []
+        if decision:
+            parts.append(f"Decision: {decision.get('label', '')} (score {decision.get('overall_score', '?')})")
+        if risk:
+            parts.append(f"risk level: {risk.get('overall_risk_level', '?')}")
+        if parts:
+            return {'status': 'succeeded', 'dataObservedAt': doc.get('as_of'),
+                    'message': '. '.join(parts) + '.'}
+        return {'status': 'partial', 'message': 'Decision or risk outputs are incomplete.'}
+    except Exception:
+        traceback.print_exc()
+        return {'status': 'failed', 'message': 'Decision and risk computation failed.'}
+
+
+# --------------- Engine adapter: Current Scenario Outlook ---------------
+def _current_scenario_work():
+    """Publish current BTC scenario bands for P7D, P14D, P30D using EXISTING
+    fixed logic. No evaluation, no retraining, no parameter changes."""
+    try:
+        results = []
+        for horizon in ('P7D', 'P14D', 'P30D'):
+            try:
+                band = _scenario_band_summary('BTC', horizon)
+                available = bool(band and band.get('available'))
+                results.append({'horizon': horizon, 'available': available,
+                                'bear': band.get('bear') if available else None,
+                                'base': band.get('base') if available else None,
+                                'bull': band.get('bull') if available else None})
+            except Exception:
+                results.append({'horizon': horizon, 'available': False})
+        published = [r for r in results if r['available']]
+        return {'status': 'succeeded' if published else 'partial',
+                'publishedAt': datetime.datetime.utcnow().isoformat(),
+                'message': f'{len(published)}/{len(results)} scenario horizons published.' +
+                           (' Bands: ' + ', '.join(f"{r['horizon']}" for r in published) + '.' if published else '')}
+    except Exception:
+        traceback.print_exc()
+        return {'status': 'failed', 'message': 'Current scenario outlook could not be published.'}
+
+
+# --------------- Engine adapter: Paper worker health ---------------
+def _paper_health_work():
+    """Read-only health check of the paper autopilot worker. Does NOT trigger any trades."""
+    try:
+        job = _scheduler.get_job('paper_autopilot') if _scheduler else None
+        if not job:
+            return {'status': 'skipped', 'message': 'Paper autopilot worker is not registered.'}
+        next_run = job.next_run_time
+        pending = job.pending
+        return {'status': 'succeeded',
+                'message': f'Paper autopilot is registered. Next cycle: {next_run}. Pending: {pending}.'}
+    except Exception:
+        traceback.print_exc()
+        return {'status': 'partial', 'message': 'Could not read paper autopilot status.'}
+
+
 # --------------- Engine adapter: Prediction Ledger ---------------
 def _prediction_ledger_work():
     """Synchronous grading: resolve matured forecasts against current closed candles
@@ -6099,22 +6679,54 @@ def _alert_engine_work():
 
 
 def _analysis_steps(scope, symbols, pid):
+    """Build the ordered step list for a tracked analysis refresh.
+    Full scope covers 19 areas (Instruction 2). Each step appears in the result."""
     steps = []
     if scope in ('market', 'full'):
         for sym in symbols:
-            steps.append(('market_' + sym, sym + ' market feeds', lambda sym=sym: _refresh_onchain_work(sym)))
+            # 1. Current prices and closed candles
+            steps.append(('prices_' + sym, sym + ' prices & candles', lambda sym=sym: _price_candle_work(sym)))
+            # 2. On-chain metrics (MVRV, SOPR, active addresses)
+            steps.append(('onchain_' + sym, sym + ' on-chain metrics', lambda sym=sym: _onchain_metrics_work(sym)))
+            # 3. Derivatives and leverage data
+            steps.append(('derivatives_' + sym, sym + ' derivatives & leverage', lambda sym=sym: _derivatives_work(sym)))
+        # 4. ETF flows
+        steps.append(('etf_flows', 'ETF flows', _refresh_etf_work))
+        # 5. Whale-wallet balances
+        steps.append(('whale_balances', 'Whale-wallet balances', _refresh_whales_work))
+        # 6. Whale-transaction feed
+        steps.append(('whale_transactions', 'Whale-transaction feed', _refresh_whale_tx_work))
     if scope in ('news', 'full'):
-        steps.append(('news', 'News', _news_refresh_work))
+        # 7. News and market-impact data
+        steps.append(('news', 'News & market-impact', _news_refresh_work))
     if scope in ('engine', 'full'):
-        steps.append(('engine_snapshot', 'Sector and alert evidence snapshot', _engine_snapshot_work))
-        # Each engine runs its own synchronous work function with an explicit outcome.
-        steps.append(('prediction_ledger', 'Prediction Ledger', _prediction_ledger_work))
-        steps.append(('scenario_evaluation', 'Scenario Evaluation',
-                       lambda: _scenario_evaluation_work('BTC', 'P7D')))
-        steps.append(('alert_engine', 'Alert Engine', _alert_engine_work))
+        # 8. Cross-market and chart observations
+        steps.append(('chart_crossmarket', 'Cross-market & chart observations', _chart_crossmarket_work))
+        # 9. Fixed-model quantitative forecasts
+        steps.append(('quant_forecasts', 'Quantitative forecasts (fixed-model)', _quant_forecasts_work))
+        # 10. Market regime
+        steps.append(('market_regime', 'Market regime', _market_regime_work))
+        # 11. Market-driver analysis
+        steps.append(('market_drivers', 'Market-driver analysis', _market_drivers_work))
+        # 12. Opportunity scoring
+        steps.append(('opportunity_scoring', 'Opportunity scoring', _opportunity_scoring_work))
+        # 13. Decision and risk outputs
+        steps.append(('decision_risk', 'Decision & risk outputs', _decision_risk_work))
+        # 14. Sector and alert evidence
+        steps.append(('sector_alerts', 'Sector & alert evidence', _engine_snapshot_work))
+        # 15. Prediction Ledger grading
+        steps.append(('prediction_ledger', 'Prediction Ledger grading', _prediction_ledger_work))
+        # 16. Current BTC scenario bands (P7D, P14D, P30D)
+        steps.append(('current_scenario', 'Current scenario outlook', _current_scenario_work))
+        # 17. Alert Engine watchlist scan
+        steps.append(('alert_engine', 'Alert Engine watchlist scan', _alert_engine_work))
     if scope in ('strategy', 'full'):
-        steps.append(('strategy', 'Your strategy assessment', lambda: _analysis_strategy_work(pid)))
+        # 18. Signed-in owner's strategy assessment
+        steps.append(('strategy', 'Strategy assessment', lambda: _analysis_strategy_work(pid)))
     if scope in ('engine', 'full'):
+        # 19. Paper worker health (read-only, no execution)
+        steps.append(('paper_health', 'Paper worker health', _paper_health_work))
+        # 20. Data Audit (run last)
         steps.append(('data_audit', 'Data Audit', _analysis_audit_work))
     return steps
 
@@ -12189,6 +12801,8 @@ def _ask_gather(user, message, entity=None, context=None):
     used, evidence, blocks = [], [], []
 
     def add(name, res):
+        if name in used:
+            return  # Skip duplicates from overlapping keyword routes
         used.append(name)
         evidence.append({'label': name, 'kind': 'SYSTEM_CONCLUSION', 'sourceId': res.get('sourceId'),
                          'asOf': res.get('asOf'), 'freshness': res.get('freshness'), 'deepLink': res.get('deepLink')})
@@ -12212,7 +12826,8 @@ def _ask_gather(user, message, entity=None, context=None):
         add('strategies', _ask_read_strategies(user, sop))
     if any(w in msg for w in ('rotat', 'switch', 'rebalance')):
         add('rotation_history', _ask_read_rotations(pid, sop))
-    if any(w in msg for w in ('worker', 'health', 'stale', 'fresh', 'data quality', 'down', 'paused', 'broken')):
+    if any(w in msg for w in ('worker', 'health', 'stale', 'fresh', 'data quality', 'down', 'paused', 'broken',
+                              'engine', 'refresh')):
         add('worker_health', _ask_read_worker_health(user, sop))
     if any(w in msg for w in ('decision', 'why', 'buy', 'sell', 'opportunit', 'trade', 'signal', 'recommend', 'should i')):
         add('current_decisions', _ask_read_current_decisions(pid, sop))
@@ -12223,11 +12838,23 @@ def _ask_gather(user, message, entity=None, context=None):
                               'next week', 'band', 'predict', 'outlook', 'target')):
         add('scenario_band', _ask_read_scenario_band())
     # On-chain / flows reader — ETF flows, exchange flows, whales, MVRV, SOPR
-    # (Instruction 2: route on-chain & institutional keywords here).
     if any(w in msg for w in ('on-chain', 'onchain', 'on chain', 'flows', 'etf',
                               'whale', 'mvrv', 'sopr', 'institutional',
                               'exchange flow', 'net flow', 'netflow')):
         add('onchain_flows', _ask_read_onchain(sop))
+    # Derivatives & leverage reader
+    if any(w in msg for w in ('derivative', 'leverage', 'funding', 'open interest',
+                              'taker ratio', 'liquidat')):
+        add('onchain_flows', _ask_read_onchain(sop))
+    # Alert and sector evidence
+    if any(w in msg for w in ('alert', 'sector', 'edge board', 'watchlist', 'fired signal')):
+        add('research_findings', _ask_read_research(sop))
+    # Risk and portfolio
+    if any(w in msg for w in ('risk', 'drawdown', 'exposure', 'var ', 'value at risk')):
+        add('current_decisions', _ask_read_current_decisions(pid, sop))
+    # Driver keywords
+    if any(w in msg for w in ('driver', 'cycle', 'dominance', 'halving', 'macro')):
+        add('current_decisions', _ask_read_current_decisions(pid, sop))
 
     # Prefilled entity handoff (Ask-Albert opened from a card): resolve owner-scoped.
     if entity and entity.get('type'):

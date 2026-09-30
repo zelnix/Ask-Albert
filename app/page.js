@@ -3747,9 +3747,8 @@ export default function DashboardPage() {
   };
 
   const handleRefresh = () => {
-    const stored = readStoredPasscode();
-    if (!stored) { setPassError(''); setPassInput(''); setPassRemember(true); setPassAutoClear(false); setPassPrompt(true); return; }
-    doRefresh(stored, true, false);
+    // Instruction 3: No passcode gate. Triggers the analysis pipeline directly.
+    window.dispatchEvent(new Event('albert:trigger-refresh'));
   };
 
   const submitPasscode = () => {
@@ -3884,60 +3883,7 @@ export default function DashboardPage() {
             <NotificationBell alertsData={notif} onAck={ackNotif} onViewAll={() => navigate('alerts')} onNavSection={(s) => navigate(s || 'strategies')} onOpenBrief={(sym) => { if (sym) navigate('briefing', sym.toUpperCase()); else navigate('briefing'); }} />
             {active !== 'home' && <Button onClick={() => setShowReport(true)} size="sm" variant="outline" title="Shareable daily report" className="hidden gap-1.5 border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800 sm:inline-flex"><ClipboardList className="h-4 w-4" /><span className="hidden lg:inline">Report</span></Button>}
             <div className="relative">
-              {active !== 'home' && <Button onClick={handleRefresh} disabled={refreshing} size="sm" className="hidden gap-1.5 bg-sky-600 text-white hover:bg-sky-500 sm:inline-flex"><RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} /><span className="hidden lg:inline">{refreshing ? 'Retraining' : 'Retrain'}</span></Button>}
-              {passPrompt && (
-                <>
-                  <div className="fixed inset-0 z-40" onClick={() => setPassPrompt(false)} />
-                  <div className="absolute right-0 z-50 mt-2 w-72 rounded-xl border border-slate-700 bg-slate-900 p-3 shadow-2xl shadow-black/50">
-                    <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-white">
-                      <Lock className="h-4 w-4 text-amber-400" />Admin passcode
-                    </div>
-                    <p className="mb-2 text-[11px] leading-relaxed text-slate-400">A full retrain is an admin action. Enter the passcode to run it now.</p>
-                    <div className="relative">
-                      <input
-                        type={showPassPopup ? 'text' : 'password'}
-                        autoFocus
-                        value={passInput}
-                        onChange={(e) => { setPassInput(e.target.value); setPassError(''); }}
-                        onKeyDown={(e) => { if (e.key === 'Enter') submitPasscode(); if (e.key === 'Escape') setPassPrompt(false); }}
-                        placeholder="Enter admin passcode"
-                        className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 pr-9 text-sm text-slate-100 outline-none focus:border-sky-500"
-                      />
-                      <button type="button" onClick={() => setShowPassPopup(!showPassPopup)} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300" aria-label={showPassPopup ? 'Hide passcode' : 'Show passcode'}>
-                        {showPassPopup ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                      </button>
-                    </div>
-                    {passError && <p className="mt-1.5 text-[11px] font-medium text-red-400">{passError}</p>}
-                    <label className="mt-2.5 flex cursor-pointer items-center gap-2 text-[11px] text-slate-400 select-none">
-                      <input
-                        type="checkbox"
-                        checked={passRemember}
-                        onChange={(e) => setPassRemember(e.target.checked)}
-                        className="h-3.5 w-3.5 cursor-pointer rounded border-slate-600 bg-slate-950 accent-sky-500"
-                      />
-                      Remember on this device
-                    </label>
-                    {!passRemember && <p className="mt-1 text-[10px] leading-snug text-amber-400/80">Recommended on shared or public devices — the passcode won't be saved.</p>}
-                    {passRemember && (
-                      <label className="mt-1.5 flex cursor-pointer items-center gap-2 text-[11px] text-slate-400 select-none">
-                        <input
-                          type="checkbox"
-                          checked={passAutoClear}
-                          onChange={(e) => setPassAutoClear(e.target.checked)}
-                          className="h-3.5 w-3.5 cursor-pointer rounded border-slate-600 bg-slate-950 accent-sky-500"
-                        />
-                        Auto-clear after 24 hours
-                      </label>
-                    )}
-                    <div className="mt-2.5 flex items-center justify-end gap-2">
-                      <button onClick={() => setPassPrompt(false)} className="rounded-lg px-3 py-1.5 text-xs font-medium text-slate-400 hover:text-slate-200">Cancel</button>
-                      <button onClick={submitPasscode} disabled={refreshing} className="rounded-lg bg-gradient-to-r from-sky-500 to-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:from-sky-400 hover:to-violet-500 disabled:opacity-60">
-                        {refreshing ? 'Running…' : 'Run retrain'}
-                      </button>
-                    </div>
-                  </div>
-                </>
-              )}
+              {active !== 'home' && <Button onClick={handleRefresh} disabled={refreshing} size="sm" className="hidden gap-1.5 bg-sky-600 text-white hover:bg-sky-500 sm:inline-flex"><RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} /><span className="hidden lg:inline">{refreshing ? 'Refreshing' : 'Refresh'}</span></Button>}
             </div>
             <AccountMenu user={authUser} onSignOut={handleSignOut} />
             <GlobalMenu active={active} symbol={symbol} onNav={navigate} unread={notif?.unseen || 0} onReport={() => setShowReport(true)} onRefresh={handleRefresh} />

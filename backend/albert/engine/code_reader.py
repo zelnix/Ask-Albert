@@ -3,6 +3,11 @@
 The allowlist is fixed by this server, not by user text. No file paths or source
 code leave the API response; selected excerpts are supplied only to the existing
 LLM as untrusted evidence. This is inspection, not a test run or a code executor.
+
+Instruction 7: Index every non-sensitive market, decision, risk, strategy, paper
+and execution module. Allow Albert to retrieve ALL relevant logic groups needed
+for the specific question (not just one arbitrary five-snippet selection). Continue
+excluding authentication, credentials, tokens, secrets and configuration values.
 """
 import ast
 from functools import lru_cache
@@ -12,14 +17,26 @@ import re
 
 _BACKEND = Path(__file__).resolve().parents[2]
 _ENGINE_ROOT = _BACKEND / 'albert'
-_GROUPS = ('engine', 'paper', 'execution', 'market', 'repositories')
+# Index ALL non-sensitive engine directories
+_GROUPS = ('engine', 'paper', 'execution', 'market', 'repositories',
+           'risk', 'scoring', 'scenario', 'portfolio', 'strategy')
 _SERVER = _BACKEND / 'server.py'
 _SERVER_FUNCTION_PREFIXES = (
     '_albert_decisions', '_decision_', '_paper_', '_scenario_', '_studio_',
     '_risk_', '_regime_', '_mkt_', '_compute_', '_score_', '_signal_',
     'albert_scenario_', 'albert_decision_', 'albert_paper_',
+    '_refresh_', '_analysis_', '_ask_read_', '_ask_gather',
+    'compute_', 'build_', 'fetch_', 'get_',
+    '_lightweight_', '_core_reassessment', '_run_core_reassessment',
+    '_chart_crossmarket', '_quant_forecasts', '_market_regime',
+    '_market_drivers', '_opportunity_scoring', '_decision_risk',
+    '_current_scenario', '_engine_snapshot', '_prediction_ledger',
+    '_alert_engine', 'push_alert', 'compute_alert',
+    'etf_summary', 'get_etf_flows', 'get_whales', 'get_whale_tx_feed',
 )
-_SERVER_CONSTANT_PREFIXES = ('SCENARIO_', 'PAPER_', 'STUDIO_', 'RISK_', 'DECISION_')
+_SERVER_CONSTANT_PREFIXES = ('SCENARIO_', 'PAPER_', 'STUDIO_', 'RISK_', 'DECISION_',
+                             'FEATURE_', 'ALBERT_', 'WHALE_', 'ETF_', 'ONCHAIN_',
+                             'COINGECKO_', 'COMPARE_')
 # A new file under an engine directory must not silently make auth/config internals
 # readable. The reader itself is not trading logic and must not index itself.
 _EXCLUDED_FILES = frozenset({'__init__.py', 'code_reader.py', 'config.py', 'auth.py',
@@ -38,16 +55,22 @@ _DECISION = re.compile(
     r'paper|strategy|risk|score|scoring|size|sizing|mandate|rule|'
     r'code|algorithm|correct|logic|audit|review|scenario|what.if|'
     r'forecast|range|calibrat|backtest|evalua|portfolio|rebalance|'
-    r'order|fill|approve|reject|profit|loss|performance)\w*\b')
+    r'order|fill|approve|reject|profit|loss|performance|'
+    r'refresh|driver|regime|opportunity|alert|whale|etf|'
+    r'on.chain|derivative|leverage|mvrv|sopr|flow|institutional)\w*\b')
 _SECTION_TOPICS = {
     'forecasts': ('market', 'scenario', 'history', 'evaluation'),
     'analogs': ('market', 'scenario'),
     'risk': ('risk', 'portfolio', 'paper', 'engine'),
     'paper': ('paper', 'execution', 'decision'),
     'paperengine': ('paper', 'execution', 'engine'),
-    'strategies': ('engine', 'paper', 'studio'),
+    'strategies': ('engine', 'paper', 'studio', 'strategy'),
     'performance': ('evaluation', 'decision', 'market'),
     'dataaudit': ('market', 'universe', 'history'),
+    'alerts': ('engine', 'market', 'scoring'),
+    'onchain': ('market', 'engine', 'scoring'),
+    'derivatives': ('market', 'engine', 'scoring'),
+    'home': ('engine', 'market', 'decision', 'paper'),
 }
 _TOPIC_HINTS = {
     'decision': ('engine', 'decision', 'precedence', 'regime', 'scoring'),
@@ -68,12 +91,55 @@ _TOPIC_HINTS = {
     'fill': ('execution', 'ledger', 'paper'),
     'rotation': ('paper', 'portfolio', 'sell'),
     'source': ('engine', 'market', 'paper', 'execution'),
+    'refresh': ('engine', 'market', 'decision'),
+    'driver': ('engine', 'market', 'decision'),
+    'regime': ('engine', 'market', 'decision'),
+    'alert': ('engine', 'market', 'scoring'),
+    'whale': ('engine', 'market'),
+    'etf': ('engine', 'market'),
+    'onchain': ('engine', 'market', 'scoring'),
+    'derivative': ('engine', 'market'),
+    'leverage': ('engine', 'market'),
+    'mvrv': ('engine', 'market', 'scoring'),
+    'sopr': ('engine', 'market', 'scoring'),
+    'flow': ('engine', 'market'),
+    'opportunity': ('engine', 'scoring', 'decision'),
 }
 _STOP = {'the', 'for', 'and', 'that', 'this', 'with', 'what', 'your', 'from',
          'will', 'have', 'when', 'user', 'about', 'into', 'which', 'should',
          'does', 'then', 'been', 'each', 'than', 'like', 'their', 'where'}
-_MAX_CHUNKS = 5
-_MAX_CHARS = 5200
+# Instruction 7: Allow ALL relevant logic groups, not just 5 arbitrary snippets.
+_MAX_CHUNKS = 12
+_MAX_CHARS = 9600
+
+
+# =====================================================================
+# PLATFORM MANIFEST — screens, engines, supported functions, versions.
+# =====================================================================
+PLATFORM_MANIFEST = {
+    'product': 'Ask Albert · Crypto Intelligence Dashboard',
+    'screens': [
+        'Home (Dashboard)', 'Ask Albert (AI Chat)', 'Strategy Studio',
+        'Forecasts', 'Alerts', 'News', 'Risk', 'Performance',
+        'Paper Engine', 'Data Audit', 'Time Machine', 'Scenarios',
+    ],
+    'engines': {
+        'Decision Engine': {'version': '3.0', 'function': 'compute_decision_engine', 'type': 'deterministic'},
+        'Risk Engine': {'version': '2.0', 'function': 'compute_risk_engine', 'type': 'deterministic'},
+        'Regime Engine (HMM)': {'version': '1.0', 'function': 'regime_engine.analyze', 'type': 'statistical'},
+        'Chart Intelligence': {'version': '1.0', 'function': 'compute_chart_intelligence', 'type': 'pattern'},
+        'Quant Analysis': {'version': '2.0', 'function': 'compute_quant_analysis', 'type': 'quantitative'},
+        'Alert Engine': {'version': '1.0', 'function': 'compute_alert_signals', 'type': 'signal'},
+        'Prediction Ledger': {'version': '1.0', 'function': 'compute_scorecard', 'type': 'grading'},
+        'Scenario Outlook': {'version': '2.0', 'function': '_scenario_band_summary', 'type': 'scenario'},
+        'Drift Monitor': {'version': '1.0', 'function': 'drift_monitor.assess', 'type': 'monitoring'},
+        'News Engine': {'version': '1.0', 'function': 'compute_news_signal', 'type': 'nlp'},
+        'Cross-Market': {'version': '1.0', 'function': 'compute_crossmarket', 'type': 'correlation'},
+        'Paper Trading': {'version': '1.0', 'function': '_paper_autopilot_worker', 'type': 'execution'},
+    },
+    'refresh_steps': 19,
+    'trading_mode': 'paper_only',
+}
 
 
 def _tokens(value):
@@ -84,6 +150,8 @@ def _tokens(value):
 def _paths():
     for group in _GROUPS:
         root = (_ENGINE_ROOT / group).resolve()
+        if not root.is_dir():
+            continue
         for path in sorted(root.glob('*.py')):
             resolved = path.resolve()
             if (not path.is_symlink() and resolved.parent == root and
@@ -149,8 +217,6 @@ def _index(stamp):
 
 
 def _source_stamp():
-    # A deployment may replace its source without restarting an LLM worker.
-    # Content-based IDs change with code; mtime/size invalidate the in-process index.
     return tuple((str(p.relative_to(_BACKEND)), p.stat().st_mtime_ns, p.stat().st_size)
                  for p, _group in _paths())
 
@@ -161,7 +227,7 @@ def engine_related(message, section=None):
 
 
 def select_engine_logic(message, section=None):
-    """Select a relevant, bounded cross-section, not an unrestricted file read.
+    """Select ALL relevant logic groups for the specific question (Instruction 7).
 
     A model cannot establish whole-system correctness from snippets. `coverage` and
     `testsRun` tell it exactly what was inspected and what was not tested.
@@ -190,6 +256,20 @@ def select_engine_logic(message, section=None):
             hints.update(_TOPIC_HINTS['scenario'])
         elif word.startswith(('calibrat', 'evaluat', 'backtest')):
             hints.update(_TOPIC_HINTS['calibration'])
+        elif word.startswith(('refresh', 'reassess', 'engine')):
+            hints.update(_TOPIC_HINTS['refresh'])
+        elif word.startswith(('alert',)):
+            hints.update(_TOPIC_HINTS['alert'])
+        elif word.startswith(('whale',)):
+            hints.update(_TOPIC_HINTS['whale'])
+        elif word.startswith(('etf',)):
+            hints.update(_TOPIC_HINTS['etf'])
+        elif word.startswith(('deriv', 'leverag', 'fund')):
+            hints.update(_TOPIC_HINTS['derivative'])
+        elif word.startswith(('regime',)):
+            hints.update(_TOPIC_HINTS['regime'])
+        elif word.startswith(('driver',)):
+            hints.update(_TOPIC_HINTS['driver'])
     explicit = bool(re.search(r'(?i)\b(code|source|implementation|logic|correct|audit|review|mismatch)\b',
                               message or ''))
     if explicit and not hints:
@@ -228,4 +308,5 @@ def select_engine_logic(message, section=None):
         'sourceDigest': hashlib.sha256('|'.join(r['sourceId'] for r in refs)
                                        .encode('utf-8')).hexdigest()[:16],
         'coverage': sorted(set(chunk['group'] for chunk, _block in selected)),
+        'manifest': PLATFORM_MANIFEST,
     }

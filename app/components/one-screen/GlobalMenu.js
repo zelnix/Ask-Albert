@@ -44,7 +44,7 @@ const GlobalMenu = ({ active, symbol, onNav, unread = 0, onReport, onRefresh }) 
           <p className="px-3 py-1 text-xs font-bold uppercase tracking-wider text-slate-500">Quick actions</p>
           <a href="/?section=alerts" onClick={(e) => go(e, 'alerts')} className="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-slate-300 hover:bg-slate-800"><Bell className="h-4 w-4" />Alerts {unread > 0 ? `(${unread})` : ''}</a>
           <button type="button" onClick={() => { setOpen(false); onReport(); }} className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-slate-300 hover:bg-slate-800"><ClipboardList className="h-4 w-4" />Daily report</button>
-          <button type="button" onClick={() => { setOpen(false); onRefresh(); }} className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-slate-300 hover:bg-slate-800"><RefreshCw className="h-4 w-4" />Retrain (admin)</button>
+          <button type="button" onClick={() => { setOpen(false); onRefresh(); }} className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-sky-300 hover:bg-slate-800"><RefreshCw className="h-4 w-4" />Refresh all engines</button>
         </div>
       </nav>
     </ModalShell>}

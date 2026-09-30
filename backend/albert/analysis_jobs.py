@@ -41,6 +41,8 @@ def refresh_scope(message):
         return None
     if re.search(r'\b(full|all|everything)\b', text) or ('data' in text and 'engine' in text):
         return 'full'
+    if re.search(r'\brefresh\s+(engines?|all\s+engines?|data\s+and\s+engines?|everything)\b', text):
+        return 'full'
     if 'engine' in text:
         return 'engine'
     if 'news' in text:
