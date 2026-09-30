@@ -11987,10 +11987,13 @@ def _ask_read_current_decisions(pid, sop):
                                    'verified': support['paperSupportVerified'], 'reason': support['reason']}
             if support.get('lastProviderBlocker'):
                 row['providerBlocker'] = support['lastProviderBlocker']
-            if not support['startEligible'] and (row.get('action') == 'BUY' or row.get('call') == 'BUY'):
-                row['action'] = row['call'] = 'WAIT'  # never recommend unsupported paper entry
-                row['eligible'] = False
-                row['reasonCode'] = support['reasonCode']
+            # Report paper executability as separate fields — never rewrite the
+            # market signal itself (Instruction 5).
+            is_buy = (row.get('action') == 'BUY' or row.get('call') == 'BUY')
+            row['paperExecutable'] = bool(support['startEligible']) if is_buy else None
+            row['paperRestrictionReason'] = (
+                support.get('reason') or support.get('reasonCode')
+            ) if (is_buy and not support['startEligible']) else None
             compact.append(row)
         return {'data': {'regime': snap.get('regime'), 'decisions': compact,
                          'paperEligibleImplementedNotVerified': paper_eligible,
@@ -12033,6 +12036,82 @@ def _ask_read_scenario_band():
             **_ask_meta('scenario-band', band.get('anchorDate'),
                         'FRESH' if band.get('available') else 'MISSING',
                         _evidence_deep_link(band.get('snapshotId')) or '/?section=home')}
+
+
+def _ask_read_onchain(sop):
+    """Allowlisted on-chain / flows reader (Instruction 1).
+    Covers ETF flows, exchange flows, whale activity, MVRV, SOPR — each item
+    carries its own source and publication timestamp so the LLM can cite them."""
+    sections = []
+
+    # 1) On-chain smart-money metrics (MVRV Z-score, SOPR, active addresses, Fear & Greed)
+    panels = get_onchain_panels('BTC') or {}
+    sm = panels.get('smart_money') or {}
+    for m in (sm.get('metrics') or []):
+        if m.get('status') == 'ready' and m.get('value') is not None:
+            sections.append({'metric': m['name'], 'value': m['value'],
+                             'signal': m.get('signal'), 'source': m.get('source'),
+                             'publishedAt': m.get('as_of')})
+
+    # 2) Institutional / derivatives panel (funding, OI, taker ratio, ETF 1d/7d)
+    inst = panels.get('institutional') or {}
+    for m in (inst.get('metrics') or []):
+        if m.get('status') == 'ready' and m.get('value') is not None:
+            sections.append({'metric': m['name'], 'value': m['value'],
+                             'signal': m.get('signal'), 'source': m.get('source'),
+                             'publishedAt': m.get('as_of')})
+
+    # 3) ETF daily net flows (last 5 trading days)
+    try:
+        etf = get_etf_flows() or {}
+    except Exception:
+        etf = {}
+    daily = (etf.get('daily') or [])[:5]
+    if daily:
+        sections.append({
+            'metric': 'BTC Spot ETF Daily Net Flows (last 5 days, $M)',
+            'days': [{'date': d['date'], 'totalUsdM': d.get('total')} for d in daily],
+            'source': etf.get('source', 'bitbo.io / tftc.io (Farside mirror)'),
+            'publishedAt': daily[0].get('date') if daily else None})
+
+    # 4) Exchange flows (aggregate tracked exchange wallets)
+    try:
+        ef = compute_exchange_flows()
+    except Exception:
+        ef = None
+    if ef:
+        sections.append({
+            'metric': 'BTC Exchange Flows (tracked wallets)',
+            'currentBtc': ef.get('current'), 'net7d': ef.get('net_7d'),
+            'net30d': ef.get('net_30d'), 'trend': ef.get('trend'),
+            'read': ef.get('read'),
+            'source': ef.get('source', 'mempool.space (exchange-wallet reconstruction)'),
+            'publishedAt': (ef.get('series') or [{}])[-1].get('date')})
+
+    # 5) Whale activity (top entities by balance)
+    try:
+        wh = get_whales()
+    except Exception:
+        wh = None
+    if wh and wh.get('whales'):
+        top = wh['whales'][:8]
+        sections.append({
+            'metric': 'BTC Whale Watch (top entities)',
+            'entities': [{'name': w.get('name'), 'category': w.get('category'),
+                          'balanceBtc': w.get('balance'),
+                          'change24hBtc': w.get('change_24h'),
+                          'change7dBtc': w.get('change_7d'),
+                          'signal': w.get('signal')} for w in top],
+            'source': wh.get('source', 'mempool.space · blockchain.com (labels curated)'),
+            'publishedAt': wh.get('as_of')})
+
+    sources = list(dict.fromkeys(s.get('source') for s in sections if s.get('source')))
+    latest_ts = max((s.get('publishedAt') for s in sections if s.get('publishedAt')),
+                    default=None)
+    return {'data': {'sections': sections, 'sources': sources},
+            **_ask_meta('onchain-flows', latest_ts,
+                        'FRESH' if sections else 'MISSING', '/?section=home')}
+
 
 
 def _ask_resolve_context(pid, ctx):
@@ -12116,9 +12195,18 @@ def _ask_gather(user, message, entity=None, context=None):
         blocks.append(f"[{name}] (asOf={res.get('asOf')}, freshness={res.get('freshness')}, "
                       f"source={res.get('sourceId')})\n{json.dumps(res.get('data'), default=str)[:2400]}")
 
-    # State of play + paper are always in scope (bounded).
+    # State of play is always in scope (market + user context).
     add('state_of_play', _ask_read_state_of_play(user, sop))
-    add('paper_account', _ask_read_paper(user, sop))
+
+    # Paper-account context is included ONLY when the question relates to the paper
+    # wallet, positions, performance, or execution — not for general market research
+    # (Instruction 6: do not automatically prioritize paper-account context).
+    _paper_kw = ('paper', 'wallet', 'position', 'portfolio', 'balance', 'p&l', 'pnl',
+                 'profit', 'loss', 'performance', 'allocation', 'holding', 'order',
+                 'fill', 'my account', 'my trade', 'my coin', 'auto run', 'autorun',
+                 'execute', 'execution')
+    if any(w in msg for w in _paper_kw):
+        add('paper_account', _ask_read_paper(user, sop))
 
     if any(w in msg for w in ('strateg', 'plan', 'backtest')):
         add('strategies', _ask_read_strategies(user, sop))
@@ -12134,6 +12222,12 @@ def _ask_gather(user, message, entity=None, context=None):
     if any(w in msg for w in ('scenario', 'forecast', 'range', 'what if', 'what-if',
                               'next week', 'band', 'predict', 'outlook', 'target')):
         add('scenario_band', _ask_read_scenario_band())
+    # On-chain / flows reader — ETF flows, exchange flows, whales, MVRV, SOPR
+    # (Instruction 2: route on-chain & institutional keywords here).
+    if any(w in msg for w in ('on-chain', 'onchain', 'on chain', 'flows', 'etf',
+                              'whale', 'mvrv', 'sopr', 'institutional',
+                              'exchange flow', 'net flow', 'netflow')):
+        add('onchain_flows', _ask_read_onchain(sop))
 
     # Prefilled entity handoff (Ask-Albert opened from a card): resolve owner-scoped.
     if entity and entity.get('type'):

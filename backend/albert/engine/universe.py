@@ -11,7 +11,6 @@ Eligibility here mirrors EXACTLY the hard gates that Phase C/D1 already enforce
 (so no behaviour changes) — it just names them with canonical reason codes.
 """
 from albert.engine.constants import ALBERT_UNIVERSE
-from albert.asset_capabilities import capability
 
 
 def discovery_universe(held_symbols):
@@ -26,8 +25,11 @@ def eligibility(symbol, *, data_ok, excluded, approved, mandate_complete):
     approved is the set of approved coins ('' / empty means 'no whitelist -> all
     allowed'). Order matters: the first failing rule wins.
     """
-    if not capability(symbol)['paperSupported']:
-        return False, 'UNSUPPORTED_PAPER_CAPABILITY'
+    # NOTE: paperSupported is intentionally NOT checked here.  Market-signal
+    # eligibility is decoupled from paper-trading capability (Instruction 3).
+    # Paper capability validation is enforced only at Strategy Studio and
+    # Auto Run execution boundaries (asset_capabilities.validate_assets /
+    # entry_allowed).
     if not data_ok:
         return False, 'STALE_DATA'
     if excluded and symbol in excluded:
