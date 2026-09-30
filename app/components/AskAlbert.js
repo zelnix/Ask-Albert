@@ -1,6 +1,7 @@
 'use client';
 
 import AnalysisRefreshStatus, { announceAnalysis } from './AnalysisRefreshStatus';
+import AlbertReplyMeta from './AlbertReplyMeta';
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
@@ -193,10 +194,21 @@ export default function AskAlbert({ onNav }) {
         announceAnalysis(j.analysisJob);
         setMessages((m) => [...m, { role: 'albert', text: j.reply || 'No answer came back.',
           evidence: j.evidence, model: j.model, contextFunctions: j.contextFunctions,
-          answerSnapshotId: j.answerSnapshotId }]);
+          answerSnapshotId: j.answerSnapshotId,
+          basket_draft: j.basket_draft || null,
+          strategyIntent: j.strategyIntent || false,
+          strategyDraftFailed: j.strategyDraftFailed || false,
+          sessionId: j.sessionId }]);
       }
     } catch (e) {
-      setMessages((m) => [...m, { role: 'albert', text: 'Network error — please try again.' }]);
+      // Instruction 9: preserve state on timeout, show retry action
+      setMessages((m) => [...m, {
+        role: 'albert',
+        text: 'I couldn\'t complete this request — it may have timed out. Your conversation and any strategy details you provided are preserved. Tap "Retry" to try again.',
+        strategyDraftFailed: true,
+        strategyIntent: true,
+        sessionId: sessionId.current
+      }]);
     } finally {
       setSending(false); setEntity(null); setContext(null);
     }
@@ -255,6 +267,17 @@ export default function AskAlbert({ onNav }) {
                       <p className="max-w-[70ch] whitespace-pre-wrap text-[14px] leading-relaxed text-slate-100">{m.text}</p>
                       {m.card && <ConfirmationCard card={m.card} />}
                       <EvidenceRow evidence={m.evidence} onNav={onNav} onEvidence={setEvidenceId} />
+                      {/* Strategy draft actions (Instruction 2) */}
+                      {(m.basket_draft || m.strategyIntent) && (
+                        <AlbertReplyMeta
+                          draft={m.basket_draft}
+                          strategyIntent={m.strategyIntent}
+                          strategyDraftFailed={m.strategyDraftFailed}
+                          sessionId={m.sessionId || sessionId.current}
+                          onNav={onNav}
+                          onRetry={() => send('Prepare this exact strategy for review now.')}
+                        />
+                      )}
                       {m.answerSnapshotId ? (
                         <button onClick={() => setEvidenceId(m.answerSnapshotId)}
                           className="mt-1.5 inline-flex items-center gap-1 text-[11px] font-semibold text-sky-400 underline decoration-sky-500/40 underline-offset-2 hover:text-sky-300">

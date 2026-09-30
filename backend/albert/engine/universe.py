@@ -36,6 +36,8 @@ def eligibility(symbol, *, data_ok, excluded, approved, mandate_complete):
         return False, 'EXCLUDED_BY_MANDATE'
     if approved and symbol not in approved:
         return False, 'NOT_IN_APPROVED_UNIVERSE'
-    if not mandate_complete:
-        return False, 'MANDATE_INCOMPLETE'
+    # NOTE: mandate_complete is intentionally NOT checked here (Instruction 4).
+    # A separate legacy investment mandate is not required for the paper-strategy flow.
+    # Strategy eligibility is determined from coins, paper support, data availability,
+    # risk parameters, available cash/reserve, and entry conditions.
     return True, None

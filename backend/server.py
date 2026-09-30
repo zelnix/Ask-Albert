@@ -76,6 +76,7 @@ from config import (
     paper_accounts_col, paper_orders_col,
     paper_notif_col,
     users_col, auth_sessions_col, GOOGLE_CLIENT_ID,
+    albert_chat_col,
 )
 from email_service import send_email, resend_configured
 import regime_engine
@@ -10334,11 +10335,7 @@ def _sop_build(user, requested_account=None):
                           'title': 'Create a paper account so Albert can put a strategy into simulated action.',
                           'deepLink': '/?section=paper'})
 
-    # --- mandate / strategy setup attention ---
-    if user_block['mandateStatus'] != 'COMPLETE':
-        attention.insert(0, {'id': 'mandate', 'kind': 'MANDATE_INCOMPLETE', 'severity': 'SETUP',
-                             'title': 'Tell Albert your goal, risk tolerance and protected reserve so he can plan for you.',
-                             'deepLink': '/?section=settings'})
+    # --- strategy setup attention (Instruction 4: mandate blocker removed) ---
     strategies = _sop_strategies(pid)
     if acct and not strategies['active']:
         attention.append({'id': 'no-strategy', 'kind': 'NO_ASSIGNED_STRATEGY', 'severity': 'SETUP',
@@ -12386,15 +12383,6 @@ ASK_ALBERT_SYSTEM = (
     "comparable past conditions — never a forecast, prediction, expectation or target. Quote it as 'comparable "
     "past conditions produced X% to Y% over N days' and always name the horizon. Never present the median as "
     "what you expect.\n\n"
-    "INCOMPLETE MANDATE: when the context shows mandateStatus = INCOMPLETE, this is your TOP PRIORITY before "
-    "giving strategy or trading advice. Proactively and warmly prompt the user to complete their mandate by "
-    "providing: (1) their investment GOAL — e.g. 'grow long-term wealth', 'generate income', 'speculate on "
-    "momentum'; (2) their RISK TOLERANCE — Conservative, Moderate, or Aggressive; (3) their PROTECTED RESERVE "
-    "percentage — the cash cushion they always want to keep (e.g. 25%). Until the mandate is complete, gently "
-    "remind the user that strategy creation, auto-execution and personalised sizing all depend on having these "
-    "set. If the user provides these details in conversation, confirm you've noted them and tell them to save "
-    "via the Settings screen (/?section=settings). You may still answer market questions, but always weave in "
-    "a nudge to complete the mandate if it remains incomplete.\n\n"
     "RESEARCH FINDINGS are hypotheses with declared confirm and invalidate conditions. Report the hypothesis "
     "and its conditions; never upgrade an open hypothesis into a conclusion.\n\n"
     "ENGINE CODE REVIEW: when bounded INTERNAL ENGINE SOURCE appears in context, use it as read-only "
@@ -12821,28 +12809,6 @@ def _ask_gather(user, message, entity=None, context=None):
     # State of play is always in scope (market + user context).
     add('state_of_play', _ask_read_state_of_play(user, sop))
 
-    # When the mandate is incomplete, inject a prominent mandate-prompt block
-    # so Albert proactively asks the user to complete it.
-    mandate_status = (sop.get('user') or {}).get('mandateStatus')
-    if mandate_status != 'COMPLETE':
-        m_user = sop.get('user') or {}
-        missing = []
-        if not m_user.get('goal'):
-            missing.append('investment goal')
-        if not m_user.get('riskTolerance'):
-            missing.append('risk tolerance (Conservative / Moderate / Aggressive)')
-        if m_user.get('protectedReservePct') is None:
-            missing.append('protected reserve %')
-        blocks.append(
-            '[MANDATE_INCOMPLETE] The owner\'s trading mandate is not complete. '
-            'Missing fields: %s. '
-            'Albert MUST proactively prompt the user to provide these before offering '
-            'strategy or execution advice. The user can save their mandate at /?section=settings.'
-            % (', '.join(missing) if missing else 'unknown fields'))
-        evidence.append({'label': 'mandate_status', 'kind': 'SYSTEM_CONCLUSION',
-                         'sourceId': 'mandate:check', 'asOf': None,
-                         'freshness': 'CURRENT', 'deepLink': '/?section=settings'})
-
     # Paper-account context is included ONLY when the question relates to the paper
     # wallet, positions, performance, or execution — not for general market research
     # (Instruction 6: do not automatically prioritize paper-account context).
@@ -12854,7 +12820,19 @@ def _ask_gather(user, message, entity=None, context=None):
         add('paper_account', _ask_read_paper(user, sop))
 
     if any(w in msg for w in ('strateg', 'plan', 'backtest')):
-        add('strategies', _ask_read_strategies(user, sop))
+        # Instruction 5: Only inject existing strategy assessment when the user explicitly
+        # asks about their CURRENT strategy (revise, diagnose, fix). New-strategy creation
+        # requests should NOT be hijacked by an existing strategy assessment.
+        _revision_kw = ('my current', 'revise', 'diagnose', 'fix my', 'why is', 'why does',
+                        'my existing', 'this strategy', 'my strategy', 'the paused',
+                        'what went wrong', 'improve my')
+        if any(w in msg for w in _revision_kw):
+            add('strategies', _ask_read_strategies(user, sop))
+        # For new strategy creation, only include paper account context (cash, reserve)
+        elif _is_basket_build_request(message):
+            add('paper_account', _ask_read_paper(user, sop))
+        else:
+            add('strategies', _ask_read_strategies(user, sop))
     if any(w in msg for w in ('rotat', 'switch', 'rebalance')):
         add('rotation_history', _ask_read_rotations(pid, sop))
     if any(w in msg for w in ('worker', 'health', 'stale', 'fresh', 'data quality', 'down', 'paused', 'broken',
@@ -12956,6 +12934,50 @@ def albert_ask(request: Request, payload: dict = Body(...), user: dict = Depends
                     "Please try again in a moment.")
         text = re.sub(r'\[REFRESH_ANALYSIS:[^\]]*\]', '', _engine_code_safe_reply(text, engine_review)).strip()
         public_review = _engine_code_public_meta(engine_review)
+
+        # ── Instruction 1: strategy-build detection & structured drafting ──
+        strategy_intent = _is_basket_build_request(message)
+        basket_draft = None
+        strategy_draft_failed = False
+        if strategy_intent:
+            try:
+                draft_goal = message + '\n\n' + text  # user request + Albert's analysis
+                raw = _build_basket_draft(draft_goal)
+                if raw and not raw.get('error') and raw.get('legs'):
+                    # Instruction 7: filter through paper capability registry
+                    from albert.asset_capabilities import capability as _cap_fn
+                    needs_changes = False
+                    for leg in raw.get('legs', []):
+                        sym = leg.get('symbol', '')
+                        cap = _cap_fn(sym)
+                        leg['paperSupported'] = cap.get('paperSupported', False)
+                        if not cap.get('paperSupported', False):
+                            needs_changes = True
+                            leg['restriction'] = cap.get('paperReason', 'Not available for paper trading')
+                    if needs_changes:
+                        raw['needsChanges'] = True
+                        raw['changeReason'] = 'One or more coins are not currently supported for paper trading.'
+                    basket_draft = raw
+                else:
+                    strategy_draft_failed = True
+            except Exception:
+                traceback.print_exc()
+                strategy_draft_failed = True
+
+        # ── Instruction 3: persist conversation under session_id ──
+        try:
+            albert_chat_col.update_one(
+                {'sessionId': session_id, 'pid': owner_pid(user)},
+                {'$push': {'messages': {'$each': [
+                    {'role': 'user', 'text': message, 'ts': datetime.datetime.utcnow().isoformat()},
+                    {'role': 'assistant', 'text': text, 'ts': datetime.datetime.utcnow().isoformat(),
+                     'basket_draft': basket_draft}
+                ]}}, '$set': {'updatedAt': datetime.datetime.utcnow().isoformat()},
+                 '$setOnInsert': {'createdAt': datetime.datetime.utcnow().isoformat(), 'source': 'ask'}},
+                upsert=True)
+        except Exception:
+            traceback.print_exc()
+
         # N-F: the conclusion is bound to the EXACT evidence set it was produced from, so the
         # user can open what Albert actually saw rather than a screen that merely looks related.
         answer_snapshot = _evidence_snapshot_put(
@@ -12976,7 +12998,10 @@ def albert_ask(request: Request, payload: dict = Body(...), user: dict = Depends
                 'engineReview': public_review, 'stateId': sop.get('stateId'),
                 'answerSnapshotId': answer_snapshot,
                 'answerDeepLink': _evidence_deep_link(answer_snapshot),
-                'resolvedContext': bool(context), 'paperOnly': True}
+                'resolvedContext': bool(context), 'paperOnly': True,
+                'basket_draft': basket_draft,
+                'strategyIntent': strategy_intent,
+                'strategyDraftFailed': strategy_draft_failed}
     except Exception:
         traceback.print_exc()
         return {'status': 'error',
@@ -16459,6 +16484,13 @@ def chat_prepare_proposal(payload: dict = Body(...), user: dict = Depends(get_cu
         messages = (thread or {}).get('messages', []) if thread else []
     except Exception:
         messages = []
+
+    # Instruction 3: if the conversation already has a valid basket_draft,
+    # return it directly — do NOT re-invoke the model.
+    for m in reversed(messages):
+        if isinstance(m.get('basket_draft'), dict) and m['basket_draft'].get('legs'):
+            return {'basket_draft': m['basket_draft'], 'error': None}
+
     # Include both user messages AND assistant proposals so the strategy being
     # reviewed is preserved (user constraints + Albert's proposed plan).
     relevant = [m.get('text', '') for m in messages
@@ -18221,24 +18253,30 @@ ALBERT_BASKET_SYSTEM = (
     '  "walletName": "<string or null>",\n'
     '  "entrySizing": {"mode": "fixed_usd"|"pct_of_cash", "value": <num>},\n'
     '  "maxPositions": <int 1-6 — maximum simultaneous open positions>,\n'
+    '  "maxDrawdownPct": <num — maximum acceptable drawdown percentage, or null>,\n'
+    '  "targetEquity": <num — target equity amount, or null>,\n'
     '  "legs": [\n'
     '    {"symbol":"BTC","position":"long","weight_pct":<num>,\n'
     '     "targets":[{"price":<num>,"label":"TP1","pct_of_position":100,"exit_pct":<num>}],\n'
     '     "stop":{"price":<num>,"stop_pct":<num>}}\n'
     "  ]\n"
     "}\n"
-    "Rules:\n"
+    "STRICT RULES (never violate):\n"
     "- Use REAL ticker symbols from the supported universe only.\n"
     "- ALL legs MUST be 'long'. No shorts.\n"
-    "- Each leg has exactly ONE target (pct_of_position=100, full exit). No partial targets.\n"
-    "- Each leg has exactly ONE stop with stop_pct (full position stop-loss).\n"
-    "- entrySizing MUST be provided: either fixed_usd (e.g. $500 per trade) or pct_of_cash (e.g. 20% of available cash).\n"
-    "- maxPositions MUST be provided (how many positions can be open simultaneously).\n"
-    "- When the user specifies PERCENTAGE take-profit/stop-loss (e.g. '8% take-profit'), set exit_pct/stop_pct to those percentages AND "
-    "also compute the implied absolute USD price in the price field.\n"
-    "- When the user specifies ABSOLUTE USD targets/stops, set the price field and compute exit_pct/stop_pct from entry.\n"
-    "- If the user's goal is unrealistic (e.g. 'triple my money in 3 weeks'), explain the risk in the thesis "
-    "but STILL create the best supportable strategy. Never refuse to produce JSON.\n"
+    "- Each leg has EXACTLY ONE target with pct_of_position=100 (full exit). NO partial take-profit, NO take-profit ladders.\n"
+    "- Each leg has EXACTLY ONE stop with stop_pct (full position stop-loss). NO trailing stops.\n"
+    "- entrySizing MUST be provided: either fixed_usd or pct_of_cash.\n"
+    "- maxPositions MUST be provided.\n"
+    "- When the user specifies PERCENTAGE take-profit/stop-loss, set exit_pct/stop_pct AND compute implied price.\n"
+    "- When the user specifies ABSOLUTE USD targets/stops, set price AND compute exit_pct/stop_pct.\n"
+    "- NEVER generate: take-profit ladders, partial take-profit, trailing stops, time-based exits, "
+    "Observe mode, Review/approval mode, ADD, TRIM, or a separate investment mandate.\n"
+    "- Only allowed operations: Auto Run, BUY and EXIT, fixed position sizing.\n"
+    "- The strategy flow is: Chat -> Review -> Save -> Start Simulation. "
+    "During Start, the user chooses an existing named paper wallet or creates a new named paper wallet with a configurable starting balance. "
+    "Do NOT say a dedicated wallet will automatically be created.\n"
+    "- If the user's goal is unrealistic, explain the risk in the thesis but STILL produce the JSON.\n"
     "- Output ONLY the JSON object."
 )
 
@@ -18258,16 +18296,17 @@ def _normalize_basket_leg(raw):
         weight = max(0.0, float(raw.get('weight_pct') or 0))
     except Exception:
         weight = 0.0
+    # Instruction 6: exactly ONE target per leg (full exit), no ladders, no partial TP.
     targets = []
-    for t in (raw.get('targets') or [])[:3]:
+    for t in (raw.get('targets') or [])[:1]:
         try:
             price = round(float(t.get('price')), 2)
         except Exception:
             price = None
         try:
-            pct = int(t.get('pct_of_position') or 50)
+            pct = 100  # Always full exit
         except Exception:
-            pct = 50
+            pct = 100
         exit_pct = None
         try:
             if t.get('exit_pct') is not None:
@@ -18461,6 +18500,10 @@ _BASKET_GOAL_PHRASES = (
     'invest my', 'invest this', 'what should i buy', 'what to buy',
     'best way to invest', 'best way to trade', 'best way to grow',
     'make as much', 'earn the most', 'earn as much',
+    'best strategy', 'best paper strategy', 'recommend a strategy',
+    'recommend me a strategy', 'recommend the best', 'prepare a strategy',
+    'draft a strategy', 'new strategy', 'create a new strategy',
+    'prepare for review', 'revise the proposed',
 )
 # Timeframe + profit pattern: "I want X% in Y days/weeks"
 _BASKET_GOAL_PATTERN = re.compile(

@@ -3331,7 +3331,6 @@ export default function DashboardPage() {
   const [status, setStatus] = useState(__dashCache ? 'ready' : 'loading');
   const [error, setError] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
   const [ticker, setTicker] = useState(__tickerCache);
   const [active, setActive] = useState('home');
   const [homeParams, setHomeParams] = useState({ horizon: '7D', focus: null, mdHorizon: 'SWING' });

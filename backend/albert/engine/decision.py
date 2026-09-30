@@ -360,9 +360,7 @@ def build_decisions(pid, summary_override=None, strategy_symbols=None):
     sell_decisions = [d for d in decisions if d['action'] == 'SELL']
     urgent_sells = [d for d in sell_decisions if d['reasonCode'] in ('EMERGENCY_EXIT', 'THESIS_INVALIDATION')]
 
-    if not complete:
-        albert_call = 'Set your Trading Mandate to unlock personalised recommendations.'
-    elif portfolio_risk.get('protectionMode'):
+    if portfolio_risk.get('protectionMode'):
         albert_call = ('PORTFOLIO PROTECTION ACTIVE \u2014 drawdown %.1f%% vs your %.1f%% limit. New BUYs suspended; reducing portfolio risk.'
                        % (portfolio_risk.get('drawdownPct') or 0.0, portfolio_risk.get('maxDrawdownPct') or 0.0))
         if sell_decisions:
