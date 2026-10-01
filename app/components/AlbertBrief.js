@@ -9,25 +9,9 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { API_BASE } from '../lib/api';
 
-/** Map section topic IDs to specialist screen routes */
-const SECTION_NAV_MAP = {
-  price_structure: { route: 'briefing', label: 'Price & Structure' },
-  etf_institutional: { route: 'flows', label: 'ETF & Flows' },
-  etf_flows: { route: 'flows', label: 'ETF & Flows' },
-  onchain_activity: { route: 'flows', label: 'On-Chain & Flows' },
-  onchain: { route: 'flows', label: 'On-Chain & Flows' },
-  macro_equities: { route: 'macro', label: 'Macro & Policy' },
-  macro: { route: 'macro', label: 'Macro & Policy' },
-  support_resistance: { route: 'briefing', label: 'Price & Structure' },
-  volume_participation: { route: 'market-intel', label: 'Market Intelligence' },
-  volume: { route: 'market-intel', label: 'Market Intelligence' },
-  derivatives_leverage: { route: 'market-intel', label: 'Market Intelligence' },
-  derivatives: { route: 'market-intel', label: 'Market Intelligence' },
-  altcoin_breadth: { route: 'market-intel', label: 'Market Intelligence' },
-  altcoins: { route: 'market-intel', label: 'Market Intelligence' },
-  market_news: { route: 'news', label: 'News Feed' },
-  news: { route: 'news', label: 'News Feed' },
-};
+import { sectionDeepLink } from './one-screen/ConsolidatedDetail';
+
+/** Map section topic IDs to specialist screen routes — using the shared keyword mapper */
 
 function timeAgo(iso) {
   if (!iso) return '';
@@ -66,7 +50,7 @@ function callColor(call) {
 function Section({ sec, sources, defaultOpen = false, onNav }) {
   const [open, setOpen] = useState(defaultOpen);
   const secSources = (sec.source_ids || []).map(id => (sources || []).find(s => s.id === id)).filter(Boolean);
-  const navTarget = SECTION_NAV_MAP[sec.id] || SECTION_NAV_MAP[sec.id?.split('_')[0]];
+  const navTarget = sectionDeepLink(sec);
 
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-900/50">

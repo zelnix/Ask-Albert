@@ -1,11 +1,35 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, ArrowRight, MessageCircle, ShieldCheck, RefreshCw } from 'lucide-react';
+import { ArrowLeft, ArrowRight, MessageCircle, ShieldCheck, RefreshCw, ExternalLink } from 'lucide-react';
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, Legend } from 'recharts';
 import PaperTradingBot from '../PaperTradingBot';
 import AnalysisRefreshStatus, { analysisTime } from '../AnalysisRefreshStatus';
 import { BTCChart, MarketChart } from './OneScreenCharts';
+
+
+/* ── Section deep-link mapping ──
+   Maps a brief section (by id + title keywords) to the best specialist dashboard screen. */
+const SECTION_ROUTE_RULES = [
+  { keys: ['price', 'technical', 'level', 'support', 'resistance', 'chart', 'consolidat', 'key_level', 'price_structure'], route: 'dashboard-btc', label: 'BTC Bull & Bear' },
+  { keys: ['macro', 'equit', 'yield', 'policy', 'geopolit', 'treasur', 'correlat', 'headwind', 'macro_equit'], route: 'dashboard-news', label: 'News, Macro & Policy' },
+  { keys: ['etf', 'institution', 'flow', 'volume', 'whale', 'spot_demand', 'spot_market', 'volume_participation', 'inflow', 'outflow'], route: 'dashboard-flows', label: 'On-Chain & Flows' },
+  { keys: ['alt', 'breadth', 'dominan', 'rotation', 'season', 'altcoin', 'alt_breadth'], route: 'dashboard-intelligence', label: 'Market Intelligence' },
+  { keys: ['sentiment', 'leverag', 'funding', 'fear', 'greed', 'open_interest', 'positioning'], route: 'dashboard-flows', label: 'On-Chain & Flows' },
+  { keys: ['portfolio', 'risk', 'pnl', 'drawdown'], route: 'dashboard-portfolio', label: 'Portfolio & Risk' },
+  { keys: ['evidence', 'engine', 'ledger', 'accuracy', 'forecast'], route: 'dashboard-evidence', label: 'Evidence & Engines' },
+  { keys: ['paper', 'trad', 'strateg'], route: 'dashboard-paper', label: 'Paper Trading' },
+  { keys: ['news', 'event', 'calendar'], route: 'dashboard-news', label: 'News, Macro & Policy' },
+  { keys: ['network', 'hash', 'on.chain', 'mempool'], route: 'dashboard-flows', label: 'On-Chain & Flows' },
+];
+export const sectionDeepLink = (section) => {
+  if (!section) return null;
+  const haystack = `${section.id || ''} ${section.title || ''}`.toLowerCase();
+  for (const rule of SECTION_ROUTE_RULES) {
+    if (rule.keys.some((k) => haystack.includes(k))) return { route: rule.route, label: rule.label };
+  }
+  return null;
+};
 
 export const DASHBOARD_AREAS = {
   brief: { title: "Albert’s Brief", areas: [['Unified Brief', 'briefing'], ['Evidence & Data Audit', 'dataaudit']] },
@@ -205,13 +229,20 @@ export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboar
         </section>
       );
 
-      // Each section as its own detailed card
+      // Each section as its own detailed card with deep link
       allSections.forEach((sec) => {
+        const link = sectionDeepLink(sec);
         rows.push(
           <section key={sec.id} className="rounded-lg border border-border bg-card p-4 sm:p-5">
-            <h3 className="text-base font-semibold text-white">{sec.title}</h3>
-            <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-slate-300">{sec.body || sec.dashboard_summary}</p>
-            {sec.dashboard_summary && sec.body && sec.body !== sec.dashboard_summary && (
+            <div className="flex items-start justify-between gap-2">
+              <h3 className="text-base font-semibold text-white">{sec.title}</h3>
+              {link && <button type="button" onClick={() => onNav(link.route, symbol)}
+                className="inline-flex shrink-0 items-center gap-1 rounded-md border border-slate-700 bg-slate-800/50 px-2 py-1 text-[11px] font-semibold text-violet-300 transition-colors hover:border-violet-500/40 hover:bg-violet-500/10 hover:text-violet-200">
+                {link.label}<ExternalLink className="h-3 w-3" />
+              </button>}
+            </div>
+            <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-slate-300">{sec.full_commentary || sec.body || sec.dashboard_summary}</p>
+            {sec.dashboard_summary && (sec.full_commentary || sec.body) && (sec.full_commentary || sec.body) !== sec.dashboard_summary && (
               <p className="mt-2 rounded-md border border-slate-700/50 bg-slate-800/30 px-3 py-2 text-xs text-slate-400"><strong className="text-slate-300">Summary:</strong> {sec.dashboard_summary}</p>
             )}
           </section>

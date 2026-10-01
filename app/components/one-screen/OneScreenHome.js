@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import ModalShell from './ModalShell';
 import DashboardAskPanel from './DashboardAskPanel';
+import { sectionDeepLink } from './ConsolidatedDetail';
 import { BTCChart, MarketChart, ExpandedChart, matchedMarketSeries } from './OneScreenCharts';
 import EvidenceDrawer from '../albert/EvidenceDrawer';
 import DraggableGrid from './DraggableGrid';
@@ -530,12 +531,18 @@ const OneScreenHome = ({ d, dashboardStatus = 'loading', ticker, news, newsStatu
               <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${convC}`}>{b.conviction}</span>
             </div>
             <p className="text-[12px] leading-relaxed text-slate-300">{b.executive_summary}</p>
-            {dashSecs.map((sec) => (
+            {dashSecs.map((sec) => {
+              const dl = sectionDeepLink(sec);
+              return (
               <div key={sec.id} className="border-t border-slate-800 pt-1.5">
-                <p className="text-[11px] font-semibold text-white">{sec.title}</p>
+                <div className="flex items-center gap-1.5">
+                  <p className="flex-1 text-[11px] font-semibold text-white">{sec.title}</p>
+                  {dl && <button type="button" onClick={(e) => { e.stopPropagation(); onNav(dl.route); }}
+                    className="shrink-0 text-[10px] font-semibold text-violet-300/70 hover:text-violet-200">{dl.label} ↗</button>}
+                </div>
                 <p className="mt-0.5 text-[11px] leading-relaxed text-slate-400">{sec.dashboard_summary}</p>
               </div>
-            ))}
+            );})}
           </div>
         );
       })() : (
