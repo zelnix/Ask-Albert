@@ -101,9 +101,9 @@ const deleteLayoutFromApi = () => {
 };
 
 /* ── Main DraggableGrid component ── */
-const DraggableGrid = ({ children, className = '' }) => {
+const DraggableGrid = ({ children, className = '', excludeIds = [] }) => {
   const childArray = Children.toArray(children);
-  const defaultOrder = childArray.map((child, i) => getCardId(child, i));
+  const defaultOrder = childArray.map((child, i) => getCardId(child, i)).filter((id) => !excludeIds.includes(id));
 
   const [cardOrder, setCardOrder] = useState(defaultOrder);
   const [cardSizes, setCardSizes] = useState({});
@@ -118,8 +118,10 @@ const DraggableGrid = ({ children, className = '' }) => {
 
     const validateOrder = (parsed) => {
       if (!Array.isArray(parsed) || parsed.length === 0) return null;
-      const valid = parsed.filter((id) => defaultOrder.includes(id));
-      const added = defaultOrder.filter((id) => !parsed.includes(id));
+      // Filter out any excluded IDs from the saved order (e.g. 'brief' is now fixed)
+      const cleaned = parsed.filter((id) => !excludeIds.includes(id));
+      const valid = cleaned.filter((id) => defaultOrder.includes(id));
+      const added = defaultOrder.filter((id) => !cleaned.includes(id));
       return valid.length > 0 ? [...valid, ...added] : null;
     };
 
