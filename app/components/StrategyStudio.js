@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
   Crosshair, Plus, Loader2, Sparkles, ShieldCheck, ChevronDown, Play, Square, Archive,
-  FlaskConical, CheckCircle2, AlertTriangle, ArrowRight, X, XCircle, Bot, Info,
+  FlaskConical, CheckCircle2, AlertTriangle, ArrowRight, X, XCircle, Bot, Info, Copy, Zap,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -22,6 +22,21 @@ const STUDIO_EXEC_RULES = {
 };
 
 const get = (path, signal) => fetch(`${API_BASE}${path}`, { credentials: 'include', cache: 'no-store', signal });
+
+/** Compare strategy contract settings against global mandate and return override list */
+function mandateOverrides(contract, mandate) {
+  if (!contract || !mandate) return [];
+  const overrides = [];
+  const cReserve = contract.reservePct;
+  const mReserve = mandate.reserve_pct;
+  if (cReserve != null && mReserve != null && Math.abs(cReserve - mReserve) > 0.01)
+    overrides.push({ field: 'Reserve', strategy: `${cReserve}%`, mandate: `${mReserve}%` });
+  const cDD = (contract.portfolioGoals || {}).maxDrawdownPct;
+  const mDD = mandate.max_drawdown_pct;
+  if (cDD != null && mDD != null && Math.abs(cDD - mDD) > 0.01)
+    overrides.push({ field: 'Max DD', strategy: `${cDD}%`, mandate: `${mDD}%` });
+  return overrides;
+}
 
 
 /**
@@ -869,7 +884,7 @@ function PaperPanel({ sid, name, onChange }) {
   );
 }
 
-function Detail({ sid, onChange, onRevise }) {
+function Detail({ sid, onChange, onRevise, onClone, mandate }) {
   const [s, setS] = useState(null);
   const [loadError, setLoadError] = useState('');
   const [bt, setBt] = useState(null);
@@ -879,16 +894,6 @@ function Detail({ sid, onChange, onRevise }) {
   const [reviseInput, setReviseInput] = useState('');
   const [revising, setRevising] = useState(false);
   const [reviseOpen, setReviseOpen] = useState(false);
-  const [mandate, setMandate] = useState(null);
-
-  // Fetch global mandate once on mount
-  useEffect(() => {
-    let active = true;
-    get('/v1/albert/mandate').then(r => r.json()).then(j => {
-      if (active && j.mandate) setMandate(j.mandate);
-    }).catch(() => {});
-    return () => { active = false; };
-  }, []);
 
   const load = useCallback(async () => {
     setLoadError('');
@@ -961,7 +966,8 @@ function Detail({ sid, onChange, onRevise }) {
         <Badge variant="outline" className={`border-slate-700 text-[11px] ${meta.color}`}>{meta.label}</Badge>
         <span className="text-[11px] text-slate-500">v{s.version}</span>
         {s.paperStatus !== 'ARCHIVED' && <>
-          <Button size="sm" variant="outline" onClick={() => onRevise?.(s)} className="ml-auto h-7 border-slate-700 text-[12px] text-slate-200">Revise plan</Button>
+          <Button size="sm" variant="outline" onClick={() => onClone?.(s)} className="ml-auto h-7 gap-1 border-teal-700 text-[12px] text-teal-300 hover:bg-teal-900/30"><Copy className="h-3.5 w-3.5" />Clone</Button>
+          <Button size="sm" variant="outline" onClick={() => onRevise?.(s)} className="h-7 border-slate-700 text-[12px] text-slate-200">Revise plan</Button>
           <Button size="sm" variant="outline" onClick={() => setReviseOpen(!reviseOpen)} className="h-7 border-indigo-700 text-[12px] text-indigo-300">Revise with Albert</Button>
         </>}
       </div>
@@ -986,19 +992,34 @@ function Detail({ sid, onChange, onRevise }) {
         {(s.assetCapabilities || []).map((cap) => <CoinCapability key={cap.symbol} item={cap} />)}
       </div>
       <p className="mt-2 text-[12px] text-slate-400">Wallet: <span className="font-semibold text-slate-200">{s.walletName || 'Not started'}</span> · Starting virtual balance: {usd(s.startingCash || s.contract?.startingCash)}. Revisions keep the same wallet, holdings and history.</p>
-      {mandate && (
-        <div className="mt-2 rounded-lg border border-slate-700/40 bg-slate-800/30 px-3 py-2">
-          <p className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500"><ShieldCheck className="h-3 w-3" />Global mandate in effect</p>
-          <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
-            {mandate.risk_tolerance && <span className="text-slate-400">Risk: <span className="font-medium text-slate-200 capitalize">{mandate.risk_tolerance}</span></span>}
-            {mandate.time_horizon && <span className="text-slate-400">Horizon: <span className="font-medium text-slate-200">{mandate.time_horizon}</span></span>}
-            {mandate.max_drawdown_pct != null && <span className="text-slate-400">Max DD: <span className="font-medium text-slate-200">{mandate.max_drawdown_pct}%</span></span>}
-            {mandate.reserve_pct != null && <span className="text-slate-400">Reserve: <span className="font-medium text-slate-200">{mandate.reserve_pct}%</span></span>}
-            {mandate.max_trade_risk_pct != null && <span className="text-slate-400">Trade risk: <span className="font-medium text-slate-200">{mandate.max_trade_risk_pct}%</span></span>}
-            {!mandate.risk_tolerance && mandate.max_drawdown_pct == null && mandate.reserve_pct == null && <span className="text-slate-500 italic">No global limits set — strategy settings apply</span>}
+      {mandate && (() => {
+        const overrides = mandateOverrides(s.contract, mandate);
+        return (
+          <div className="mt-2 rounded-lg border border-slate-700/40 bg-slate-800/30 px-3 py-2">
+            <p className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+              <ShieldCheck className="h-3 w-3" />Global mandate in effect
+              {overrides.length > 0 && <span className="ml-1 inline-flex items-center gap-0.5 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-bold text-amber-300"><Zap className="h-2.5 w-2.5" />{overrides.length} override{overrides.length > 1 ? 's' : ''}</span>}
+            </p>
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
+              {mandate.risk_tolerance && <span className="text-slate-400">Risk: <span className="font-medium text-slate-200 capitalize">{mandate.risk_tolerance}</span></span>}
+              {mandate.time_horizon && <span className="text-slate-400">Horizon: <span className="font-medium text-slate-200">{mandate.time_horizon}</span></span>}
+              {mandate.max_drawdown_pct != null && <span className="text-slate-400">Max DD: <span className="font-medium text-slate-200">{mandate.max_drawdown_pct}%</span></span>}
+              {mandate.reserve_pct != null && <span className="text-slate-400">Reserve: <span className="font-medium text-slate-200">{mandate.reserve_pct}%</span></span>}
+              {mandate.max_trade_risk_pct != null && <span className="text-slate-400">Trade risk: <span className="font-medium text-slate-200">{mandate.max_trade_risk_pct}%</span></span>}
+              {!mandate.risk_tolerance && mandate.max_drawdown_pct == null && mandate.reserve_pct == null && <span className="text-slate-500 italic">No global limits set — strategy settings apply</span>}
+            </div>
+            {overrides.length > 0 && (
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                {overrides.map((o) => (
+                  <span key={o.field} className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-200">
+                    <Zap className="h-2.5 w-2.5 text-amber-400" />{o.field}: {o.strategy} <span className="text-slate-500">⇠ mandate {o.mandate}</span>
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
-        </div>
-      )}
+        );
+      })()}
       {s.readiness === 'needs_changes' && (s.startErrors || []).length > 0 && (
         <div className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2">
           <p className="mb-1 text-[11px] font-bold text-amber-300">Needs changes — not trading</p>
@@ -1070,6 +1091,16 @@ export default function StrategyStudio({ chatGoal = '', chatDraftKey = null, cha
   const [revision, setRevision] = useState(null);
   const [building, setBuilding] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [mandate, setMandate] = useState(null);
+
+  // Fetch global mandate once
+  useEffect(() => {
+    let active = true;
+    get('/v1/albert/mandate').then(r => r.json()).then(j => {
+      if (active && j.mandate) setMandate(j.mandate);
+    }).catch(() => {});
+    return () => { active = false; };
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true); setListError('');
@@ -1121,6 +1152,18 @@ export default function StrategyStudio({ chatGoal = '', chatDraftKey = null, cha
         startingCash: s.startingCash || s.contract?.startingCash || '' } });
     setSel(null); setBuilding(true); onChatDismiss?.();
   };
+  const clone = (s) => {
+    const saved = Object.fromEntries(
+      Object.entries(s.contract || {}).filter(([_, v]) => v != null && v !== '')
+    );
+    const cloneName = (s.name || 'Strategy').replace(/\s*\(copy(?:\s*\d+)?\)\s*$/, '') + ' (copy)';
+    // No strategyId → saves as a brand-new strategy. Fresh wallet name too.
+    setRevision({ id: null, version: null, goal: s.contract?.requestedPlan || '',
+      draft: { ...STUDIO_EXEC_RULES, ...saved, name: cloneName, rules: s.contract?.rules || [],
+        walletName: `${cloneName} wallet`,
+        startingCash: s.startingCash || s.contract?.startingCash || '' } });
+    setSel(null); setBuilding(true); onChatDismiss?.();
+  };
   const liveCount = list.filter((s) => s.isLive).length;
 
   return (
@@ -1155,11 +1198,12 @@ export default function StrategyStudio({ chatGoal = '', chatDraftKey = null, cha
           {list.map((s) => {
             const m = !s.canStart && (s.entryBlockers || []).length > 0 && !['LIVE', 'WAIT', 'UNAVAILABLE', 'NEEDS_CHANGES', 'RESTRICTED_IN_WALLET', 'ARCHIVED', 'HALTED_RISK'].includes(s.paperStatus)
               ? { label: 'Needs changes', color: 'text-amber-300', dot: 'bg-amber-400' } : ps(s.paperStatus);
+            const ov = mandate ? mandateOverrides(s.contract, mandate) : [];
             return (
               <button key={s.strategyId} onClick={() => { setSel(s.strategyId); setRevision(null); setBuilding(false); onChatDismiss?.(); }}
                 className={`w-full rounded-lg border p-3 text-left transition-colors ${sel === s.strategyId ? 'border-violet-500/50 bg-violet-500/[0.06]' : 'border-slate-800 bg-slate-900 hover:border-slate-700'}`}>
                 <div className="flex items-center justify-between gap-2">
-                  <p className="truncate text-sm font-semibold text-white">{s.name}</p>
+                  <p className="truncate text-sm font-semibold text-white">{s.name}{ov.length > 0 && <Zap className="ml-1 inline h-3 w-3 text-amber-400" title={`${ov.length} mandate override${ov.length > 1 ? 's' : ''}`} />}</p>
                   <span className={`inline-flex shrink-0 items-center gap-1 text-[10px] font-semibold ${m.color}`}>
                     <span className={`h-1.5 w-1.5 rounded-full ${m.dot}`} />{m.label}
                   </span>
@@ -1180,7 +1224,7 @@ export default function StrategyStudio({ chatGoal = '', chatDraftKey = null, cha
                 setBuilding(false); setRevision(null); onChatDismiss?.(); load(); setSel(sid);
                 try { window.dispatchEvent(new CustomEvent('albert:strategy-saved', { detail: { strategyId: sid } })); } catch (x) { /* noop */ }
               }} />
-            : sel ? <Detail key={sel} sid={sel} onChange={load} onRevise={revise} />
+            : sel ? <Detail key={sel} sid={sel} onChange={load} onRevise={revise} onClone={clone} mandate={mandate} />
             : <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800"><p className="text-[13px] text-slate-400">Select a strategy, or build a new one with Albert.</p></Card>}
         </div>
       </div>
