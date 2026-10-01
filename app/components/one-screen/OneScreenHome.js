@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   Sparkles, Wallet, ShieldAlert, GitBranch, BarChart3, Newspaper,
   Waves, ArrowUpRight, Maximize2, RefreshCw, ShieldCheck, Bot,
+  PanelLeftClose, PanelLeftOpen, ChevronUp, X, GripHorizontal,
 } from 'lucide-react';
 import ModalShell from './ModalShell';
 import DashboardAskPanel from './DashboardAskPanel';
@@ -291,9 +292,36 @@ const DashboardCard = ({ cardId, title, icon: Icon, status, summary, freshness, 
 };
 
 /* ── Home ── */
+const BRIEF_COLLAPSED_KEY = 'albert-brief-collapsed';
+
 const OneScreenHome = ({ d, dashboardStatus = 'loading', ticker, news, newsStatus, snapshot, onNav }) => {
   const [chart, setChart] = useState(null);
   const [selected, setSelected] = useState(null);
+  /* ── Brief collapse (desktop) ── */
+  const [briefCollapsed, setBriefCollapsed] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    try { return localStorage.getItem(BRIEF_COLLAPSED_KEY) === '1'; } catch { return false; }
+  });
+  const toggleBriefCollapsed = useCallback(() => {
+    setBriefCollapsed((prev) => {
+      const next = !prev;
+      try { localStorage.setItem(BRIEF_COLLAPSED_KEY, next ? '1' : '0'); } catch {}
+      return next;
+    });
+  }, []);
+  /* ── Mobile brief drawer ── */
+  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
+  const drawerRef = useRef(null);
+  const touchStartY = useRef(null);
+  const handleDrawerTouchStart = useCallback((e) => {
+    touchStartY.current = e.touches[0].clientY;
+  }, []);
+  const handleDrawerTouchEnd = useCallback((e) => {
+    if (touchStartY.current == null) return;
+    const diff = e.changedTouches[0].clientY - touchStartY.current;
+    if (diff > 60) setMobileDrawerOpen(false); // swipe down to close
+    touchStartY.current = null;
+  }, []);
   useEffect(() => {
     const id = typeof window !== 'undefined' ? window.__dashboardReturnCard : null;
     if (!id) return;
@@ -474,82 +502,124 @@ const OneScreenHome = ({ d, dashboardStatus = 'loading', ticker, news, newsStatu
   const focusableChart = (type, title, preview) => <button type="button" onClick={() => setChart(type)} className="group relative mt-1 block w-full rounded-md border border-slate-700/70 bg-slate-950/60 p-1.5 text-left hover:border-sky-500/50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400">
     {preview}<span className="absolute right-1 top-1 rounded bg-slate-900/90 p-1 text-sky-200 group-hover:bg-sky-500/30"><Maximize2 className="h-3 w-3" /></span>
   </button>;
+
+  /* ── Brief card content (shared between desktop aside & mobile drawer) ── */
+  const briefCardContent = (
+    <article onClick={(e) => { if (!e.target.closest('button, a')) open('brief'); }}
+      className="flex min-w-0 cursor-pointer flex-col rounded-lg border border-violet-500/30 bg-gradient-to-b from-slate-900 via-slate-900/95 to-slate-950 p-3 shadow-sm shadow-black/20">
+      <div className="flex min-h-5 items-center gap-1.5">
+        <Sparkles className="h-4 w-4 shrink-0 text-violet-400" />
+        <h2 className="min-w-0 truncate text-[13px] font-bold text-white"><button id="home-card-brief" type="button" onClick={() => open('brief')} className="max-w-full truncate text-left hover:text-violet-200 focus-visible:rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400">Albert's Brief</button></h2>
+        {health?.sop && <span className={`ml-auto shrink-0 rounded-sm px-1.5 py-0.5 text-[10px] font-bold ${['stale', 'error', 'unavailable'].includes(String(health.sop).toLowerCase()) ? 'bg-amber-500/15 text-amber-200' : 'bg-violet-500/15 text-violet-200'}`}>{titleCase(health.sop)}</span>}
+      </div>
+      {/* V2 structured brief card */}
+      {brief?.version === 'v2' && brief?.brief ? (() => {
+        const b = brief.brief;
+        const dashSecs = (b.dashboard_section_ids || []).map(id => (b.sections || []).find(s => s.id === id)).filter(Boolean).slice(0, 5);
+        const convC = (b.conviction || '').toLowerCase() === 'high' ? 'text-emerald-400' : (b.conviction || '').toLowerCase() === 'low' ? 'text-red-400' : 'text-amber-400';
+        const callC = (b.market_call || '').toLowerCase().includes('bull') ? 'text-emerald-400' : (b.market_call || '').toLowerCase().includes('bear') ? 'text-red-400' : 'text-amber-400';
+        return (
+          <div className="mt-2 flex-1 space-y-2 text-xs leading-snug">
+            <p className="text-[14px] font-bold leading-tight text-white">{b.headline}</p>
+            <div className="flex items-center gap-2">
+              <span className={`text-[11px] font-bold ${callC}`}>{b.market_call}</span>
+              <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${convC}`}>{b.conviction}</span>
+            </div>
+            <p className="text-[12px] leading-relaxed text-slate-300">{b.executive_summary}</p>
+            {dashSecs.map((sec) => (
+              <div key={sec.id} className="border-t border-slate-800 pt-1.5">
+                <p className="text-[11px] font-semibold text-white">{sec.title}</p>
+                <p className="mt-0.5 text-[11px] leading-relaxed text-slate-400">{sec.dashboard_summary}</p>
+              </div>
+            ))}
+          </div>
+        );
+      })() : (
+        /* V1 legacy card content */
+        <>
+          <p className="mt-1.5 text-xs leading-snug text-slate-300">{briefCommentary}</p>
+          <div className="mt-2 flex-1 space-y-2.5 text-xs leading-snug text-slate-200">
+            <div>
+              {briefChanges[0]?.detail && <p><b>Since last visit:</b> {briefChanges[0].detail}</p>}
+              {leadershipClaim?.text && <p className="mt-0.5"><b>Drivers:</b> {leadershipClaim.text}</p>}
+              {secondReason?.text && <p className="mt-0.5 text-slate-400">{secondReason.text}</p>}
+            </div>
+            <div className="border-t border-slate-800 pt-1.5">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Portfolio</p>
+              <p className="mt-0.5">{portfolioClaim?.text || (pnlVal != null ? `${pnlLabel}: ${pnlVal >= 0 ? '+' : ''}${money(pnlVal, 2)} (${signed(totals?.pnlPct)}) on ${money(totals?.value, 2)} portfolio` : 'Unavailable')}</p>
+            </div>
+            <div className="border-t border-slate-800 pt-1.5">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Evidence & Engines</p>
+              <p className="mt-0.5 text-slate-300">{evidenceCommentary}</p>
+              <NavigateLink id="dashboard-evidence" onNav={onNav} className="mt-0.5 text-[11px]">Full evidence & engines<ArrowUpRight className="h-3 w-3" /></NavigateLink>
+            </div>
+            <div className="border-t border-slate-800 pt-1.5">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Opportunity Radar</p>
+              {findings.length ? findings.map((f, i) => <div key={f.findingId || i} className="mt-0.5">
+                <p>{f.hypothesis || f.title || 'Untitled'}</p>
+                {(f.confirmIf || f.invalidateIf || f.resolveBy) && <p className="text-[11px] text-slate-400">{f.confirmIf ? `Confirm: ${f.confirmIf}` : f.invalidateIf ? `Invalidate: ${f.invalidateIf}` : `Resolve by: ${f.resolveBy}`}</p>}
+              </div>) : <p className="text-slate-400">No open setups</p>}
+              <NavigateLink id="dashboard-radar" onNav={onNav} className="mt-0.5 text-[11px]">Full opportunity radar<ArrowUpRight className="h-3 w-3" /></NavigateLink>
+            </div>
+          </div>
+        </>
+      )}
+      <div className="mt-2 flex shrink-0 items-center gap-2 border-t border-slate-800 pt-2 text-xs">
+        <span className="min-w-0 flex-1 truncate text-[11px] text-slate-400">{last('Regime', claimTime)}</span>
+        <button type="button" onClick={() => ask('brief', "Albert's Brief", briefCommentary, 'State of Play', claimTime)} className="shrink-0 rounded-sm p-0.5 text-violet-300 hover:text-violet-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"><Sparkles className="h-3.5 w-3.5" /></button>
+        <button type="button" onClick={() => onNav('albert-brief')} className="inline-flex shrink-0 items-center gap-0.5 font-semibold text-violet-300 hover:text-violet-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400">Full Brief<ArrowUpRight className="h-3.5 w-3.5" /></button>
+      </div>
+    </article>
+  );
+
+  /* ── Brief peek text for collapsed tab & mobile bar ── */
+  const briefPeek = (() => {
+    if (brief?.version === 'v2' && brief?.brief) {
+      const b = brief.brief;
+      const callC = (b.market_call || '').toLowerCase().includes('bull') ? 'text-emerald-400' : (b.market_call || '').toLowerCase().includes('bear') ? 'text-red-400' : 'text-amber-400';
+      return { label: b.market_call || 'Brief', className: callC, summary: b.headline || '' };
+    }
+    const dirText = directionClaim?.text || '';
+    const isBull = /bullish/i.test(dirText);
+    const isBear = /bearish/i.test(dirText);
+    return { label: isBull ? 'Bullish' : isBear ? 'Bearish' : 'Neutral', className: isBull ? 'text-emerald-400' : isBear ? 'text-red-400' : 'text-amber-400', summary: dirText.slice(0, 80) };
+  })();
+
   return <>
     <div className="mb-2 flex flex-wrap items-center gap-2">
       <h1 className="text-base font-bold text-white">Your market at a glance</h1>
       <button type="button" onClick={snapshot.refresh} aria-label="Refresh" className="ml-auto rounded-md border border-slate-700 p-1.5 text-slate-300 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"><RefreshCw className="h-4 w-4" /></button>
     </div>
-    <div className="grid min-w-0 gap-3 lg:grid-cols-[300px_minmax(0,1fr)_280px] lg:items-start xl:grid-cols-[320px_minmax(0,1fr)_320px] 2xl:grid-cols-[340px_minmax(0,1fr)_350px]">
-      {/* ── Albert's Brief — fixed left column, full height ── */}
-      <aside className="min-w-0 lg:sticky lg:top-14 lg:max-h-[calc(100vh-4.5rem)] lg:overflow-y-auto lg:rounded-lg [scrollbar-width:thin]">
-        <article onClick={(e) => { if (!e.target.closest('button, a')) open('brief'); }}
-          className="flex min-w-0 cursor-pointer flex-col rounded-lg border border-violet-500/30 bg-gradient-to-b from-slate-900 via-slate-900/95 to-slate-950 p-3 shadow-sm shadow-black/20">
-          <div className="flex min-h-5 items-center gap-1.5">
-            <Sparkles className="h-4 w-4 shrink-0 text-violet-400" />
-            <h2 className="min-w-0 truncate text-[13px] font-bold text-white"><button id="home-card-brief" type="button" onClick={() => open('brief')} className="max-w-full truncate text-left hover:text-violet-200 focus-visible:rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400">Albert's Brief</button></h2>
-            {health?.sop && <span className={`ml-auto shrink-0 rounded-sm px-1.5 py-0.5 text-[10px] font-bold ${['stale', 'error', 'unavailable'].includes(String(health.sop).toLowerCase()) ? 'bg-amber-500/15 text-amber-200' : 'bg-violet-500/15 text-violet-200'}`}>{titleCase(health.sop)}</span>}
+    <div className={`grid min-w-0 gap-3 lg:items-start ${briefCollapsed
+      ? 'lg:grid-cols-[minmax(0,1fr)_280px] xl:grid-cols-[minmax(0,1fr)_320px] 2xl:grid-cols-[minmax(0,1fr)_350px]'
+      : 'lg:grid-cols-[300px_minmax(0,1fr)_280px] xl:grid-cols-[320px_minmax(0,1fr)_320px] 2xl:grid-cols-[340px_minmax(0,1fr)_350px]'}`}>
+      {/* ── Albert's Brief — desktop left column ── */}
+      {!briefCollapsed ? (
+        <aside className="hidden min-w-0 lg:sticky lg:top-14 lg:block lg:max-h-[calc(100vh-4.5rem)] lg:overflow-y-auto lg:rounded-lg [scrollbar-width:thin]">
+          <div className="mb-1.5 flex justify-end">
+            <button type="button" onClick={toggleBriefCollapsed} title="Collapse brief"
+              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-slate-400 transition-colors hover:bg-slate-800 hover:text-slate-200">
+              <PanelLeftClose className="h-3.5 w-3.5" />Hide
+            </button>
           </div>
-          {/* V2 structured brief card */}
-          {brief?.version === 'v2' && brief?.brief ? (() => {
-            const b = brief.brief;
-            const dashSecs = (b.dashboard_section_ids || []).map(id => (b.sections || []).find(s => s.id === id)).filter(Boolean).slice(0, 5);
-            const convC = (b.conviction || '').toLowerCase() === 'high' ? 'text-emerald-400' : (b.conviction || '').toLowerCase() === 'low' ? 'text-red-400' : 'text-amber-400';
-            const callC = (b.market_call || '').toLowerCase().includes('bull') ? 'text-emerald-400' : (b.market_call || '').toLowerCase().includes('bear') ? 'text-red-400' : 'text-amber-400';
-            return (
-              <div className="mt-2 flex-1 space-y-2 text-xs leading-snug">
-                <p className="text-[14px] font-bold leading-tight text-white">{b.headline}</p>
-                <div className="flex items-center gap-2">
-                  <span className={`text-[11px] font-bold ${callC}`}>{b.market_call}</span>
-                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${convC}`}>{b.conviction}</span>
-                </div>
-                <p className="text-[12px] leading-relaxed text-slate-300">{b.executive_summary}</p>
-                {dashSecs.map((sec) => (
-                  <div key={sec.id} className="border-t border-slate-800 pt-1.5">
-                    <p className="text-[11px] font-semibold text-white">{sec.title}</p>
-                    <p className="mt-0.5 text-[11px] leading-relaxed text-slate-400">{sec.dashboard_summary}</p>
-                  </div>
-                ))}
-              </div>
-            );
-          })() : (
-            /* V1 legacy card content */
-            <>
-              <p className="mt-1.5 text-xs leading-snug text-slate-300">{briefCommentary}</p>
-              <div className="mt-2 flex-1 space-y-2.5 text-xs leading-snug text-slate-200">
-                <div>
-                  {briefChanges[0]?.detail && <p><b>Since last visit:</b> {briefChanges[0].detail}</p>}
-                  {leadershipClaim?.text && <p className="mt-0.5"><b>Drivers:</b> {leadershipClaim.text}</p>}
-                  {secondReason?.text && <p className="mt-0.5 text-slate-400">{secondReason.text}</p>}
-                </div>
-                <div className="border-t border-slate-800 pt-1.5">
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Portfolio</p>
-                  <p className="mt-0.5">{portfolioClaim?.text || (pnlVal != null ? `${pnlLabel}: ${pnlVal >= 0 ? '+' : ''}${money(pnlVal, 2)} (${signed(totals?.pnlPct)}) on ${money(totals?.value, 2)} portfolio` : 'Unavailable')}</p>
-                </div>
-                <div className="border-t border-slate-800 pt-1.5">
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Evidence & Engines</p>
-                  <p className="mt-0.5 text-slate-300">{evidenceCommentary}</p>
-                  <NavigateLink id="dashboard-evidence" onNav={onNav} className="mt-0.5 text-[11px]">Full evidence & engines<ArrowUpRight className="h-3 w-3" /></NavigateLink>
-                </div>
-                <div className="border-t border-slate-800 pt-1.5">
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Opportunity Radar</p>
-                  {findings.length ? findings.map((f, i) => <div key={f.findingId || i} className="mt-0.5">
-                    <p>{f.hypothesis || f.title || 'Untitled'}</p>
-                    {(f.confirmIf || f.invalidateIf || f.resolveBy) && <p className="text-[11px] text-slate-400">{f.confirmIf ? `Confirm: ${f.confirmIf}` : f.invalidateIf ? `Invalidate: ${f.invalidateIf}` : `Resolve by: ${f.resolveBy}`}</p>}
-                  </div>) : <p className="text-slate-400">No open setups</p>}
-                  <NavigateLink id="dashboard-radar" onNav={onNav} className="mt-0.5 text-[11px]">Full opportunity radar<ArrowUpRight className="h-3 w-3" /></NavigateLink>
-                </div>
-              </div>
-            </>
-          )}
-          <div className="mt-2 flex shrink-0 items-center gap-2 border-t border-slate-800 pt-2 text-xs">
-            <span className="min-w-0 flex-1 truncate text-[11px] text-slate-400">{last('Regime', claimTime)}</span>
-            <button type="button" onClick={() => ask('brief', "Albert's Brief", briefCommentary, 'State of Play', claimTime)} className="shrink-0 rounded-sm p-0.5 text-violet-300 hover:text-violet-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"><Sparkles className="h-3.5 w-3.5" /></button>
-            <button type="button" onClick={() => onNav('albert-brief')} className="inline-flex shrink-0 items-center gap-0.5 font-semibold text-violet-300 hover:text-violet-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400">Full Brief<ArrowUpRight className="h-3.5 w-3.5" /></button>
-          </div>
-        </article>
-      </aside>
+          {briefCardContent}
+        </aside>
+      ) : (
+        /* Collapsed: slim expand tab on desktop */
+        <div className="fixed left-1 top-1/2 z-30 hidden -translate-y-1/2 lg:block">
+          <button type="button" onClick={toggleBriefCollapsed} title="Show Albert's Brief"
+            className="group flex flex-col items-center gap-1.5 rounded-xl border border-violet-500/30 bg-slate-900/95 px-1.5 py-3 shadow-lg shadow-black/30 backdrop-blur-sm transition-all hover:border-violet-400/50 hover:shadow-violet-500/10">
+            <PanelLeftOpen className="h-4 w-4 text-violet-400 transition-colors group-hover:text-violet-300" />
+            <span className="flex flex-col items-center gap-0.5">
+              <Sparkles className="h-3 w-3 text-violet-400" />
+              <span className="text-[9px] font-bold text-violet-300 [writing-mode:vertical-lr]">Brief</span>
+            </span>
+            <span className={`text-[9px] font-bold [writing-mode:vertical-lr] ${briefPeek.className}`}>{briefPeek.label}</span>
+          </button>
+        </div>
+      )}
       {/* ── Draggable cards grid (center) ── */}
-      <DraggableGrid className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2" excludeIds={['brief']}>
+      <DraggableGrid className={`grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 ${briefCollapsed ? 'xl:grid-cols-3' : ''}`} excludeIds={['brief']}>
         {/* 2. Paper Trading */}
         <DashboardCard cardId="paper" title="Paper Trading" icon={Wallet} status={health?.paper} summary={paperCommentary} freshness={last('Ledger', paper?.asOf)} onAsk={() => ask('paper', 'Paper Trading', paperCommentary, 'Paper ledger', paper?.asOf)} onOpen={() => open('paper')}>
           <p className="line-clamp-1"><b>Value:</b> {money(totals?.value, 2)} · <b>Total P&L:</b> {pnlVal != null ? `${pnlVal >= 0 ? '+' : ''}${money(pnlVal, 2)} (${signed(totals?.pnlPct)})` : 'unavailable'}</p>
@@ -583,6 +653,51 @@ const OneScreenHome = ({ d, dashboardStatus = 'loading', ticker, news, newsStatu
       </DraggableGrid>
       <DashboardAskPanel selected={selected} onNav={onNav} onEvidence={setEvidenceId} stateId={sop?.stateId} />
     </div>
+
+    {/* ── Mobile Brief Drawer ── */}
+    {/* Peek bar: fixed bottom bar on mobile only */}
+    {!mobileDrawerOpen && (
+      <button type="button" onClick={() => setMobileDrawerOpen(true)}
+        className="fixed inset-x-0 bottom-0 z-40 flex items-center gap-2 border-t border-violet-500/30 bg-slate-900/95 px-4 py-2.5 backdrop-blur-md lg:hidden"
+        aria-label="Open Albert's Brief">
+        <Sparkles className="h-4 w-4 shrink-0 text-violet-400" />
+        <span className="text-[12px] font-bold text-white">Albert's Brief</span>
+        <span className={`text-[11px] font-bold ${briefPeek.className}`}>· {briefPeek.label}</span>
+        {briefPeek.summary && <span className="min-w-0 flex-1 truncate text-[11px] text-slate-400">{briefPeek.summary}</span>}
+        <ChevronUp className="h-4 w-4 shrink-0 text-violet-400" />
+      </button>
+    )}
+    {/* Drawer overlay: slides up from bottom on mobile */}
+    {mobileDrawerOpen && (
+      <div className="fixed inset-0 z-50 flex flex-col lg:hidden">
+        {/* Backdrop */}
+        <div className="flex-1 bg-black/60 backdrop-blur-sm" onClick={() => setMobileDrawerOpen(false)} />
+        {/* Drawer sheet */}
+        <div ref={drawerRef} onTouchStart={handleDrawerTouchStart} onTouchEnd={handleDrawerTouchEnd}
+          className="max-h-[85vh] overflow-y-auto rounded-t-2xl border-t border-violet-500/30 bg-slate-950 shadow-2xl shadow-black/50 [scrollbar-width:thin]"
+          style={{ animation: 'slideUp 0.25s ease-out' }}>
+          {/* Grab handle */}
+          <div className="sticky top-0 z-10 flex items-center justify-center bg-slate-950/95 px-4 pb-1 pt-3 backdrop-blur-sm">
+            <div className="h-1 w-8 rounded-full bg-slate-600" />
+          </div>
+          {/* Header bar */}
+          <div className="flex items-center gap-2 px-4 pb-2">
+            <Sparkles className="h-4 w-4 text-violet-400" />
+            <span className="text-[13px] font-bold text-white">Albert's Brief</span>
+            <span className={`text-[11px] font-bold ${briefPeek.className}`}>{briefPeek.label}</span>
+            <button type="button" onClick={() => setMobileDrawerOpen(false)} className="ml-auto rounded-md p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          {/* Brief content */}
+          <div className="px-2 pb-6">
+            {briefCardContent}
+          </div>
+        </div>
+      </div>
+    )}
+    <style>{`@keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }`}</style>
+
     {chart && <ExpandedChart type={chart} outlook={outlook} eth={eth} levels={availableLevels} runAsOf={when(d?.created_at)} onClose={() => setChart(null)} onNav={(id) => onNav(id === 'scenarios' ? 'dashboard-btc' : id === 'crossmarket' ? 'dashboard-intelligence' : id)} onEvidence={(sid) => { setChart(null); setEvidenceId(sid); }} />}
     {evidenceId && <EvidenceDrawer snapshotId={evidenceId} onClose={() => setEvidenceId(null)} />}
   </>;

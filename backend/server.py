@@ -18111,6 +18111,22 @@ def _coin_brief_context(symbol):
 def _brief_context():
     run = _dashboard_real_only(runs_col.find_one(sort=[('created_at', -1)], projection={'_id': 0}) or {})
     L = []
+    # ── Current BTC price — critical anchor for the LLM ──
+    try:
+        t = ticker('BTC')
+        if isinstance(t, dict) and t.get('price'):
+            parts = [f"BTC SPOT PRICE: ${t['price']:,.2f}"]
+            if t.get('change24h') is not None:
+                parts.append(f"24h change {t['change24h']:+.2f}%")
+            if t.get('high') and t.get('low'):
+                parts.append(f"24h range ${t['low']:,.2f}–${t['high']:,.2f}")
+            parts.append(f"source {t.get('source', 'exchange')}")
+            if t.get('ts'):
+                parts.append(f"as of {t['ts']}")
+            L.append('; '.join(parts) + '.')
+            L.append("IMPORTANT: All price levels, support/resistance targets and commentary MUST be anchored to this spot price. Do NOT cite stale or hallucinated prices.")
+    except Exception:  # noqa
+        L.append('BTC SPOT PRICE: unavailable — DO NOT guess or cite a price.')
     dec = run.get('decision') or {}
     if dec.get('realOnlyVersion') == 1 and dec.get('overall_score') is not None:
         L.append(f"DECISION: {dec.get('label')} · {dec.get('overall_score')}/100 ({dec.get('status')}). {dec.get('summary') or ''}")
