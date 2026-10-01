@@ -952,7 +952,14 @@ def generate_news_summary(headline, text):
     if '```' in raw:
         raw = re.sub(r'```(?:json)?', '', raw).strip()
     s, e = raw.find('{'), raw.rfind('}')
-    obj = json.loads(raw[s:e + 1])
+    if s == -1 or e == -1 or e <= s:
+        print(f"[generate_news_summary] Non-JSON response for '{headline[:60]}': {raw[:200]}")
+        return None
+    try:
+        obj = json.loads(raw[s:e + 1])
+    except (json.JSONDecodeError, ValueError) as je:
+        print(f"[generate_news_summary] JSON parse error for '{headline[:60]}': {je}")
+        return None
     return obj
 
 
@@ -960,11 +967,58 @@ def _norm_title(t):
     return re.sub(r'[^a-z0-9]', '', (t or '').lower())[:45]
 
 
+# ---------------------------------------------------------------------------
+#   In-memory news cache — prevents hammering external RSS feeds and avoids
+#   hard-crashing when any source returns HTTP 429 / 5xx.
+# ---------------------------------------------------------------------------
+_news_mem_cache = {'doc': None, 'ts': 0}
+_NEWS_CACHE_TTL = 600   # serve cached result for 10 min before re-fetching
+
+
+def _news_fallback_from_db():
+    """Return the most-recent stored news doc from MongoDB (or an empty shell)."""
+    try:
+        doc = news_col.find_one(sort=[('created_at', -1)], projection={'_id': 0})
+        if doc:
+            return doc
+    except Exception:
+        traceback.print_exc()
+    return {'id': 'fallback-empty', 'created_at': datetime.datetime.utcnow().isoformat(),
+            'cards': [], 'briefing': {'bias': 'Mixed / Neutral', 'total': 0,
+            'major_stories': 0, 'market_moving': 0,
+            'top_tailwind': 'News feed temporarily unavailable.',
+            'top_risk': 'News feed temporarily unavailable.',
+            'next_event': POLICY_CALENDAR[0] if POLICY_CALENDAR else None},
+            'model': 'fallback'}
+
+
 def fetch_news():
+    # --- Guard: return cached doc if still fresh ---
+    now = time.time()
+    if _news_mem_cache['doc'] and (now - _news_mem_cache['ts']) < _NEWS_CACHE_TTL:
+        return _news_mem_cache['doc']
+
+    try:
+        return _fetch_news_inner()
+    except Exception as exc:
+        traceback.print_exc()
+        print(f"[fetch_news] FATAL — falling back to DB cache. Error: {exc}")
+        fallback = _news_fallback_from_db()
+        _news_mem_cache['doc'] = fallback
+        _news_mem_cache['ts'] = time.time()
+        return fallback
+
+
+def _fetch_news_inner():
     entries = []
-    for name, url, cred in NEWS_SOURCES:
+    for idx, (name, url, cred) in enumerate(NEWS_SOURCES):
         try:
             fp = feedparser.parse(url)
+            # Detect HTTP-level errors feedparser hides in the bozo bit
+            http_status = getattr(fp, 'status', 200)
+            if http_status and int(http_status) >= 400:
+                print(f"[fetch_news] {name} returned HTTP {http_status} — skipping")
+                continue
             for e in fp.entries[:12]:
                 title = e.get('title', '')
                 summ = re.sub('<[^>]+>', '', e.get('summary', e.get('description', '')))[:1400]
@@ -976,6 +1030,9 @@ def fetch_news():
                                 'published': e.get('published', e.get('updated', ''))})
         except Exception:  # noqa
             traceback.print_exc()
+        # Polite delay between feeds to avoid triggering rate limits
+        if idx < len(NEWS_SOURCES) - 1:
+            time.sleep(1.5)
 
     # --- Cluster near-duplicate stories across sources into one story each ---
     def _toks(t):
@@ -1090,6 +1147,9 @@ def fetch_news():
             news_col.delete_many({'_id': {'$nin': keep_ids}})
     except Exception:  # noqa
         traceback.print_exc()
+    # Update in-memory cache on success
+    _news_mem_cache['doc'] = doc
+    _news_mem_cache['ts'] = time.time()
     return doc
 
 
