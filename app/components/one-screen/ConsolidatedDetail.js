@@ -7,6 +7,7 @@ import PaperTradingBot from '../PaperTradingBot';
 import AnalysisRefreshStatus, { analysisTime } from '../AnalysisRefreshStatus';
 import { BTCChart, MarketChart } from './OneScreenCharts';
 import BTCScenarioTracker from './BTCScenarioTracker';
+import MarketIntelligence from './MarketIntelligence';
 
 
 /* ── Section deep-link mapping ──
@@ -513,19 +514,7 @@ export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboar
     ] });
     area('Market Intelligence', 'market-intel', { state: healthOf('streams'), source: when(streams.generatedAt), facts: [
       ['Market phase', val(phase.label || phase.phase)],
-      ['Higher 24h / 7d', mi.higher_24h != null ? `${mi.higher_24h}% / ${mi.higher_7d}%` : null],
-      ['Confidence', val(mi.confidence, '%')],
-      ['Regime', val(mi.regime)],
-      ['Dominance', val(mi.dominance, '%')],
-      ['Smart money', val(mi.smart_money)],
-      ['Exchange supply', val(mi.exchange_supply)],
-      ['Derivatives risk', val(mi.derivatives_risk)],
-      ['Crowd / hype risk', mi.crowd ? `${mi.crowd} / ${mi.hype_risk || 'unavailable'}` : null],
-      ['Pressure map', val(mi.pressure_map)],
-    ], items: [
-      ...(mi.top_positive || []).slice(0, 2).map((x) => `Positive: ${x}`),
-      ...(mi.top_risk || []).slice(0, 2).map((x) => `Risk: ${x}`),
-    ].filter(Boolean) });
+    ], children: <MarketIntelligence compact={false} /> });
     const driverComm = driver.currentLeader?.detail || (driver.currentLeader ? `${driver.currentLeader.label || driver.currentLeader.actor} leads with a ${driver.marketPosture || 'neutral'} posture.` : null);
     area('Market Drivers', 'drivers', { state: healthOf('driver'), commentary: driverComm, source: when(driver.asOf), facts: [
       ['Posture', val(driver.marketPosture)],

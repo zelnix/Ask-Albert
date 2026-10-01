@@ -15,6 +15,7 @@ import EvidenceDrawer from '../albert/EvidenceDrawer';
 import DraggableGrid from './DraggableGrid';
 import BTCScenarioTracker from './BTCScenarioTracker';
 import FeedHealthRow, { NewsStaleBadge } from './FeedHealthRow';
+import MarketIntelligence from './MarketIntelligence';
 
 const money = (v, decimals = 0) => v == null || v === '' || !Number.isFinite(Number(v)) ? 'unavailable'
   : `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}`;
@@ -658,8 +659,7 @@ const OneScreenHome = ({ d, dashboardStatus = 'loading', ticker, news, newsStatu
         </DashboardCard>
         {/* 5. Market Intelligence */}
         <DashboardCard cardId="intelligence" title="Market Intelligence" icon={BarChart3} status={health?.driver} summary={intelCommentary} freshness={last('Driver', driver?.asOf)} onAsk={() => ask('intelligence', 'Market Intelligence', intelCommentary, 'Market driver', driver?.asOf)} onOpen={() => open('intelligence')}>
-          {focusableChart('market', 'BTC/ETH', <MarketChart btc={outlook} eth={eth} />)}
-          <p className="truncate text-[11px] text-slate-300">{returns} · breadth {phase?.inputs?.altsWithReturns > 0 ? `${phase.inputs.altsBeatingBtc}/${phase.inputs.altsWithReturns}` : '?'}</p>
+          <MarketIntelligence compact={true} />
         </DashboardCard>
         {/* 6. News, Macro & Policy */}
         <DashboardCard cardId="news" title="News, Macro & Policy" icon={Newspaper} status={newsStatus} summary={newsCommentary} freshness={last(story?.source || 'News', story?.published)} onAsk={() => ask('news', 'News, Macro & Policy', newsCommentary, story?.source || 'News', story?.published)} onOpen={() => open('news')}>

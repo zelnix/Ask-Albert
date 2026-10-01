@@ -13086,6 +13086,426 @@ def feed_health_api():
     }
 
 
+# =====================================================================
+# MARKET INTELLIGENCE — comprehensive consolidated endpoint
+# Sections 1-6: Performance comparison, leadership, sectors, breadth,
+#               capital flows, Albert commentary
+# =====================================================================
+
+_market_intel_cache = {'data': None, 'ts': 0}
+_MARKET_INTEL_TTL = 180  # 3 min cache
+
+
+@app.get('/api/v1/market-intelligence')
+def market_intelligence_api():
+    """Comprehensive Market Intelligence endpoint. Returns everything needed
+    for the reworked Market Intelligence card and consolidated screen."""
+    now_ts = time.time()
+    if _market_intel_cache['data'] and (now_ts - _market_intel_cache['ts']) < _MARKET_INTEL_TTL:
+        return _market_intel_cache['data']
+
+    try:
+        result = _build_market_intelligence()
+        _market_intel_cache['data'] = result
+        _market_intel_cache['ts'] = now_ts
+        return result
+    except Exception:
+        traceback.print_exc()
+        return {'status': 'error', 'message': 'Failed to build market intelligence.'}
+
+
+def _build_market_intelligence():
+    # ── 1. Cross-market performance comparison ──
+    cross = None
+    try:
+        from starlette.testclient import TestClient
+        # Internal call to the existing /markets endpoint
+        cross_raw = requests.get('http://127.0.0.1:8001/api/v1/markets').json()
+        if cross_raw.get('status') == 'ready':
+            cross = cross_raw
+    except Exception:
+        traceback.print_exc()
+
+    perf_table = []
+    perf_series = []
+    btc_perf = {}
+    if cross:
+        for row in (cross.get('table') or []):
+            entry = {
+                'asset': row.get('asset'), 'is_crypto': row.get('is_coin', False),
+                'price': row.get('price'),
+                'ret_1w': row.get('ret_1w'), 'ret_1m': row.get('ret_1m'),
+                'ret_3m': row.get('ret_3m'), 'ret_6m': row.get('ret_6m'),
+                'ret_1y': row.get('ret_1y'),
+            }
+            perf_table.append(entry)
+            if row.get('asset') == 'Bitcoin':
+                btc_perf = entry
+        perf_series = cross.get('series', [])  # already normalized to 100
+
+    # Crypto vs equities comparison
+    sp500 = next((r for r in perf_table if r['asset'] == 'S&P 500'), None)
+    gold_row = next((r for r in perf_table if 'Gold' in (r.get('asset') or '')), None)
+    crypto_vs_equities = None
+    if btc_perf and sp500:
+        btc_1m = btc_perf.get('ret_1m') or 0
+        sp_1m = sp500.get('ret_1m') or 0
+        diff = btc_1m - sp_1m
+        crypto_vs_equities = {
+            'btc_1m': btc_1m, 'sp500_1m': sp_1m, 'diff_1m': round(diff, 2),
+            'outperforming': diff > 0,
+            'label': f'Crypto {"outperforming" if diff > 0 else "underperforming"} equities by {abs(diff):.1f}pp (1M)',
+        }
+
+    # ── 2. Market leadership ──
+    # Fetch dominance
+    dom = None
+    try:
+        ticker_data = requests.get('http://127.0.0.1:8001/api/v1/ticker').json()
+        dom = ticker_data.get('dominance')
+    except Exception:
+        pass
+    if not dom or not dom.get('dominance'):
+        try:
+            dom_raw = dominance_col.find_one(sort=[('date', -1)], projection={'_id': 0})
+            if dom_raw:
+                dom = {'dominance': dom_raw.get('dominance'), 'direction': None,
+                       'change_7d': None, 'change_30d': None}
+        except Exception:
+            pass
+
+    # Fetch sector and participant data from market-streams
+    streams = {}
+    try:
+        streams_raw = requests.get('http://127.0.0.1:8001/api/v1/albert/market-streams').json()
+        if streams_raw.get('status') == 'ready':
+            streams = streams_raw
+    except Exception:
+        pass
+
+    sectors_data = streams.get('sectors', {}).get('sectors', [])
+    participants = streams.get('participants', {}).get('participants', [])
+
+    # Determine leadership: BTC-led, Altcoin-led, or Mixed
+    # Use: BTC dominance change + sector performance + breadth
+    dom_val = dom.get('dominance') if dom else None
+    dom_7d = dom.get('change_7d') if dom else None
+    btc_1w = btc_perf.get('ret_1w')
+    sector_strengths = [(s.get('sector'), s.get('strength', 0)) for s in sectors_data]
+    sector_strengths.sort(key=lambda x: -x[1])
+    avg_alt_strength = sum(s[1] for s in sector_strengths) / len(sector_strengths) if sector_strengths else 0
+
+    leadership = {
+        'leader': 'Mixed',
+        'btc_dominance': dom_val,
+        'btc_dominance_change_7d': dom_7d,
+        'btc_performance_1w': btc_1w,
+        'btc_performance_1m': btc_perf.get('ret_1m'),
+        'avg_alt_sector_strength': round(avg_alt_strength, 2),
+        'strengthening': False,
+        'weakening': False,
+        'rotating': False,
+        'detail': '',
+    }
+
+    # Leadership logic: compare BTC returns vs alt sector strength
+    if btc_1w is not None:
+        if btc_1w > 2 and (dom_7d is None or dom_7d >= 0) and avg_alt_strength < 5:
+            leadership['leader'] = 'Bitcoin-led'
+            leadership['strengthening'] = dom_7d is not None and dom_7d > 0.3
+            leadership['detail'] = f'Bitcoin leads with {btc_1w:+.1f}% (1W) while altcoin sectors average {avg_alt_strength:.1f} strength. Dominance {f"rose {dom_7d:+.1f}pp" if dom_7d else "unavailable"}.'
+        elif avg_alt_strength > 6 and (dom_7d is None or dom_7d <= 0):
+            leadership['leader'] = 'Altcoin-led'
+            leadership['rotating'] = dom_7d is not None and dom_7d < -0.3
+            leadership['detail'] = f'Altcoin sectors averaging {avg_alt_strength:.1f} strength are leading. BTC {btc_1w:+.1f}% (1W). Dominance {f"fell {dom_7d:+.1f}pp" if dom_7d else "unavailable"}.'
+        else:
+            leadership['leader'] = 'Mixed'
+            leadership['detail'] = f'Market leadership is mixed — BTC {btc_1w:+.1f}% (1W), alt sectors average {avg_alt_strength:.1f}. No clear single driver.'
+    else:
+        leadership['detail'] = 'Insufficient data to determine leadership.'
+
+    # ── 3. Sector performance ──
+    sector_analysis = {'strongest': None, 'weakest': None, 'main_driver': None,
+                       'rotating': False, 'sectors': []}
+    if sectors_data:
+        sorted_secs = sorted(sectors_data, key=lambda s: s.get('strength', 0), reverse=True)
+        strongest = sorted_secs[0]
+        weakest = sorted_secs[-1]
+        # Main driver: sector with highest strength AND not concentrated (or largest member count)
+        main_driver = strongest  # Default to strongest
+        for s in sorted_secs:
+            if not s.get('concentrated') and s.get('strength', 0) > 5:
+                main_driver = s
+                break
+
+        conc_labels = [s.get('label') for s in sorted_secs]
+        rotating = len(set(conc_labels)) > 2  # diverse labels = rotation
+
+        sector_analysis = {
+            'strongest': {
+                'sector': strongest.get('sector'), 'strength': strongest.get('strength'),
+                'label': strongest.get('label'), 'concentrated': strongest.get('concentrated'),
+                'largest_member': strongest.get('largestMember'),
+            },
+            'weakest': {
+                'sector': weakest.get('sector'), 'strength': weakest.get('strength'),
+                'label': weakest.get('label'),
+            },
+            'main_driver': {
+                'sector': main_driver.get('sector'), 'strength': main_driver.get('strength'),
+                'label': main_driver.get('label'), 'concentrated': main_driver.get('concentrated'),
+                'note': ('Concentrated in ' + (main_driver.get('largestMember') or 'one asset')
+                         if main_driver.get('concentrated') else 'Broad participation'),
+            },
+            'rotating': rotating,
+            'sectors': [{
+                'sector': s.get('sector'), 'strength': s.get('strength'),
+                'label': s.get('label'), 'concentrated': s.get('concentrated'),
+                'member_count': s.get('memberCount'), 'largest': s.get('largestMember'),
+            } for s in sorted_secs],
+        }
+
+    # ── 4. Market breadth and concentration ──
+    phase = streams.get('phaseAssessment', {})
+    phase_inputs = phase.get('inputs', phase.get('thresholds', {}))
+    breadth = {
+        'alts_rising': None, 'alts_falling': None, 'alts_total': None,
+        'pct_rising': None, 'broad': False, 'concentrated': True,
+        'btc_contribution': None, 'eth_contribution': None,
+        'alt_participation': False, 'detail': '',
+    }
+
+    # Try to get breadth from market-streams phase assessment
+    if phase_inputs:
+        alts_total = phase_inputs.get('altsWithReturns', 0)
+        alts_beating = phase_inputs.get('altsBeatingBtc', 0)
+        breadth['alts_total'] = alts_total
+        breadth['alts_rising'] = alts_beating
+        breadth['alts_falling'] = (alts_total - alts_beating) if alts_total else None
+        if alts_total and alts_total > 0:
+            pct = round(alts_beating / alts_total * 100, 1)
+            breadth['pct_rising'] = pct
+            breadth['broad'] = pct >= 50
+            breadth['concentrated'] = pct < 30
+            breadth['alt_participation'] = pct >= 40
+            breadth['detail'] = (f'{alts_beating}/{alts_total} tracked altcoins ({pct}%) are beating BTC. '
+                                 f'Participation is {"broad" if pct >= 50 else "moderate" if pct >= 30 else "concentrated"}.')
+        else:
+            breadth['detail'] = 'Breadth data unavailable.'
+    else:
+        breadth['detail'] = 'Breadth data unavailable.'
+
+    # BTC/ETH contribution estimate from dominance
+    if dom_val:
+        breadth['btc_contribution'] = f'BTC dominance {dom_val}%'
+    # Get ETH dominance if available
+    try:
+        eth_dom = compute_coin_dominance('ETH', 0)
+        if eth_dom and eth_dom.get('dominance'):
+            breadth['eth_contribution'] = f'ETH dominance {eth_dom["dominance"]}%'
+    except Exception:
+        pass
+
+    # ── 5. Capital flow intelligence ──
+    # 5a. External flows: ETF + stablecoin
+    etf_flows = {'btc': None, 'eth': None}
+    try:
+        btc_etf = requests.get('http://127.0.0.1:8001/api/v1/etf-flows?symbol=BTC').json()
+        if btc_etf.get('status') == 'ready':
+            etf_flows['btc'] = {
+                'net_1d': btc_etf.get('net_1d'), 'net_7d': btc_etf.get('net_7d'),
+                'net_30d': btc_etf.get('net_30d'), 'cum_total': btc_etf.get('cum_total'),
+                'unit': btc_etf.get('unit', 'USD millions'),
+                'source': 'tftc.io (Farside)',
+                'direction': 'inflow' if (btc_etf.get('net_7d') or 0) > 0 else 'outflow',
+            }
+    except Exception:
+        pass
+    try:
+        eth_etf = requests.get('http://127.0.0.1:8001/api/v1/etf-flows?symbol=ETH').json()
+        if eth_etf.get('status') == 'ready' and eth_etf.get('symbol') == 'ETH':
+            etf_flows['eth'] = {
+                'net_1d': eth_etf.get('net_1d'), 'net_7d': eth_etf.get('net_7d'),
+                'net_30d': eth_etf.get('net_30d'), 'cum_total': eth_etf.get('cum_total'),
+                'unit': eth_etf.get('unit', 'USD millions'),
+                'source': 'tftc.io (Farside)',
+                'direction': 'inflow' if (eth_etf.get('net_7d') or 0) > 0 else 'outflow',
+            }
+    except Exception:
+        pass
+
+    # Stablecoin supply — mark unavailable if no endpoint
+    stablecoin_supply = {'status': 'unavailable', 'note': 'Stablecoin supply tracking not available from current data sources.'}
+
+    external_flows = {
+        'etf_btc': etf_flows['btc'],
+        'etf_eth': etf_flows['eth'],
+        'stablecoin': stablecoin_supply,
+        'summary': '',
+    }
+    etf_parts = []
+    if etf_flows['btc']:
+        d7 = etf_flows['btc'].get('net_7d') or 0
+        etf_parts.append(f'BTC ETF: {"+" if d7>0 else ""}{d7:.1f}M (7d)')
+    if etf_flows['eth']:
+        d7 = etf_flows['eth'].get('net_7d') or 0
+        etf_parts.append(f'ETH ETF: {"+" if d7>0 else ""}{d7:.1f}M (7d)')
+    external_flows['summary'] = ' · '.join(etf_parts) if etf_parts else 'ETF flow data unavailable.'
+
+    # 5b. Exchange positioning
+    exchange_pos = {'btc': None, 'summary': ''}
+    try:
+        exf = requests.get('http://127.0.0.1:8001/api/v1/exchange-flows').json()
+        if exf.get('status') == 'ready':
+            exchange_pos['btc'] = {
+                'current_balance': exf.get('current'),
+                'net_7d': exf.get('net_7d'), 'net_30d': exf.get('net_30d'),
+                'trend': exf.get('trend'),
+                'read': exf.get('read'),
+                'source': exf.get('source', 'mempool.space'),
+            }
+            n30 = exf.get('net_30d') or 0
+            if n30 > 0:
+                exchange_pos['summary'] = f'Exchange BTC balance rising (+{n30:,.0f} BTC, 30d) — possible sell-side pressure or repositioning.'
+            elif n30 < 0:
+                exchange_pos['summary'] = f'Exchange BTC balance falling ({n30:,.0f} BTC, 30d) — possible accumulation or cold-storage movement.'
+            else:
+                exchange_pos['summary'] = 'Exchange BTC balance stable.'
+    except Exception:
+        pass
+
+    # 5c. Internal rotation — derive from sector data and participant cohorts
+    internal_rotation = {'description': '', 'evidence': []}
+    if sectors_data and len(sectors_data) >= 2:
+        strongest_sec = sector_analysis['strongest']
+        weakest_sec = sector_analysis['weakest']
+        if strongest_sec and weakest_sec:
+            internal_rotation['description'] = (
+                f'Capital appears to be rotating toward {strongest_sec["sector"]} (strength {strongest_sec["strength"]:.1f}) '
+                f'and away from {weakest_sec["sector"]} (strength {weakest_sec["strength"]:.1f}).'
+            )
+            internal_rotation['evidence'].append(f'Strongest sector: {strongest_sec["sector"]}')
+            internal_rotation['evidence'].append(f'Weakest sector: {weakest_sec["sector"]}')
+    if participants:
+        for p in participants:
+            if p.get('finding'):
+                internal_rotation['evidence'].append(f'{p["participant"]}: {p["finding"][:120]}')
+
+    capital_flows = {
+        'external': external_flows,
+        'exchange_positioning': exchange_pos,
+        'internal_rotation': internal_rotation,
+    }
+
+    # ── 6. Albert commentary ──
+    commentary_parts = []
+
+    # 1. Crypto vs other markets
+    if crypto_vs_equities:
+        commentary_parts.append(
+            f'Crypto is {"outperforming" if crypto_vs_equities["outperforming"] else "underperforming"} '
+            f'equities over the past month — BTC {btc_perf.get("ret_1m", 0):+.1f}% vs '
+            f'S&P 500 {sp500.get("ret_1m", 0):+.1f}%'
+            f'{f", Gold {gold_row.get(chr(114)+chr(101)+chr(116)+chr(95)+chr(49)+chr(109), 0):+.1f}%" if gold_row and gold_row.get("ret_1m") is not None else ""}.'
+        )
+
+    # 2. Which sector is driving
+    if sector_analysis.get('main_driver'):
+        md = sector_analysis['main_driver']
+        commentary_parts.append(
+            f'{md["sector"]} is the strongest contributing sector (strength {md["strength"]:.1f}), '
+            f'{"though concentrated in " + str(md.get("note", "one asset")) if md.get("concentrated") else "with broad participation"}.'
+        )
+
+    # 3. BTC or altcoins leading
+    commentary_parts.append(
+        f'The move is {leadership["leader"].lower()}.'
+        + (f' BTC dominance is {dom_val}%' + (f', {"up" if dom_7d > 0 else "down"} {abs(dom_7d):.1f}pp (7d)' if dom_7d else '') + '.'
+           if dom_val else '')
+    )
+
+    # 4. Broad or concentrated
+    if breadth.get('pct_rising') is not None:
+        commentary_parts.append(
+            f'Participation is {"broad" if breadth["broad"] else "concentrated"} — '
+            f'{breadth["alts_rising"]}/{breadth["alts_total"]} tracked altcoins ({breadth["pct_rising"]}%) '
+            f'are beating BTC.'
+        )
+
+    # 5. Capital flow evidence
+    flow_parts = []
+    if etf_flows['btc'] and etf_flows['btc'].get('net_7d'):
+        d7 = etf_flows['btc']['net_7d']
+        flow_parts.append(f'BTC ETF {"inflows" if d7 > 0 else "outflows"} of ${abs(d7):.0f}M (7d)')
+    if exchange_pos.get('btc') and exchange_pos['btc'].get('net_30d'):
+        n30 = exchange_pos['btc']['net_30d']
+        flow_parts.append(f'exchange balances {"rising" if n30 > 0 else "falling"} ({n30:+,.0f} BTC, 30d)')
+    if flow_parts:
+        commentary_parts.append(f'Capital-flow evidence: {"; ".join(flow_parts)}.')
+
+    # 6. Summary verdict
+    supports_move = False
+    if etf_flows['btc'] and etf_flows['btc'].get('net_7d', 0) > 0 and btc_perf.get('ret_1m', 0) > 0:
+        supports_move = True
+    if etf_flows['btc'] and etf_flows['btc'].get('net_7d', 0) < 0 and btc_perf.get('ret_1m', 0) < 0:
+        supports_move = True
+
+    commentary_parts.append(
+        f'Observable flows {"support" if supports_move else "do not clearly support"} the current price movement.'
+        + (f' Broader altcoin participation remains {"active" if breadth.get("alt_participation") else "limited"}.'
+           if breadth.get('pct_rising') is not None else '')
+    )
+
+    commentary = ' '.join(commentary_parts)
+
+    # Build one-line dashboard summary
+    dash_summary = ''
+    if crypto_vs_equities:
+        dash_summary = (f'BTC {"outperforms" if crypto_vs_equities["outperforming"] else "underperforms"} '
+                        f'({crypto_vs_equities["diff_1m"]:+.1f}pp vs S&P) · '
+                        f'{leadership["leader"]} · '
+                        f'{"Broad" if breadth.get("broad") else "Concentrated"} participation')
+    else:
+        dash_summary = f'{leadership["leader"]} · {"Broad" if breadth.get("broad") else "Concentrated"} participation'
+
+    result = {
+        'status': 'ready',
+        'as_of': datetime.datetime.utcnow().isoformat(),
+        # Section 1: Performance comparison
+        'performance': {
+            'table': perf_table,
+            'series': perf_series,  # normalized to 100
+            'crypto_vs_equities': crypto_vs_equities,
+            'btc': btc_perf,
+        },
+        # Section 2: Leadership
+        'leadership': leadership,
+        # Section 3: Sectors
+        'sector_analysis': sector_analysis,
+        # Section 4: Breadth
+        'breadth': breadth,
+        # Section 5: Capital flows
+        'capital_flows': capital_flows,
+        # Section 6: Commentary
+        'commentary': commentary,
+        'dashboard_summary': dash_summary,
+        # Specialist deep links
+        'deep_links': {
+            'etf_flows': 'dashboard-etf',
+            'exchange_flows': 'dashboard-onchain',
+            'derivatives': 'dashboard-derivatives',
+            'order_flow': 'dashboard-orderflow',
+        },
+        # Participant findings
+        'participants': [{
+            'participant': p.get('participant'),
+            'finding': p.get('finding'),
+        } for p in participants],
+    }
+
+    return result
+
+
 @app.post('/api/v1/bitmark/run')
 def bitmark_run(payload: dict = Body(default={}), user: dict = Depends(get_current_user)):
     import time
