@@ -3273,6 +3273,13 @@ let __notifCache = null;
 
 
 // ---- Mandate form (editable trading rules inside the avatar menu) ----
+// ---- Mandate presets ----
+const MANDATE_PRESETS = [
+  { label: 'Conservative', icon: '🛡️', desc: 'Low risk, BTC-only', values: { goal: 'Preserve capital with minimal drawdown', risk_tolerance: 'conservative', time_horizon: 'long-term', max_drawdown_pct: 10, reserve_pct: 40, max_trade_risk_pct: 1, leverage_enabled: false, approved_coins: ['BTC'], excluded_coins: [], preferred_strategies: ['dca', 'hodl'] } },
+  { label: 'Swing Trader', icon: '📊', desc: 'Moderate risk, multi-coin', values: { goal: 'Capture swing moves in top crypto assets', risk_tolerance: 'moderate', time_horizon: 'swing', max_drawdown_pct: 20, reserve_pct: 25, max_trade_risk_pct: 2, leverage_enabled: false, approved_coins: ['BTC', 'ETH', 'SOL'], excluded_coins: [], preferred_strategies: ['swing', 'breakout'] } },
+  { label: 'Aggressive', icon: '🚀', desc: 'High risk, broad exposure', values: { goal: 'Maximise returns with broad altcoin exposure', risk_tolerance: 'aggressive', time_horizon: 'short-term', max_drawdown_pct: 35, reserve_pct: 10, max_trade_risk_pct: 5, leverage_enabled: true, approved_coins: [], excluded_coins: ['DOGE', 'SHIB'], preferred_strategies: ['momentum', 'breakout', 'scalp'] } },
+];
+
 function MandateForm({ mandate, saving, onSave, saved }) {
   const [form, setForm] = useState({ ...mandate });
   const upd = (k, v) => setForm((f) => ({ ...f, [k]: v }));
@@ -3286,6 +3293,20 @@ function MandateForm({ mandate, saving, onSave, saved }) {
 
   return (
     <div className="space-y-3 text-sm">
+      {/* Presets */}
+      <div>
+        <span className="mb-1.5 block text-[11px] font-medium text-slate-400">Quick presets</span>
+        <div className="grid grid-cols-3 gap-1.5">
+          {MANDATE_PRESETS.map((p) => (
+            <button key={p.label} type="button" onClick={() => setForm((f) => ({ ...f, ...p.values }))}
+              className="rounded-lg border border-slate-700/60 bg-slate-800/50 px-2 py-1.5 text-left transition-colors hover:border-sky-500/50 hover:bg-slate-800">
+              <div className="text-xs font-medium text-white">{p.icon} {p.label}</div>
+              <div className="text-[10px] text-slate-500">{p.desc}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* Goal */}
       <label className="block">
         <span className="mb-1 block text-[11px] font-medium text-slate-400">Goal</span>
@@ -3370,10 +3391,115 @@ function MandateForm({ mandate, saving, onSave, saved }) {
 }
 
 
+// ---- Price Alerts panel (inside avatar menu) ----
+function AlertsPanel() {
+  const [alerts, setAlerts] = useState({ watches: [], triggered: [] });
+  const [loading, setLoading] = useState(true);
+  const [asset, setAsset] = useState('BTC');
+  const [level, setLevel] = useState('');
+  const [direction, setDirection] = useState('above');
+  const [adding, setAdding] = useState(false);
+
+  const load = async () => {
+    try {
+      const r = await fetch(`${API_BASE}/v1/price-alerts`);
+      const j = await r.json();
+      setAlerts({ watches: j.watches || [], triggered: j.triggered || [] });
+    } catch {} finally { setLoading(false); }
+  };
+  useEffect(() => { load(); }, []);
+
+  const add = async () => {
+    if (!level || isNaN(Number(level))) return;
+    setAdding(true);
+    try {
+      await fetch(`${API_BASE}/v1/price-alert`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ asset, level: Number(level), direction }),
+      });
+      setLevel('');
+      await load();
+    } catch {} finally { setAdding(false); }
+  };
+
+  const remove = async (wid) => {
+    try { await fetch(`${API_BASE}/v1/price-alert/${wid}`, { method: 'DELETE' }); await load(); } catch {}
+  };
+
+  const fmt = (v) => v >= 1000 ? `$${(v / 1000).toFixed(v >= 10000 ? 1 : 2)}k` : `$${v}`;
+
+  if (loading) return <div className="flex items-center justify-center py-8 text-xs text-slate-500">Loading alerts…</div>;
+
+  return (
+    <div className="space-y-3 text-sm">
+      {/* Add new alert */}
+      <div className="rounded-lg border border-slate-700/60 bg-slate-800/30 p-2.5">
+        <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">New price alert</div>
+        <div className="grid grid-cols-[60px_1fr_80px] gap-1.5">
+          <select value={asset} onChange={(e) => setAsset(e.target.value)}
+            className="rounded-md border border-slate-700 bg-slate-950/60 px-1.5 py-1.5 text-xs text-slate-100 focus:border-sky-500/50 focus:outline-none">
+            {['BTC', 'ETH', 'SOL', 'XRP', 'ADA', 'AVAX', 'DOGE', 'DOT', 'LINK', 'MATIC'].map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <input type="number" value={level} onChange={(e) => setLevel(e.target.value)} placeholder="Price level"
+            className="rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1.5 text-xs text-slate-100 focus:border-sky-500/50 focus:outline-none" />
+          <select value={direction} onChange={(e) => setDirection(e.target.value)}
+            className="rounded-md border border-slate-700 bg-slate-950/60 px-1.5 py-1.5 text-xs text-slate-100 focus:border-sky-500/50 focus:outline-none">
+            <option value="above">Above</option>
+            <option value="below">Below</option>
+          </select>
+        </div>
+        <Button onClick={add} size="sm" disabled={adding || !level} className="mt-2 w-full bg-sky-500 hover:bg-sky-400 disabled:opacity-50 text-xs">
+          {adding ? 'Adding…' : 'Add alert'}
+        </Button>
+      </div>
+
+      {/* Active alerts */}
+      <div>
+        <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Active ({alerts.watches.length})</div>
+        {alerts.watches.length === 0 ? (
+          <p className="py-2 text-center text-[11px] text-slate-600">No active alerts</p>
+        ) : (
+          <div className="space-y-1">
+            {alerts.watches.map((w) => (
+              <div key={w.id} className="flex items-center justify-between rounded-md border border-slate-700/40 bg-slate-800/40 px-2.5 py-1.5">
+                <div>
+                  <span className="text-xs font-semibold text-white">{w.asset}</span>
+                  <span className={`ml-1.5 text-[11px] ${w.direction === 'above' ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {w.direction === 'above' ? '↑' : '↓'} {fmt(w.level)}
+                  </span>
+                </div>
+                <button onClick={() => remove(w.id)} className="rounded p-0.5 text-slate-500 hover:bg-red-500/20 hover:text-red-400">
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Triggered */}
+      {alerts.triggered.length > 0 && (
+        <div>
+          <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Triggered</div>
+          <div className="space-y-1">
+            {alerts.triggered.slice(0, 5).map((w) => (
+              <div key={w.id} className="flex items-center gap-2 rounded-md border border-slate-700/30 bg-slate-900/40 px-2.5 py-1.5 opacity-60">
+                <Check className="h-3 w-3 text-emerald-400 shrink-0" />
+                <span className="text-[11px] text-slate-400">{w.asset} {w.direction === 'above' ? '↑' : '↓'} {fmt(w.level)}</span>
+                <span className="ml-auto text-[10px] text-slate-600">{w.triggered_at ? new Date(w.triggered_at).toLocaleDateString() : ''}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---- Account menu (avatar + user settings panel) shown in the top header ----
 function AccountMenu({ user, onSignOut, onNav }) {
   const [open, setOpen] = useState(false);
-  const [tab, setTab] = useState('main'); // main | notifications | briefcoins | passcode | mandate
+  const [tab, setTab] = useState('main'); // main | notifications | briefcoins | passcode | mandate | alerts
   const [pass, setPass] = useState('');
   const [saved, setSaved] = useState(false);
   const [showPass, setShowPass] = useState(false);
@@ -3464,6 +3590,10 @@ function AccountMenu({ user, onSignOut, onNav }) {
                   className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm text-slate-300 transition-colors hover:bg-slate-800 hover:text-white">
                   <Lock className="h-4 w-4 text-amber-400" /> Admin passcode
                 </button>
+                <button onClick={() => setTab('alerts')}
+                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm text-slate-300 transition-colors hover:bg-slate-800 hover:text-white">
+                  <Activity className="h-4 w-4 text-rose-400" /> Price alerts
+                </button>
                 <div className="my-1 h-px bg-slate-800" />
                 <a href="https://askalbert.app" target="_blank" rel="noopener noreferrer"
                   className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm text-slate-300 transition-colors hover:bg-slate-800 hover:text-white">
@@ -3534,6 +3664,17 @@ function AccountMenu({ user, onSignOut, onNav }) {
                 ) : (
                   <div className="py-6 text-center text-xs text-slate-500">Could not load mandate.</div>
                 )}
+              </div>
+            )}
+
+            {tab === 'alerts' && (
+              <div className="max-h-[420px] overflow-y-auto p-4 [scrollbar-width:thin]">
+                <button onClick={() => setTab('main')} className="mb-3 flex items-center gap-1 text-xs text-sky-400 hover:text-sky-300">
+                  <ChevronDown className="h-3 w-3 rotate-90" /> Back
+                </button>
+                <h4 className="mb-1 text-sm font-semibold text-white">Price Alerts</h4>
+                <p className="mb-3 text-[11px] text-slate-500">Get notified when an asset crosses your target price.</p>
+                <AlertsPanel />
               </div>
             )}
           </div>

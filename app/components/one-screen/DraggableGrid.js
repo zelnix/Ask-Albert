@@ -1,16 +1,24 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useRef, Children } from 'react';
+import React, { useState, useEffect, useCallback, useRef, Children, createContext, useContext } from 'react';
 import { DndContext, closestCenter, PointerSensor, KeyboardSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, useSortable, arrayMove, rectSortingStrategy, sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { GripVertical, RotateCcw } from 'lucide-react';
+import { GripVertical, RotateCcw, Minimize2, Maximize2 } from 'lucide-react';
 
 const STORAGE_KEY = 'albert-dashboard-card-order';
+const SIZE_KEY = 'albert-dashboard-card-sizes';
 const API_URL = '/api/v1/user/dashboard-layout';
 
+/* ── Card size context ── */
+const CardSizeContext = createContext({ sizes: {}, toggleSize: () => {} });
+export const useCardSize = (cardId) => {
+  const { sizes } = useContext(CardSizeContext);
+  return sizes[cardId] || 'expanded';
+};
+
 /* ── Individual sortable item wrapper ── */
-const SortableItem = ({ id, children }) => {
+const SortableItem = ({ id, children, isCompact, onToggleSize }) => {
   const {
     attributes,
     listeners,
@@ -20,7 +28,6 @@ const SortableItem = ({ id, children }) => {
     isDragging,
   } = useSortable({ id });
 
-  /* Use translate-only (no scale) to prevent distortion in grids */
   const style = {
     transform: transform
       ? `translate3d(${Math.round(transform.x)}px, ${Math.round(transform.y)}px, 0)`
@@ -32,17 +39,28 @@ const SortableItem = ({ id, children }) => {
 
   return (
     <div ref={setNodeRef} style={style} className={`relative h-full group/drag ${isDragging ? 'ring-2 ring-sky-500/50 rounded-lg shadow-lg shadow-sky-500/10' : ''}`}>
-      {/* Drag handle — visible on hover */}
-      <button
-        type="button"
-        {...attributes}
-        {...listeners}
-        className="absolute right-9 top-1.5 z-20 cursor-grab rounded bg-slate-700/95 p-1 text-slate-400 opacity-0 shadow-md backdrop-blur-sm transition-all hover:bg-sky-600 hover:text-white active:cursor-grabbing group-hover/drag:opacity-100 touch-none"
-        aria-label="Drag to reorder"
-        title="Drag to reorder"
-      >
-        <GripVertical className="h-3.5 w-3.5" />
-      </button>
+      {/* Controls — visible on hover */}
+      <div className="absolute right-2 top-1.5 z-20 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/drag:opacity-100">
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onToggleSize(id); }}
+          className="rounded bg-slate-700/95 p-1 text-slate-400 shadow-md backdrop-blur-sm transition-all hover:bg-sky-600 hover:text-white"
+          aria-label={isCompact ? 'Expand card' : 'Compact card'}
+          title={isCompact ? 'Expand' : 'Compact'}
+        >
+          {isCompact ? <Maximize2 className="h-3 w-3" /> : <Minimize2 className="h-3 w-3" />}
+        </button>
+        <button
+          type="button"
+          {...attributes}
+          {...listeners}
+          className="cursor-grab rounded bg-slate-700/95 p-1 text-slate-400 shadow-md backdrop-blur-sm transition-all hover:bg-sky-600 hover:text-white active:cursor-grabbing touch-none"
+          aria-label="Drag to reorder"
+          title="Drag to reorder"
+        >
+          <GripVertical className="h-3 w-3" />
+        </button>
+      </div>
       {children}
     </div>
   );
@@ -52,7 +70,7 @@ const SortableItem = ({ id, children }) => {
 const getCardId = (child, i) =>
   child.props?.cardId || child.props?.['data-card-id'] || `card-${i}`;
 
-/* ── API helpers (fire-and-forget save, async load) ── */
+/* ── API helpers ── */
 const loadLayoutFromApi = async () => {
   try {
     const res = await fetch(API_URL, { credentials: 'include' });
@@ -65,25 +83,21 @@ const loadLayoutFromApi = async () => {
 };
 
 const saveLayoutToApi = (order) => {
-  try {
-    fetch(API_URL, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ cardOrder: order }),
-    }).catch(() => {});
-  } catch (_) {}
+  fetch(API_URL, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ cardOrder: order }),
+  }).catch(() => {});
 };
 
 const deleteLayoutFromApi = () => {
-  try {
-    fetch(API_URL, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ cardOrder: [] }),
-    }).catch(() => {});
-  } catch (_) {}
+  fetch(API_URL, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ cardOrder: [] }),
+  }).catch(() => {});
 };
 
 /* ── Main DraggableGrid component ── */
@@ -92,10 +106,11 @@ const DraggableGrid = ({ children, className = '' }) => {
   const defaultOrder = childArray.map((child, i) => getCardId(child, i));
 
   const [cardOrder, setCardOrder] = useState(defaultOrder);
+  const [cardSizes, setCardSizes] = useState({});
   const [mounted, setMounted] = useState(false);
   const initializedRef = useRef(false);
 
-  /* Load saved order: localStorage first (instant), then API (authoritative) */
+  /* Load saved order + sizes on mount */
   useEffect(() => {
     setMounted(true);
     if (initializedRef.current) return;
@@ -108,7 +123,13 @@ const DraggableGrid = ({ children, className = '' }) => {
       return valid.length > 0 ? [...valid, ...added] : null;
     };
 
-    // 1. Instant load from localStorage
+    // Load card sizes from localStorage
+    try {
+      const savedSizes = localStorage.getItem(SIZE_KEY);
+      if (savedSizes) setCardSizes(JSON.parse(savedSizes));
+    } catch (_) {}
+
+    // Load card order from localStorage
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
@@ -117,7 +138,7 @@ const DraggableGrid = ({ children, className = '' }) => {
       }
     } catch (_) {}
 
-    // 2. Async load from API (authoritative — overrides localStorage)
+    // Load card order from API (authoritative)
     loadLayoutFromApi().then((apiOrder) => {
       if (apiOrder) {
         const order = validateOrder(apiOrder);
@@ -129,13 +150,11 @@ const DraggableGrid = ({ children, className = '' }) => {
     });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  /* DnD sensors with activation constraint to avoid accidental drags */
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
-  /* Reorder on drag end + persist to localStorage + API */
   const handleDragEnd = useCallback((event) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
@@ -150,22 +169,31 @@ const DraggableGrid = ({ children, className = '' }) => {
     });
   }, []);
 
-  /* Reset to default order — clear localStorage + API */
   const handleReset = useCallback(() => {
     setCardOrder(defaultOrder);
-    try { localStorage.removeItem(STORAGE_KEY); } catch (_) {}
+    setCardSizes({});
+    try { localStorage.removeItem(STORAGE_KEY); localStorage.removeItem(SIZE_KEY); } catch (_) {}
     deleteLayoutFromApi();
   }, [defaultOrder]);
 
-  const isCustom = JSON.stringify(cardOrder) !== JSON.stringify(defaultOrder);
+  const toggleSize = useCallback((id) => {
+    setCardSizes((prev) => {
+      const cur = prev[id] || 'expanded';
+      const next = { ...prev, [id]: cur === 'expanded' ? 'compact' : 'expanded' };
+      try { localStorage.setItem(SIZE_KEY, JSON.stringify(next)); } catch (_) {}
+      return next;
+    });
+  }, []);
 
-  /* Build child map: id -> React element */
+  const isCustomOrder = JSON.stringify(cardOrder) !== JSON.stringify(defaultOrder);
+  const hasCompact = Object.values(cardSizes).some((v) => v === 'compact');
+  const isCustom = isCustomOrder || hasCompact;
+
   const childMap = {};
   childArray.forEach((child, i) => {
     childMap[getCardId(child, i)] = child;
   });
 
-  /* SSR / initial render: default order without DnD (single wrapper div) */
   if (!mounted) {
     return (
       <div className="min-w-0">
@@ -178,33 +206,34 @@ const DraggableGrid = ({ children, className = '' }) => {
     );
   }
 
-  /* Always render a single wrapper div to avoid breaking parent grid layouts */
   return (
-    <div className="min-w-0">
-      {isCustom && (
-        <div className="mb-1.5 flex justify-end">
-          <button
-            type="button"
-            onClick={handleReset}
-            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-slate-400 transition-colors hover:bg-slate-800 hover:text-slate-200"
-          >
-            <RotateCcw className="h-3 w-3" />
-            Reset layout
-          </button>
-        </div>
-      )}
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-        <SortableContext items={cardOrder} strategy={rectSortingStrategy}>
-          <div className={className}>
-            {cardOrder.map((id) => (
-              <SortableItem key={id} id={id}>
-                {childMap[id]}
-              </SortableItem>
-            ))}
+    <CardSizeContext.Provider value={{ sizes: cardSizes, toggleSize }}>
+      <div className="min-w-0">
+        {isCustom && (
+          <div className="mb-1.5 flex justify-end">
+            <button
+              type="button"
+              onClick={handleReset}
+              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-slate-400 transition-colors hover:bg-slate-800 hover:text-slate-200"
+            >
+              <RotateCcw className="h-3 w-3" />
+              Reset layout
+            </button>
           </div>
-        </SortableContext>
-      </DndContext>
-    </div>
+        )}
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <SortableContext items={cardOrder} strategy={rectSortingStrategy}>
+            <div className={className}>
+              {cardOrder.map((id) => (
+                <SortableItem key={id} id={id} isCompact={(cardSizes[id] || 'expanded') === 'compact'} onToggleSize={toggleSize}>
+                  {childMap[id]}
+                </SortableItem>
+              ))}
+            </div>
+          </SortableContext>
+        </DndContext>
+      </div>
+    </CardSizeContext.Provider>
   );
 };
 

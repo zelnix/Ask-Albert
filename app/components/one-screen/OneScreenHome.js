@@ -268,22 +268,27 @@ const HomeTicker = ({ d, ticker, snapshot, dashboardStatus, onNav }) => {
 };
 
 /* ── Card chrome ── */
-const DashboardCard = ({ cardId, title, icon: Icon, status, summary, freshness, children, onOpen, onAsk, detail }) => <article
-  onClick={(e) => { if (!e.target.closest('button, a')) onOpen(); }}
-  className="flex h-full min-w-0 cursor-pointer flex-col rounded-lg border border-slate-700/80 bg-slate-900/80 p-3 shadow-sm shadow-black/20 xl:min-h-[195px]">
-  <div className="flex min-h-5 items-center gap-1.5">
-    <Icon className="h-4 w-4 shrink-0 text-sky-300" />
-    <h2 className="min-w-0 truncate text-[13px] font-bold text-white" title={title}><button id={`home-card-${cardId}`} type="button" onClick={onOpen} className="max-w-full truncate text-left hover:text-sky-200 focus-visible:rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400">{title}</button></h2>
-    {status && <span className={`ml-auto shrink-0 rounded-sm px-1.5 py-0.5 text-[10px] font-bold ${['stale', 'error', 'unavailable'].includes(String(status).toLowerCase()) ? 'bg-amber-500/15 text-amber-200' : 'bg-sky-500/10 text-sky-200'}`}>{titleCase(status)}</span>}
-  </div>
-  <p className="mt-1 text-xs leading-snug text-slate-300">{summary}</p>
-  <div className="mt-1 min-h-0 flex-1 text-xs leading-snug text-slate-200">{children}</div>
-  <div className="mt-1 flex shrink-0 items-center gap-2 border-t border-slate-800 pt-1.5 text-xs">
-    <span className="min-w-0 flex-1 truncate text-[11px] text-slate-400" title={freshness}>{freshness || ''}</span>
-    <button type="button" onClick={onAsk} className="shrink-0 rounded-sm p-0.5 text-sky-300 hover:text-sky-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"><Sparkles className="h-3.5 w-3.5" /></button>
-    <button type="button" onClick={onOpen} className="inline-flex shrink-0 items-center gap-0.5 font-semibold text-sky-300 hover:text-sky-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400">{detail || 'Open details'}<ArrowUpRight className="h-3.5 w-3.5" /></button>
-  </div>
-</article>;
+import { useCardSize } from './DraggableGrid';
+const DashboardCard = ({ cardId, title, icon: Icon, status, summary, freshness, children, onOpen, onAsk, detail }) => {
+  const size = useCardSize(cardId);
+  const compact = size === 'compact';
+  return <article
+    onClick={(e) => { if (!e.target.closest('button, a')) onOpen(); }}
+    className={`flex h-full min-w-0 cursor-pointer flex-col rounded-lg border border-slate-700/80 bg-slate-900/80 p-3 shadow-sm shadow-black/20 ${compact ? '' : 'xl:min-h-[195px]'}`}>
+    <div className="flex min-h-5 items-center gap-1.5">
+      <Icon className="h-4 w-4 shrink-0 text-sky-300" />
+      <h2 className="min-w-0 truncate text-[13px] font-bold text-white" title={title}><button id={`home-card-${cardId}`} type="button" onClick={onOpen} className="max-w-full truncate text-left hover:text-sky-200 focus-visible:rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400">{title}</button></h2>
+      {status && <span className={`ml-auto shrink-0 rounded-sm px-1.5 py-0.5 text-[10px] font-bold ${['stale', 'error', 'unavailable'].includes(String(status).toLowerCase()) ? 'bg-amber-500/15 text-amber-200' : 'bg-sky-500/10 text-sky-200'}`}>{titleCase(status)}</span>}
+    </div>
+    {!compact && <p className="mt-1 text-xs leading-snug text-slate-300">{summary}</p>}
+    {!compact && <div className="mt-1 min-h-0 flex-1 text-xs leading-snug text-slate-200">{children}</div>}
+    <div className={`${compact ? 'mt-1' : 'mt-1'} flex shrink-0 items-center gap-2 border-t border-slate-800 pt-1.5 text-xs`}>
+      <span className="min-w-0 flex-1 truncate text-[11px] text-slate-400" title={freshness}>{freshness || ''}</span>
+      {!compact && <button type="button" onClick={onAsk} className="shrink-0 rounded-sm p-0.5 text-sky-300 hover:text-sky-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"><Sparkles className="h-3.5 w-3.5" /></button>}
+      <button type="button" onClick={onOpen} className="inline-flex shrink-0 items-center gap-0.5 font-semibold text-sky-300 hover:text-sky-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400">{compact ? 'Open' : (detail || 'Open details')}<ArrowUpRight className="h-3.5 w-3.5" /></button>
+    </div>
+  </article>;
+};
 
 /* ── Home ── */
 const OneScreenHome = ({ d, dashboardStatus = 'loading', ticker, news, newsStatus, snapshot, onNav }) => {
