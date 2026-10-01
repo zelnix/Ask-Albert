@@ -3275,9 +3275,9 @@ let __notifCache = null;
 // ---- Mandate form (editable trading rules inside the avatar menu) ----
 // ---- Mandate presets ----
 const MANDATE_PRESETS = [
-  { label: 'Conservative', icon: '🛡️', desc: 'Low risk, BTC-only', values: { goal: 'Preserve capital with minimal drawdown', risk_tolerance: 'conservative', time_horizon: 'long-term', max_drawdown_pct: 10, reserve_pct: 40, max_trade_risk_pct: 1, leverage_enabled: false, approved_coins: ['BTC'], excluded_coins: [], preferred_strategies: ['dca', 'hodl'] } },
-  { label: 'Swing Trader', icon: '📊', desc: 'Moderate risk, multi-coin', values: { goal: 'Capture swing moves in top crypto assets', risk_tolerance: 'moderate', time_horizon: 'swing', max_drawdown_pct: 20, reserve_pct: 25, max_trade_risk_pct: 2, leverage_enabled: false, approved_coins: ['BTC', 'ETH', 'SOL'], excluded_coins: [], preferred_strategies: ['swing', 'breakout'] } },
-  { label: 'Aggressive', icon: '🚀', desc: 'High risk, broad exposure', values: { goal: 'Maximise returns with broad altcoin exposure', risk_tolerance: 'aggressive', time_horizon: 'short-term', max_drawdown_pct: 35, reserve_pct: 10, max_trade_risk_pct: 5, leverage_enabled: true, approved_coins: [], excluded_coins: ['DOGE', 'SHIB'], preferred_strategies: ['momentum', 'breakout', 'scalp'] } },
+  { label: 'Conservative', icon: '🛡️', desc: 'Low risk, stable', values: { risk_tolerance: 'conservative', time_horizon: 'long-term', max_drawdown_pct: 10, reserve_pct: 40, max_trade_risk_pct: 1, preferred_strategies: ['dca', 'hodl'] } },
+  { label: 'Swing Trader', icon: '📊', desc: 'Moderate risk', values: { risk_tolerance: 'moderate', time_horizon: 'swing', max_drawdown_pct: 20, reserve_pct: 25, max_trade_risk_pct: 2, preferred_strategies: ['swing', 'breakout'] } },
+  { label: 'Aggressive', icon: '🚀', desc: 'High risk, broad', values: { risk_tolerance: 'aggressive', time_horizon: 'short-term', max_drawdown_pct: 35, reserve_pct: 10, max_trade_risk_pct: 5, preferred_strategies: ['momentum', 'breakout', 'scalp'] } },
 ];
 
 function MandateForm({ mandate, saving, onSave, saved }) {
@@ -3288,7 +3288,6 @@ function MandateForm({ mandate, saving, onSave, saved }) {
   const RISK_OPTIONS = ['conservative', 'moderate', 'aggressive'];
   const HORIZON_OPTIONS = ['short-term', 'swing', 'medium-term', 'long-term'];
 
-  const handleCoins = (k, val) => upd(k, val.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean));
   const submit = () => onSave(form);
 
   return (
@@ -3306,13 +3305,6 @@ function MandateForm({ mandate, saving, onSave, saved }) {
           ))}
         </div>
       </div>
-
-      {/* Goal */}
-      <label className="block">
-        <span className="mb-1 block text-[11px] font-medium text-slate-400">Goal</span>
-        <input value={form.goal || ''} onChange={(e) => upd('goal', e.target.value)} placeholder="e.g. Grow portfolio 20% in 6 months"
-          className="w-full rounded-md border border-slate-700 bg-slate-950/60 px-2.5 py-1.5 text-xs text-slate-100 focus:border-sky-500/50 focus:outline-none" />
-      </label>
 
       {/* Risk tolerance + Time horizon row */}
       <div className="grid grid-cols-2 gap-2">
@@ -3348,35 +3340,11 @@ function MandateForm({ mandate, saving, onSave, saved }) {
         </label>
       </div>
 
-      {/* Max trade risk + Leverage row */}
-      <div className="grid grid-cols-2 gap-2">
-        <label className="block">
-          <span className="mb-1 block text-[11px] font-medium text-slate-400">Max trade risk %</span>
-          <input type="number" min={0.1} max={100} step={0.1} value={form.max_trade_risk_pct ?? 2} onChange={(e) => upd('max_trade_risk_pct', e.target.value ? Number(e.target.value) : 2)}
-            placeholder="2.0" className="w-full rounded-md border border-slate-700 bg-slate-950/60 px-2.5 py-1.5 text-xs text-slate-100 focus:border-sky-500/50 focus:outline-none" />
-        </label>
-        <label className="flex items-end gap-2 pb-0.5">
-          <span className="text-[11px] font-medium text-slate-400">Leverage</span>
-          <button type="button" onClick={() => upd('leverage_enabled', !form.leverage_enabled)}
-            className={`relative h-5 w-9 rounded-full transition-colors ${form.leverage_enabled ? 'bg-sky-500' : 'bg-slate-700'}`}>
-            <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${form.leverage_enabled ? 'left-[18px]' : 'left-0.5'}`} />
-          </button>
-          <span className="text-[10px] text-slate-500">{form.leverage_enabled ? 'On' : 'Off'}</span>
-        </label>
-      </div>
-
-      {/* Approved coins */}
+      {/* Max trade risk */}
       <label className="block">
-        <span className="mb-1 block text-[11px] font-medium text-slate-400">Approved coins <span className="text-slate-600">(comma-separated)</span></span>
-        <input value={(form.approved_coins || []).join(', ')} onChange={(e) => handleCoins('approved_coins', e.target.value)}
-          placeholder="BTC, ETH, SOL" className="w-full rounded-md border border-slate-700 bg-slate-950/60 px-2.5 py-1.5 text-xs text-slate-100 focus:border-sky-500/50 focus:outline-none" />
-      </label>
-
-      {/* Excluded coins */}
-      <label className="block">
-        <span className="mb-1 block text-[11px] font-medium text-slate-400">Excluded coins <span className="text-slate-600">(comma-separated)</span></span>
-        <input value={(form.excluded_coins || []).join(', ')} onChange={(e) => handleCoins('excluded_coins', e.target.value)}
-          placeholder="DOGE, SHIB" className="w-full rounded-md border border-slate-700 bg-slate-950/60 px-2.5 py-1.5 text-xs text-slate-100 focus:border-sky-500/50 focus:outline-none" />
+        <span className="mb-1 block text-[11px] font-medium text-slate-400">Max trade risk %</span>
+        <input type="number" min={0.1} max={100} step={0.1} value={form.max_trade_risk_pct ?? 2} onChange={(e) => upd('max_trade_risk_pct', e.target.value ? Number(e.target.value) : 2)}
+          placeholder="2.0" className="w-full rounded-md border border-slate-700 bg-slate-950/60 px-2.5 py-1.5 text-xs text-slate-100 focus:border-sky-500/50 focus:outline-none" />
       </label>
 
       {/* Save */}

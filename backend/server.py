@@ -9308,9 +9308,14 @@ def _autopilot_process_account_multi(acct):
 
     # ── PHASE 2: EXITS ──
     # 2a) High-water + portfolio drawdown breaker.
+    # Strategy-level maxDrawdownPct takes precedence; mandate is fallback only.
     if equity_info.get('available') and equity_info.get('equity') is not None:
         _paper_core.update_high_water(paper_accounts_col, acct_id, pid, equity_info['equity'])
-        max_dd = _paper_core.D(mandate.get('max_drawdown_pct'))
+        _strategy_dd = None
+        if _strat:
+            _pg = (_strat.get('contract') or {}).get('portfolioGoals') or {}
+            _strategy_dd = _paper_core.D(_pg.get('maxDrawdownPct'))
+        max_dd = _strategy_dd if _strategy_dd is not None else _paper_core.D(mandate.get('max_drawdown_pct'))
         dd = equity_info.get('drawdownPct')
         if (max_dd is not None and dd is not None and dd <= (-max_dd)
                 and acct.get('runtimeState') == 'RUNNING'):
@@ -13304,7 +13309,8 @@ def _studio_validate(draft, pid, account=None):
     m = _get_mandate(pid)
     save_errors = []
     start_errors = []
-    cap_errors = _asset_caps.validate_assets(draft, c['assets'], m, reserve_pct=c.get('reservePct', 0))
+    cap_errors, cap_warnings = _asset_caps.validate_assets(draft, c['assets'], m, reserve_pct=c.get('reservePct', 0))
+    warnings = list(cap_warnings)
     for e in cap_errors:
         if 'not a recognized' in e.lower() or 'no assets' in e.lower():
             save_errors.append(e)
@@ -13412,7 +13418,7 @@ def _studio_validate(draft, pid, account=None):
         if ea and ea not in ('CLOSE_ALL_AND_STOP', 'STOP_ENTRIES_MANAGE_OPEN'):
             save_errors.append('portfolioGoals.endAction must be CLOSE_ALL_AND_STOP or STOP_ENTRIES_MANAGE_OPEN.')
     # Legacy compatibility: callers that expect a flat errors list get all combined.
-    return c, _studio_short_hash(c), save_errors, start_errors
+    return c, _studio_short_hash(c), save_errors, start_errors, warnings
 
 
 def _studio_summary(c):
@@ -13687,6 +13693,11 @@ STUDIO_DRAFT_SYSTEM = (
     "portfolioGoals {profitTargetPct,equityFloorUsd,lossFloorPct,maxDrawdownPct,endAction:'CLOSE_ALL_AND_STOP'|'STOP_ENTRIES_MANAGE_OPEN'} (all optional; "
     "extract from any portfolio-level profit target, equity floor, loss floor or drawdown instructions), "
     "walletName, startingCash, unsupportedInstructions:[]. "
+    "IMPORTANT — extract risk settings from the user's goal text: "
+    "if the user mentions risk tolerance (conservative/moderate/aggressive), max drawdown percentage, "
+    "or cash reserve percentage, include them in the strategy as reservePct and portfolioGoals.maxDrawdownPct. "
+    "These strategy-level settings override the user's global trading mandate. "
+    "A trading mandate is NOT required to create or run a strategy. "
     "For entrySizing: if user specifies a dollar amount per trade, use FIXED_USD with that amount. "
     "If user specifies a percentage of available cash, use PCT_AVAILABLE_CASH with that pct. "
     "If the user does not specify entry sizing, do NOT invent one — omit entrySizing entirely "
@@ -13847,7 +13858,7 @@ def studio_draft(payload: dict = Body(...), user: dict = Depends(get_current_use
             # Explicitly supplied wallet name takes precedence; LLM default only when absent.
             candidate['walletName'] = requested_wallet or str(candidate.get('walletName') or (candidate.get('name') or 'New strategy') + ' wallet')[:60]
             candidate['startingCash'] = requested_cash or candidate.get('startingCash') or '100000.00'
-            c, chash, _sv_err, _st_err = _studio_validate(candidate, pid); errors = _sv_err + _st_err
+            c, chash, _sv_err, _st_err, _warnings = _studio_validate(candidate, pid); errors = _sv_err + _st_err
             draft = candidate
             errors += parse_errors
             if not errors:
@@ -13873,6 +13884,8 @@ def studio_draft(payload: dict = Body(...), user: dict = Depends(get_current_use
     return {'status': 'ready' if not errors else 'needs_changes',
             'draft': {**draft, 'name': draft.get('name') or 'New strategy'},
             'contract': c, 'contractHash': chash, 'summary': _studio_summary(c),
+            'saveErrors': _sv_err, 'startErrors': _st_err,
+            'mandateWarnings': _warnings,
             'validationErrors': errors, 'valid': not errors,
             'assetCapabilities': [_studio_capability_row(a['symbol'], mandate) for a in c['assets']],
             'evidence': evidence,
@@ -13960,11 +13973,12 @@ def studio_revise_draft(payload: dict = Body(...), user: dict = Depends(get_curr
     # Preserve portfolio goals unless explicitly revised.
     if not candidate.get('portfolioGoals') and current_contract.get('portfolioGoals'):
         candidate['portfolioGoals'] = current_contract['portfolioGoals']
-    c, chash, sv_err, st_err = _studio_validate(candidate, pid)
+    c, chash, sv_err, st_err, sv_warnings = _studio_validate(candidate, pid)
     return {'status': 'ready',
             'revisedDraft': c, 'contractHash': chash,
             'summary': _studio_summary(c),
             'saveErrors': sv_err, 'startErrors': st_err,
+            'mandateWarnings': sv_warnings,
             'originalStrategyId': sid,
             'originalVersion': doc.get('version'),
             'note': 'Review the revised strategy. Save it to apply the changes. '
@@ -13976,10 +13990,11 @@ def studio_revise_draft(payload: dict = Body(...), user: dict = Depends(get_curr
 def studio_validate_endpoint(payload: dict = Body(...), user: dict = Depends(get_current_user)):
     """Validate an exact draft and return the canonical contract + hash for the review card.
     Returns saveErrors (block save) and startErrors (allow save, block start) separately."""
-    c, chash, _sv_err, _st_err = _studio_validate((payload or {}).get('draft') or payload, owner_pid(user))
+    c, chash, _sv_err, _st_err, _warnings = _studio_validate((payload or {}).get('draft') or payload, owner_pid(user))
     return {'status': 'ready', 'contract': c, 'contractHash': chash,
             'summary': _studio_summary(c),
             'saveErrors': _sv_err, 'startErrors': _st_err,
+            'mandateWarnings': _warnings,
             'validationErrors': _sv_err + _st_err, 'valid': not _sv_err,
             'assetCapabilities': [_studio_capability_row(a['symbol'], _get_mandate(owner_pid(user))) for a in c['assets']]}
 
@@ -14001,7 +14016,7 @@ def studio_save(payload: dict = Body(...), user: dict = Depends(get_current_user
             raise HTTPException(status_code=409, detail=prior['detail'])
         return prior
     draft = body.get('draft') or body.get('contract') or {}
-    c, chash, _sv_err, _st_err = _studio_validate(draft, pid)
+    c, chash, _sv_err, _st_err, _warnings = _studio_validate(draft, pid)
     # Save-blocking errors prevent persisting. Start-blocking errors are recorded
     # but the plan can still be saved as "Needs changes — not trading."
     if _sv_err:
@@ -14021,7 +14036,7 @@ def studio_save(payload: dict = Body(...), user: dict = Depends(get_current_user
             {'ownerId': pid, 'strategyId': sid, 'dedicatedToStrategy': True}, sort=[('createdAt', 1)])
         if parent.get('assignedPaperAccountId') and not acct:
             raise HTTPException(status_code=409, detail='The existing strategy wallet is unavailable; no replacement or reset is allowed.')
-        _checked, _checked_hash, _sv_err, _st_err = _studio_validate(draft, pid, account=acct)
+        _checked, _checked_hash, _sv_err, _st_err, _warnings = _studio_validate(draft, pid, account=acct)
         # Only save_errors block revision saving. start_errors are recorded but allowed.
         if _sv_err:
             raise HTTPException(status_code=422, detail='Cannot save revision: ' + '; '.join(_sv_err))
@@ -14223,7 +14238,7 @@ def _strategy_paper_public(doc, pid, acct=None):
     """The paper-trading facts that belong ON the strategy card."""
     acct = _strategy_acct(doc, pid) if acct is None else acct
     status = _strategy_paper_status(doc, acct)
-    _contract, current_hash, _sv_err, _st_err = _studio_validate(doc.get('contract') or {}, pid, account=acct)
+    _contract, current_hash, _sv_err, _st_err, _warnings = _studio_validate(doc.get('contract') or {}, pid, account=acct)
     blockers = _sv_err + _st_err
     if current_hash != doc.get('contractHash'):
         blockers.append('Saved contract hash mismatch; no new entries permitted.')
@@ -14407,7 +14422,7 @@ def studio_start_paper(sid: str, payload: dict = Body(default={}),
         raise HTTPException(status_code=409, detail='One running strategy per virtual wallet. This wallet is already assigned.')
     # Validate the current mandate AND exact immutable contract before creating a
     # wallet, resuming runtime state, or emitting an ACCOUNT_OPENED/RESUME event.
-    _c, _h, _sv_err, _st_err = _studio_validate(doc['contract'], pid, account=acct); errs = _sv_err + _st_err
+    _c, _h, _sv_err, _st_err, _warnings = _studio_validate(doc['contract'], pid, account=acct); errs = _sv_err + _st_err
     if _h != doc['contractHash']:
         raise HTTPException(status_code=409, detail='Contract hash mismatch — reload the strategy.')
     if errs:
@@ -15134,11 +15149,10 @@ def save_portfolio(payload: dict = Body(...), user: dict = Depends(get_current_u
 # The decision layer is deterministic; the LLM only explains it.
 # ============================================================
 _DEFAULT_MANDATE = {
-    'goal': '', 'risk_tolerance': '', 'time_horizon': '',
+    'risk_tolerance': '', 'time_horizon': '',
     'max_drawdown_pct': None, 'reserve_pct': 25.0,
-    'approved_coins': [], 'excluded_coins': [],
     'max_alloc_pct': {}, 'max_trade_risk_pct': 2.0,
-    'leverage_enabled': False, 'preferred_strategies': [],
+    'preferred_strategies': [],
 }
 
 
@@ -15179,13 +15193,10 @@ def albert_save_mandate(payload: dict = Body(...), user: dict = Depends(get_curr
         except Exception:  # noqa
             return d
     m = dict(_DEFAULT_MANDATE)
-    m['goal'] = str(src.get('goal') or '')[:200]
     m['risk_tolerance'] = str(src.get('risk_tolerance') or '')[:20]
     m['time_horizon'] = str(src.get('time_horizon') or '')[:30]
     m['max_drawdown_pct'] = _pct(src.get('max_drawdown_pct'), 1, 90, None)
     m['reserve_pct'] = _pct(src.get('reserve_pct'), 0, 100, 25.0)
-    m['approved_coins'] = [str(c).upper()[:8] for c in (src.get('approved_coins') or []) if c][:100]
-    m['excluded_coins'] = [str(c).upper()[:8] for c in (src.get('excluded_coins') or []) if c][:100]
     mac = {}
     for k, v in (src.get('max_alloc_pct') or {}).items():
         p = _pct(v, 0, 100, None)
@@ -15193,7 +15204,6 @@ def albert_save_mandate(payload: dict = Body(...), user: dict = Depends(get_curr
             mac[str(k).upper()[:8]] = p
     m['max_alloc_pct'] = mac
     m['max_trade_risk_pct'] = _pct(src.get('max_trade_risk_pct'), 0.1, 100, 2.0)
-    m['leverage_enabled'] = bool(src.get('leverage_enabled'))
     m['preferred_strategies'] = [str(s)[:30] for s in (src.get('preferred_strategies') or []) if s][:12]
     mandate_col.update_one({'_id': pid},
                            {'$set': {**m, 'updated_at': datetime.datetime.utcnow().isoformat()}}, upsert=True)
@@ -15202,10 +15212,9 @@ def albert_save_mandate(payload: dict = Body(...), user: dict = Depends(get_curr
 
 # ---- Mandate tuning from chat -----------------------------------------------
 _MANDATE_NOUNS = (
-    'mandate', 'approved coin', 'excluded coin', 'exclude', 'whitelist', 'blacklist',
-    'risk cap', 'drawdown', 'reserve', 'allocation', 'allocat', 'position size',
-    'position-size', 'risk tolerance', 'time horizon', 'leverage', 'trade risk',
-    'risk setting', 'risk limit', 'approved list', 'coin list',
+    'mandate', 'risk cap', 'drawdown', 'reserve', 'allocation', 'allocat', 'position size',
+    'position-size', 'risk tolerance', 'time horizon', 'trade risk',
+    'risk setting', 'risk limit',
 )
 _MANDATE_VERBS = (
     'set ', 'change', 'update', 'adjust', 'add ', 'remove', 'allow', 'ban ', 'block',
@@ -15230,12 +15239,10 @@ _MANDATE_EXTRACT_SYS = (
     "You convert a user's plain-English request into a JSON patch for their crypto trading MANDATE (risk/settings "
     "inputs; NOT engine logic). You are given the CURRENT mandate and the request. Return ONLY strict minified JSON "
     "with the fields that should CHANGE — omit unchanged fields; return {} if nothing should change. "
-    "Allowed fields & types: goal(string), risk_tolerance(one of 'conservative','moderate','aggressive'), "
+    "Allowed fields & types: risk_tolerance(one of 'conservative','moderate','aggressive'), "
     "time_horizon(string e.g. 'short','medium','long'), max_drawdown_pct(number 1-90), reserve_pct(number 0-100), "
-    "approved_coins(array of UPPERCASE ticker strings), excluded_coins(array of UPPERCASE tickers), "
-    "max_alloc_pct(object ticker->number), max_trade_risk_pct(number 0.1-100), leverage_enabled(boolean), "
-    "preferred_strategies(array of strings). For approved_coins/excluded_coins return the FULL FINAL list after "
-    "applying the request to the current list (add/remove as asked) — never a partial delta. Numbers only, no % signs. "
+    "max_alloc_pct(object ticker->number), max_trade_risk_pct(number 0.1-100), "
+    "preferred_strategies(array of strings). Numbers only, no % signs. "
     "No commentary, no code fences — JSON object only."
 )
 
@@ -15252,8 +15259,7 @@ def _coin_list(v):
 def _humanize_mandate_changes(cur, prop):
     changes = []
     fl = lambda x: ', '.join(x) if x else '(none)'  # noqa: E731
-    for key, label in [('approved_coins', 'Approved coins'), ('excluded_coins', 'Excluded coins'),
-                       ('preferred_strategies', 'Preferred strategies')]:
+    for key, label in [('preferred_strategies', 'Preferred strategies')]:
         a = [str(x) for x in (cur.get(key) or [])]
         b = [str(x) for x in (prop.get(key) or [])]
         if sorted(a) != sorted(b):
@@ -15264,14 +15270,10 @@ def _humanize_mandate_changes(cur, prop):
         if (a if a is not None else None) != (b if b is not None else None):
             changes.append({'field': key, 'label': label,
                             'from': (f"{a}%" if a is not None else '—'), 'to': (f"{b}%" if b is not None else '—')})
-    for key, label in [('risk_tolerance', 'Risk tolerance'), ('time_horizon', 'Time horizon'), ('goal', 'Goal')]:
+    for key, label in [('risk_tolerance', 'Risk tolerance'), ('time_horizon', 'Time horizon')]:
         a, b = (cur.get(key) or ''), (prop.get(key) or '')
         if a != b:
             changes.append({'field': key, 'label': label, 'from': a or '—', 'to': b or '—'})
-    if bool(cur.get('leverage_enabled')) != bool(prop.get('leverage_enabled')):
-        changes.append({'field': 'leverage_enabled', 'label': 'Leverage',
-                        'from': 'On' if cur.get('leverage_enabled') else 'Off',
-                        'to': 'On' if prop.get('leverage_enabled') else 'Off'})
     if (cur.get('max_alloc_pct') or {}) != (prop.get('max_alloc_pct') or {}):
         changes.append({'field': 'max_alloc_pct', 'label': 'Per-coin allocation caps',
                         'from': fl([f"{k} {v}%" for k, v in (cur.get('max_alloc_pct') or {}).items()]),
@@ -15315,7 +15317,6 @@ def _build_mandate_change(pid, message):
         except Exception:  # noqa
             return None
     proposed = dict(cur)
-    if 'goal' in patch: proposed['goal'] = str(patch['goal'] or '')[:200]
     if 'risk_tolerance' in patch:
         rt = str(patch['risk_tolerance'] or '').lower().strip()
         if rt in ('conservative', 'moderate', 'aggressive'): proposed['risk_tolerance'] = rt
@@ -15329,9 +15330,6 @@ def _build_mandate_change(pid, message):
     if 'max_trade_risk_pct' in patch:
         p = _pct(patch['max_trade_risk_pct'], 0.1, 100)
         if p is not None: proposed['max_trade_risk_pct'] = p
-    if 'approved_coins' in patch: proposed['approved_coins'] = _coin_list(patch['approved_coins'])
-    if 'excluded_coins' in patch: proposed['excluded_coins'] = _coin_list(patch['excluded_coins'])
-    if 'leverage_enabled' in patch: proposed['leverage_enabled'] = bool(patch['leverage_enabled'])
     if 'preferred_strategies' in patch:
         proposed['preferred_strategies'] = [str(s)[:30] for s in (patch['preferred_strategies'] or []) if s][:12]
     if 'max_alloc_pct' in patch and isinstance(patch['max_alloc_pct'], dict):

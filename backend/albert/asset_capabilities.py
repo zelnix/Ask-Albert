@@ -100,7 +100,7 @@ def capability(symbol, mandate=None, data_availability='UNVERIFIED'):
                           f'{sym} is not in this wallet’s approved coin list.' if restriction else None)
     data_reason = ('STALE_OWN_DAILY_HISTORY_OR_PRICE' if data_availability == 'STALE' else
                    'OWN_DAILY_HISTORY_OR_PRICE_MISSING' if data_availability == 'MISSING' else None)
-    state = ('UNSUPPORTED' if not implemented else 'RESTRICTED_IN_WALLET' if restriction else
+    state = ('UNSUPPORTED' if not implemented else
              'WAITING_FOR_DATA' if data_reason else 'SUPPORTED')
     return {
         'symbol': sym, 'assetId': item['id'] if item else None,
@@ -114,13 +114,14 @@ def capability(symbol, mandate=None, data_availability='UNVERIFIED'):
         'paperSupported': implemented, 'paperSupportVerified': False,
         'verificationStatus': 'NOT_END_TO_END_VERIFIED',
         'supportState': state, 'restrictionReason': restriction_reason,
+        'mandateWarning': restriction_reason,
         'dataReason': (f'Waiting for current {sym} price or complete daily history; no quote or candle is substituted.' if data_reason else None),
         'entrySupported': implemented, 'dataAvailability': data_availability,
         'mandateStatus': ('EXCLUDED' if restriction == 'EXCLUDED_BY_MANDATE' else 'NOT_APPROVED' if restriction else 'ALLOWED'),
-        'startEligible': implemented and not restriction,
-        'entryEligible': implemented and not restriction and data_availability == 'FRESH',
-        'reasonCode': (missing[0]['reasonCode'] if missing else restriction or data_reason),
-        'reason': (missing[0]['reason'] if missing else restriction_reason or
+        'startEligible': implemented and not data_reason,
+        'entryEligible': implemented and data_availability == 'FRESH',
+        'reasonCode': (missing[0]['reasonCode'] if missing else data_reason),
+        'reason': (missing[0]['reason'] if missing else
                    (f'Waiting for current {sym} price or complete daily history.' if data_reason else None)),
         'missingCapability': missing[0] if missing else None,
         'needsImplementation': not implemented,
@@ -136,11 +137,13 @@ def entry_allowed(symbol, mandate=None, data_ok=None):
 
 def validate_assets(draft, canonical_assets, mandate=None, reserve_pct=0.0):
     """Validate every raw leg and every canonical leg without discarding or reweighting.
-    When a protected cash reserve is specified, asset weights + reservePct must equal 100%."""
+    When a protected cash reserve is specified, asset weights + reservePct must equal 100%.
+    Returns (errors, warnings) — mandate restrictions are warnings, not blocking errors."""
     errors = []
+    warnings = []
     raw = draft.get('assets') or []
     if not isinstance(raw, list):
-        return ['Assets must be a list.']
+        return ['Assets must be a list.'], []
     if not raw:
         errors.append('At least one asset is required.')
     if len(raw) > MAX_STRATEGY_LEGS:
@@ -161,12 +164,10 @@ def validate_assets(draft, canonical_assets, mandate=None, reserve_pct=0.0):
         if row['missingCapabilities']:
             errors.append(f'{sym}: Unsupported for paper trading. ' + ' '.join(x['reason'] for x in row['missingCapabilities']))
         elif row['mandateStatus'] != 'ALLOWED':
-            errors.append(f'{sym}: Restricted in this wallet. {row["restrictionReason"]}')
+            warnings.append(f'{sym}: Outside current mandate ({row["restrictionReason"]}). Strategy settings will apply.')
         if not math.isfinite(a['weightPct']) or a['weightPct'] <= 0:
             errors.append(f'{sym} must have a finite, positive weight.')
     total = sum(a['weightPct'] for a in canonical_assets)
-    # Asset weights + protected cash reserve must sum to 100%.
-    # When reservePct > 0 the user explicitly allocated the remainder as cash.
     try:
         rpct = float(reserve_pct or 0)
     except (ValueError, TypeError):
@@ -177,7 +178,7 @@ def validate_assets(draft, canonical_assets, mandate=None, reserve_pct=0.0):
             errors.append(f'Asset weights must sum to {expected:g}% (100% minus {rpct:g}% reserve); currently {total:g}%. No weights will be redistributed.')
         else:
             errors.append(f'Asset weights must sum to exactly 100% (currently {total:g}%). No weights will be redistributed.')
-    return errors
+    return errors, warnings
 
 
 # A user naming a coin has not consented to a replacement. Prefer definite

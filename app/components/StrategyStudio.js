@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
   Crosshair, Plus, Loader2, Sparkles, ShieldCheck, ChevronDown, Play, Square, Archive,
-  FlaskConical, CheckCircle2, AlertTriangle, ArrowRight, X, Bot, Info,
+  FlaskConical, CheckCircle2, AlertTriangle, ArrowRight, X, XCircle, Bot, Info,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -232,6 +232,7 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
         if (active) setReview(r.ok ? { contract: j.contract, hash: j.contractHash,
           summary: j.summary,
           saveErrors: j.saveErrors || [], startErrors: j.startErrors || [],
+          mandateWarnings: j.mandateWarnings || [],
           errors: j.validationErrors || [],
           capabilities: j.assetCapabilities || [], for: JSON.stringify(draft) } : null);
       } catch (e) { if (active) { setReview(null); setErr('Validation unavailable; nothing can be saved.'); } }
@@ -260,6 +261,7 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
       setDraft({ ...STUDIO_EXEC_RULES, ...j.draft });
       setReview({ contract: j.contract, hash: j.contractHash, summary: j.summary,
         saveErrors: j.saveErrors || [], startErrors: j.startErrors || [],
+        mandateWarnings: j.mandateWarnings || [],
         errors: j.validationErrors || [], capabilities: j.assetCapabilities || [], for: JSON.stringify(j.draft) });
     } catch (e) { setErr(`Drafting failed: ${e.message || 'network error'}. No strategy was saved.`); }
     finally { setDrafting(false); }
@@ -481,6 +483,14 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
                   <p className="mb-1 text-[11px] font-bold text-amber-300">Needs changes before trading (save is allowed):</p>
                   <ul className="space-y-0.5 text-[12px] text-amber-200">
                     {review.startErrors.map((e, i) => <li key={i} className="flex items-start gap-1.5"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />{e}</li>)}
+                  </ul>
+                </div>
+              )}
+              {(review.mandateWarnings || []).length > 0 && (
+                <div className="mt-2 rounded-lg border border-sky-500/30 bg-sky-500/10 p-2">
+                  <p className="mb-1 text-[11px] font-bold text-sky-300">Mandate info (does not block trading):</p>
+                  <ul className="space-y-0.5 text-[12px] text-sky-200">
+                    {review.mandateWarnings.map((w, i) => <li key={i} className="flex items-start gap-1.5"><Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />{w}</li>)}
                   </ul>
                 </div>
               )}
