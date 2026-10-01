@@ -20399,7 +20399,72 @@ _BRIEF_REFRESH_LOCKS = {}  # cache_id -> True while a bg refresh is running
 
 
 def _brief_generate_bg(cache_id, symbol, mode, coin_name, sys_msg, as_of):
-    """Background worker: generate a brief via Pro model and cache it."""
+    """Background worker: generate a structured evidence-led brief via the two-step
+    Flash-research + Pro-synthesis pipeline and cache it."""
+    try:
+        from albert.brief import generate_brief as _gen_brief
+        from config import BRIEF_RESEARCH_MODEL, BRIEF_SYNTHESIS_MODEL, GEMINI_API_KEY
+
+        if not GEMINI_API_KEY:
+            print("BRIEF: No GEMINI_API_KEY, falling back to legacy generation")
+            _brief_generate_bg_legacy(cache_id, symbol, mode, coin_name, sys_msg, as_of)
+            return
+
+        client = _get_genai_client()
+        doc, err = _gen_brief(
+            brief_context_fn=_brief_context,
+            genai_client=client,
+            research_model=BRIEF_RESEARCH_MODEL,
+            synthesis_model=BRIEF_SYNTHESIS_MODEL,
+            timeout_research=45,
+            timeout_synthesis=90,
+        )
+
+        if err or not doc:
+            print(f"BRIEF: Generation failed: {err}. Falling back to legacy.")
+            _brief_generate_bg_legacy(cache_id, symbol, mode, coin_name, sys_msg, as_of)
+            return
+
+        # Store the structured brief
+        now_iso = datetime.datetime.utcnow().isoformat()
+        # Build a backwards-compatible text + observations from the structured brief
+        obs = []
+        for sec in (doc.get('sections') or []):
+            if sec.get('id') in (doc.get('dashboard_section_ids') or []):
+                obs.append(sec.get('dashboard_summary', ''))
+        legacy_text = doc.get('executive_summary', '')
+
+        store = {
+            'kind': 'brief',
+            'version': 'v2',  # marks this as the new structured format
+            'text': legacy_text,
+            'observations': obs,
+            'take': doc.get('market_call', ''),
+            'as_of': as_of,
+            'model': f"{doc.get('research_model')}/{doc.get('synthesis_model')}",
+            'generated_at': now_iso,
+            'mode': mode,
+            'symbol': symbol,
+            'coin': coin_name,
+            # New structured fields
+            'brief': doc,
+        }
+        insights_col.update_one({'_id': cache_id}, {'$set': {'_id': cache_id, **store}}, upsert=True)
+        _bump_usage('llm_brief')
+        print(f"BRIEF: v2 structured brief generated successfully for {symbol} ({len(doc.get('sections', []))} sections)")
+    except Exception:
+        traceback.print_exc()
+        # Fallback: try legacy generation
+        try:
+            _brief_generate_bg_legacy(cache_id, symbol, mode, coin_name, sys_msg, as_of)
+        except Exception:
+            traceback.print_exc()
+    finally:
+        _BRIEF_REFRESH_LOCKS.pop(cache_id, None)
+
+
+def _brief_generate_bg_legacy(cache_id, symbol, mode, coin_name, sys_msg, as_of):
+    """Legacy single-call brief generation (fallback)."""
     try:
         def _call():
             async def _go():
@@ -20420,12 +20485,11 @@ def _brief_generate_bg(cache_id, symbol, mode, coin_name, sys_msg, as_of):
                 obs.append(ln.lstrip('-').strip())
         now_iso = datetime.datetime.utcnow().isoformat()
         doc = {'text': text, 'observations': obs, 'take': take, 'as_of': as_of,
-               'model': _model_for('brief'), 'generated_at': now_iso, 'mode': mode, 'symbol': symbol, 'coin': coin_name}
+               'model': _model_for('brief'), 'generated_at': now_iso, 'mode': mode,
+               'symbol': symbol, 'coin': coin_name, 'version': 'v1'}
         insights_col.update_one({'_id': cache_id}, {'$set': {'_id': cache_id, 'kind': 'brief', **doc}}, upsert=True)
-    except Exception:  # noqa
+    except Exception:
         traceback.print_exc()
-    finally:
-        _BRIEF_REFRESH_LOCKS.pop(cache_id, None)
 
 
 @app.get('/api/v1/albert/brief')
@@ -20472,8 +20536,9 @@ async def albert_brief(request: Request, refresh: int = 0, mode: str = 'plain', 
 
     # Always return the best available cached version immediately
     if cached and cached.get('text'):
-        return {'status': 'ready', 'cached': True, 'refreshing': refreshing,
+        resp = {'status': 'ready', 'cached': True, 'refreshing': refreshing,
                 'mode': mode, 'symbol': symbol, **{k: v for k, v in cached.items() if k != '_id'}}
+        return resp
 
     # No cache at all — tell the UI a brief is being generated
     return {'status': 'computing', 'refreshing': refreshing,

@@ -489,40 +489,62 @@ const OneScreenHome = ({ d, dashboardStatus = 'loading', ticker, news, newsStatu
             <h2 className="min-w-0 truncate text-[13px] font-bold text-white"><button id="home-card-brief" type="button" onClick={() => open('brief')} className="max-w-full truncate text-left hover:text-sky-200 focus-visible:rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400">Albert's Brief</button></h2>
             {health?.sop && <span className={`ml-auto shrink-0 rounded-sm px-1.5 py-0.5 text-[10px] font-bold ${['stale', 'error', 'unavailable'].includes(String(health.sop).toLowerCase()) ? 'bg-amber-500/15 text-amber-200' : 'bg-sky-500/10 text-sky-200'}`}>{titleCase(health.sop)}</span>}
           </div>
-          {/* Lead with Albert's market interpretation */}
-          <p className="mt-1 text-xs leading-snug text-slate-300">{briefCommentary}</p>
-          <div className="mt-2 flex-1 space-y-2 text-xs leading-snug text-slate-200">
-            {/* Key change and drivers */}
-            <div>
-              {briefChanges[0]?.detail && <p className="line-clamp-2"><b>Since last visit:</b> {briefChanges[0].detail}</p>}
-              {leadershipClaim?.text && <p className="mt-0.5 line-clamp-2"><b>Drivers:</b> {leadershipClaim.text}</p>}
-              {secondReason?.text && <p className="mt-0.5 line-clamp-1 text-slate-400">{secondReason.text}</p>}
-            </div>
-            {/* Portfolio implication */}
-            <div className="border-t border-slate-800 pt-1.5">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Portfolio</p>
-              <p className="mt-0.5">{portfolioClaim?.text || (pnlVal != null ? `${pnlLabel}: ${pnlVal >= 0 ? '+' : ''}${money(pnlVal, 2)} (${signed(totals?.pnlPct)}) on ${money(totals?.value, 2)} portfolio` : 'Unavailable')}</p>
-            </div>
-            {/* Evidence & Engines */}
-            <div className="border-t border-slate-800 pt-1.5">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Evidence & Engines</p>
-              <p className="mt-0.5 line-clamp-2 text-slate-300">{evidenceCommentary}</p>
-              <NavigateLink id="dashboard-evidence" onNav={onNav} className="mt-0.5 text-[11px]">Full evidence & engines<ArrowUpRight className="h-3 w-3" /></NavigateLink>
-            </div>
-            {/* Opportunity Radar */}
-            <div className="border-t border-slate-800 pt-1.5">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Opportunity Radar</p>
-              {findings.length ? findings.map((f, i) => <div key={f.findingId || i} className="mt-0.5">
-                <p className="line-clamp-2">{f.hypothesis || f.title || 'Untitled'}</p>
-                {(f.confirmIf || f.invalidateIf || f.resolveBy) && <p className="line-clamp-1 text-[11px] text-slate-400">{f.confirmIf ? `Confirm: ${f.confirmIf}` : f.invalidateIf ? `Invalidate: ${f.invalidateIf}` : `Resolve by: ${f.resolveBy}`}</p>}
-              </div>) : <p className="text-slate-400">No open setups</p>}
-              <NavigateLink id="dashboard-radar" onNav={onNav} className="mt-0.5 text-[11px]">Full opportunity radar<ArrowUpRight className="h-3 w-3" /></NavigateLink>
-            </div>
-          </div>
+          {/* V2 structured brief card */}
+          {brief?.version === 'v2' && brief?.brief ? (() => {
+            const b = brief.brief;
+            const dashSecs = (b.dashboard_section_ids || []).map(id => (b.sections || []).find(s => s.id === id)).filter(Boolean).slice(0, 3);
+            const convC = (b.conviction || '').toLowerCase() === 'high' ? 'text-emerald-400' : (b.conviction || '').toLowerCase() === 'low' ? 'text-red-400' : 'text-amber-400';
+            const callC = (b.market_call || '').toLowerCase().includes('bull') ? 'text-emerald-400' : (b.market_call || '').toLowerCase().includes('bear') ? 'text-red-400' : 'text-amber-400';
+            return (
+              <div className="mt-1 flex-1 space-y-1.5 text-xs leading-snug">
+                <p className="text-[13px] font-bold text-white line-clamp-1">{b.headline}</p>
+                <div className="flex items-center gap-2">
+                  <span className={`text-[11px] font-bold ${callC}`}>{b.market_call}</span>
+                  <span className={`text-[10px] font-bold ${convC}`}>{b.conviction}</span>
+                </div>
+                <p className="text-slate-300 line-clamp-3">{b.executive_summary}</p>
+                {dashSecs.map((sec) => (
+                  <div key={sec.id} className="border-t border-slate-800 pt-1">
+                    <p className="text-[11px] font-semibold text-white line-clamp-1">{sec.title}</p>
+                    <p className="text-slate-400 line-clamp-1">{sec.dashboard_summary}</p>
+                  </div>
+                ))}
+              </div>
+            );
+          })() : (
+            /* V1 legacy card content */
+            <>
+              <p className="mt-1 text-xs leading-snug text-slate-300">{briefCommentary}</p>
+              <div className="mt-2 flex-1 space-y-2 text-xs leading-snug text-slate-200">
+                <div>
+                  {briefChanges[0]?.detail && <p className="line-clamp-2"><b>Since last visit:</b> {briefChanges[0].detail}</p>}
+                  {leadershipClaim?.text && <p className="mt-0.5 line-clamp-2"><b>Drivers:</b> {leadershipClaim.text}</p>}
+                  {secondReason?.text && <p className="mt-0.5 line-clamp-1 text-slate-400">{secondReason.text}</p>}
+                </div>
+                <div className="border-t border-slate-800 pt-1.5">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Portfolio</p>
+                  <p className="mt-0.5">{portfolioClaim?.text || (pnlVal != null ? `${pnlLabel}: ${pnlVal >= 0 ? '+' : ''}${money(pnlVal, 2)} (${signed(totals?.pnlPct)}) on ${money(totals?.value, 2)} portfolio` : 'Unavailable')}</p>
+                </div>
+                <div className="border-t border-slate-800 pt-1.5">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Evidence & Engines</p>
+                  <p className="mt-0.5 line-clamp-2 text-slate-300">{evidenceCommentary}</p>
+                  <NavigateLink id="dashboard-evidence" onNav={onNav} className="mt-0.5 text-[11px]">Full evidence & engines<ArrowUpRight className="h-3 w-3" /></NavigateLink>
+                </div>
+                <div className="border-t border-slate-800 pt-1.5">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Opportunity Radar</p>
+                  {findings.length ? findings.map((f, i) => <div key={f.findingId || i} className="mt-0.5">
+                    <p className="line-clamp-2">{f.hypothesis || f.title || 'Untitled'}</p>
+                    {(f.confirmIf || f.invalidateIf || f.resolveBy) && <p className="line-clamp-1 text-[11px] text-slate-400">{f.confirmIf ? `Confirm: ${f.confirmIf}` : f.invalidateIf ? `Invalidate: ${f.invalidateIf}` : `Resolve by: ${f.resolveBy}`}</p>}
+                  </div>) : <p className="text-slate-400">No open setups</p>}
+                  <NavigateLink id="dashboard-radar" onNav={onNav} className="mt-0.5 text-[11px]">Full opportunity radar<ArrowUpRight className="h-3 w-3" /></NavigateLink>
+                </div>
+              </div>
+            </>
+          )}
           <div className="mt-1 flex shrink-0 items-center gap-2 border-t border-slate-800 pt-1.5 text-xs">
             <span className="min-w-0 flex-1 truncate text-[11px] text-slate-400">{last('Regime', claimTime)}</span>
             <button type="button" onClick={() => ask('brief', "Albert's Brief", briefCommentary, 'State of Play', claimTime)} className="shrink-0 rounded-sm p-0.5 text-sky-300 hover:text-sky-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"><Sparkles className="h-3.5 w-3.5" /></button>
-            <button type="button" onClick={() => open('brief')} className="inline-flex shrink-0 items-center gap-0.5 font-semibold text-sky-300 hover:text-sky-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400">Open details<ArrowUpRight className="h-3.5 w-3.5" /></button>
+            <button type="button" onClick={() => onNav('albert-brief')} className="inline-flex shrink-0 items-center gap-0.5 font-semibold text-violet-300 hover:text-violet-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400">Read complete Brief<ArrowUpRight className="h-3.5 w-3.5" /></button>
           </div>
         </article>
         {/* 2. Paper Trading */}

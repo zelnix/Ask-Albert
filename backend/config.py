@@ -266,6 +266,13 @@ ALBERT_CHAT_MODEL = os.environ.get('CHAT_MODEL_PRO', os.environ.get('ALBERT_CHAT
 # /app/.env and is never exposed to the browser (audio is generated backend-side).
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
 GEMINI_TTS_MODEL = os.environ.get('GEMINI_TTS_MODEL', 'gemini-2.5-flash-preview-tts')
+
+# ---- Albert's Brief — dedicated model configuration ----
+# Two-step generation: Flash researches evidence gaps, Pro synthesises the report.
+# These settings apply ONLY to the Brief feature — they do not affect chat,
+# strategy creation, news, screen commentary or any other Gemini-powered feature.
+BRIEF_RESEARCH_MODEL = os.environ.get('BRIEF_RESEARCH_MODEL', 'gemini-3-flash-preview')
+BRIEF_SYNTHESIS_MODEL = os.environ.get('BRIEF_SYNTHESIS_MODEL', 'gemini-3.1-pro-preview')
 # Albert's prebuilt voice — "Charon" is a deep, informative male voice that suits a
 # seasoned professor. Overridable via env without a code change.
 GEMINI_TTS_VOICE = os.environ.get('GEMINI_TTS_VOICE', 'Charon')
