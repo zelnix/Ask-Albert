@@ -9613,6 +9613,49 @@ def _persist_multi_cursors(acct_id, processed, newly_seen, cursors):
         {'$set': {'processedDecisionSnapshots': processed, 'marketObservationCursors': cursors}})
 
 
+_EQUITY_SNAP_MAX = 30   # max data points kept per strategy
+_EQUITY_SNAP_MIN_INTERVAL_SEC = 900  # one point per 15 min max
+
+def _record_strategy_equity_snapshot(acct_id):
+    """Append a lightweight equity data point to the paper account's equitySnapshots
+    array (rolling, max _EQUITY_SNAP_MAX points). Deduplicates to one point per
+    _EQUITY_SNAP_MIN_INTERVAL_SEC seconds so sparklines are meaningful."""
+    try:
+        acct = paper_accounts_col.find_one({'paperAccountId': acct_id})
+        if not acct:
+            return
+        held = _paper_core.open_positions(acct)
+        held_syms = list(dict.fromkeys([(p.get('symbol') or '').upper() for p in held]))
+        marks = {}
+        for sym in held_syms:
+            px, fresh, obs = _paper_mark(sym)
+            marks[sym] = (px, fresh)
+        eq_info = _paper_portfolio.compute_portfolio_equity(acct, marks)
+        equity = eq_info.get('equity')
+        if equity is None:
+            return
+        snaps = acct.get('equitySnapshots') or []
+        now = datetime.datetime.utcnow()
+        if snaps:
+            last_ts = snaps[-1].get('t')
+            if last_ts:
+                try:
+                    last_dt = datetime.datetime.fromisoformat(last_ts)
+                    if (now - last_dt).total_seconds() < _EQUITY_SNAP_MIN_INTERVAL_SEC:
+                        return  # too soon
+                except Exception:
+                    pass
+        point = {'t': now.isoformat(), 'v': float(equity)}
+        snaps.append(point)
+        if len(snaps) > _EQUITY_SNAP_MAX:
+            snaps = snaps[-_EQUITY_SNAP_MAX:]
+        paper_accounts_col.update_one(
+            {'paperAccountId': acct_id},
+            {'$set': {'equitySnapshots': snaps}})
+    except Exception:  # noqa: do not break the worker
+        traceback.print_exc()
+
+
 
 def _paper_autopilot_worker():
     """Durable background job: process RUNNING paper accounts under a time budget.
@@ -9713,6 +9756,12 @@ def _paper_autopilot_worker():
                 else:
                     _WORKER_TIMEOUT_PENALTIES.pop(acct_id, None)  # clear penalty on success
                 n_processed += 1
+                # Record per-strategy equity snapshot for sparklines (lightweight, deduplicated)
+                if has_strategy:
+                    try:
+                        _record_strategy_equity_snapshot(acct_id)
+                    except Exception:
+                        pass
                 if not has_strategy:
                     last_other_id = acct_id
             except Exception:  # noqa
@@ -14309,6 +14358,24 @@ def _strategy_paper_public(doc, pid, acct=None):
             (total_pnl / starting_cash_val * Decimal('100')).quantize(_paper_core.PCT_Q), _paper_core.PCT_Q)
 
     ap = _paper_autopilot_status(acct) if acct else {}
+    # Per-strategy equity sparkline series (max 30 points)
+    equity_series = [{'t': s.get('t'), 'v': s.get('v')} for s in (acct or {}).get('equitySnapshots') or []]
+    # Seed a two-point sparkline for wallets with no snapshots: startingCash → current equity.
+    if acct and len(equity_series) < 2 and total_portfolio_value is not None and total_portfolio_value > 0:
+        start_val = float(starting_cash_val) if starting_cash_val > 0 else float(total_portfolio_value)
+        started_at = acct.get('createdAt') or datetime.datetime.utcnow().isoformat()
+        now_iso = datetime.datetime.utcnow().isoformat()
+        seed = [{'t': started_at, 'v': start_val}, {'t': now_iso, 'v': float(total_portfolio_value)}]
+        if not equity_series:
+            equity_series = seed
+            try:
+                paper_accounts_col.update_one(
+                    {'paperAccountId': acct.get('paperAccountId'), 'equitySnapshots': {'$exists': False}},
+                    {'$set': {'equitySnapshots': seed}})
+            except Exception:
+                pass
+        elif len(equity_series) == 1:
+            equity_series = [{'t': started_at, 'v': start_val}] + equity_series
     return {'paperStatus': status, 'paperStatusLabel': PAPER_STATUS_LABEL.get(status, status),
             'canStart': not blockers and worker_ready and status != 'ARCHIVED',
             'entryBlockers': blockers, 'startErrors': _st_err, 'saveErrors': _sv_err,
@@ -14329,6 +14396,7 @@ def _strategy_paper_public(doc, pid, acct=None):
             'runtimeState': (acct or {}).get('runtimeState'),
             'autopilot': ap,
             'executionModel': 'direct_price',
+            'equitySeries': equity_series,
             'goalStatus': (acct or {}).get('goalStatus'),
             'portfolioGoals': (acct or {}).get('portfolioGoals'),
             'entrySizing': (doc.get('contract') or {}).get('entrySizing'),

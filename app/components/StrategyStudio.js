@@ -38,6 +38,25 @@ function mandateOverrides(contract, mandate) {
   return overrides;
 }
 
+/** Mini SVG sparkline for equity curves */
+function EquitySparkline({ series, width = 80, height = 24, className = '' }) {
+  if (!series || series.length < 2) return null;
+  const vals = series.map((p) => p.v);
+  const min = Math.min(...vals);
+  const max = Math.max(...vals);
+  const range = max - min || 1;
+  const points = vals.map((v, i) =>
+    `${(i / (vals.length - 1)) * width},${height - ((v - min) / range) * (height - 2) - 1}`
+  ).join(' ');
+  const start = vals[0]; const end = vals[vals.length - 1];
+  const color = end >= start ? '#34d399' : '#f87171';
+  return (
+    <svg width={width} height={height} className={className} viewBox={`0 0 ${width} ${height}`}>
+      <polyline points={points} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 
 /**
  * Convert a structured chat proposal into a Studio-compatible draft object.
@@ -1212,6 +1231,17 @@ export default function StrategyStudio({ chatGoal = '', chatDraftKey = null, cha
                   {(s.contract?.assets || []).map((a) => a.symbol).join(' · ')} · v{s.version}
                   {''  /* mode retired */}
                 </p>
+                {(s.equitySeries || []).length >= 2 && (
+                  <div className="mt-1.5 flex items-center gap-2">
+                    <EquitySparkline series={s.equitySeries} width={72} height={20} />
+                    <span className="text-[10px] font-medium text-slate-500">
+                      {(() => { const es = s.equitySeries; const start = es[0]?.v; const end = es[es.length - 1]?.v;
+                        if (!start || !end) return ''; const pct = ((end - start) / start * 100).toFixed(1);
+                        return <span className={Number(pct) >= 0 ? 'text-emerald-400' : 'text-red-400'}>{Number(pct) >= 0 ? '+' : ''}{pct}%</span>;
+                      })()}
+                    </span>
+                  </div>
+                )}
               </button>
             );
           })}
