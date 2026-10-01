@@ -663,6 +663,30 @@ const OneScreenHome = ({ d, dashboardStatus = 'loading', ticker, news, newsStatu
             const latestT = (activeScenario.tracking || []).slice(-1)[0];
             const following = latestT?.following || (fwDone ? 'window_done' : 'neutral');
             const daysActive = activeScenario.created_at ? Math.floor((Date.now() - new Date(activeScenario.created_at).getTime()) / 86400000) : 0;
+            const tracking = activeScenario.tracking || [];
+
+            // ── Mini tracking chart (SVG) ──
+            const chartW = 280, chartH = 52, padL = 0, padR = 0;
+            const bullTrig = bull?.trigger_level;
+            const bearTrig = bear?.trigger_level;
+            const anchorP = activeScenario.anchor_price;
+            const prices = tracking.map((t) => t.close).filter(Boolean);
+            const allPts = [anchorP, bullTrig, bearTrig, ...prices].filter(Boolean);
+            const minP = allPts.length ? Math.min(...allPts) * 0.998 : 0;
+            const maxP = allPts.length ? Math.max(...allPts) * 1.002 : 1;
+            const rangeP = maxP - minP || 1;
+            const y = (p) => chartH - ((p - minP) / rangeP) * chartH;
+            const bullTrigY = bullTrig ? y(bullTrig) : null;
+            const bearTrigY = bearTrig ? y(bearTrig) : null;
+            const anchorY = anchorP ? y(anchorP) : null;
+
+            // Build observed path from anchor + tracking
+            const pathPts = [anchorP, ...prices];
+            const step = pathPts.length > 1 ? (chartW - padL - padR) / (pathPts.length - 1) : 0;
+            const pathD = pathPts.length > 1
+              ? pathPts.map((p, i) => `${i === 0 ? 'M' : 'L'}${padL + i * step},${y(p)}`).join(' ')
+              : null;
+
             return (
               <div className="mt-1.5 space-y-1 border-t border-slate-800 pt-1.5 text-[11px]">
                 <div className="flex flex-wrap items-center gap-1.5">
@@ -674,6 +698,29 @@ const OneScreenHome = ({ d, dashboardStatus = 'loading', ticker, news, newsStatu
                   {bullInv && <span className="rounded bg-red-500/15 px-1.5 py-0.5 text-[10px] font-bold text-red-400">Bull ✗</span>}
                   {bearInv && <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-bold text-emerald-400">Bear ✗</span>}
                 </div>
+                {/* Tracking chart */}
+                {allPts.length >= 2 && (
+                  <svg viewBox={`0 0 ${chartW} ${chartH}`} className="w-full" style={{ height: 52 }} preserveAspectRatio="none">
+                    {/* Bull trigger level (resistance) */}
+                    {bullTrigY != null && <>
+                      <line x1={0} y1={bullTrigY} x2={chartW} y2={bullTrigY} stroke="#34d399" strokeWidth="0.8" strokeDasharray="4 3" opacity="0.5" />
+                      <text x={chartW - 2} y={bullTrigY - 2} textAnchor="end" fill="#34d399" fontSize="7" opacity="0.7">{money(bullTrig)}</text>
+                    </>}
+                    {/* Bear trigger level (support) */}
+                    {bearTrigY != null && <>
+                      <line x1={0} y1={bearTrigY} x2={chartW} y2={bearTrigY} stroke="#f87171" strokeWidth="0.8" strokeDasharray="4 3" opacity="0.5" />
+                      <text x={chartW - 2} y={bearTrigY + 8} textAnchor="end" fill="#f87171" fontSize="7" opacity="0.7">{money(bearTrig)}</text>
+                    </>}
+                    {/* Anchor price line */}
+                    {anchorY != null && <line x1={0} y1={anchorY} x2={chartW} y2={anchorY} stroke="#94a3b8" strokeWidth="0.5" strokeDasharray="2 3" opacity="0.3" />}
+                    {/* Observed price path */}
+                    {pathD && <path d={pathD} fill="none" stroke="#a78bfa" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />}
+                    {/* Current price dot */}
+                    {prices.length > 0 && <circle cx={padL + (pathPts.length - 1) * step} cy={y(prices[prices.length - 1])} r="2.5" fill="#a78bfa" />}
+                    {/* Anchor dot */}
+                    {anchorP && <circle cx={padL} cy={y(anchorP)} r="2" fill="#94a3b8" opacity="0.6" />}
+                  </svg>
+                )}
                 {bull && <p className="truncate text-slate-400">↑ Bull: break ${money(bull.trigger_level)} → {bull.target} ({bull.probability}%){bullInv ? ' · invalidated' : ''}</p>}
                 {bear && <p className="truncate text-slate-400">↓ Bear: lose ${money(bear.trigger_level)} → {bear.target} ({bear.probability}%){bearInv ? ' · invalidated' : ''}</p>}
               </div>

@@ -430,11 +430,57 @@ export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboar
           ['Regime at creation', val(sc.regime_label || sc.regime)],
           ['Observations logged', val(sc.tracking?.length || 0)],
         ],
-        children: sc.contradiction?.present ? (
-          <div className="mt-3 rounded-md border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-200">
-            <strong className="font-semibold">Contradiction:</strong> {sc.contradiction.summary}
-          </div>
-        ) : null,
+        children: (() => {
+          // Build tracking chart
+          const tracking = sc.tracking || [];
+          const prices = tracking.map((t) => t.close).filter(Boolean);
+          const allPts = [sc.anchor_price, bull?.trigger_level, bear?.trigger_level, bull?.target_level, bear?.target_level, ...prices].filter(Boolean);
+          const minP = allPts.length ? Math.min(...allPts) * 0.997 : 0;
+          const maxP = allPts.length ? Math.max(...allPts) * 1.003 : 1;
+          const rangeP = maxP - minP || 1;
+          const cW = 500, cH = 140;
+          const yy = (p) => cH - ((p - minP) / rangeP) * cH;
+          const pathPts = [sc.anchor_price, ...prices].filter(Boolean);
+          const step = pathPts.length > 1 ? cW / (pathPts.length - 1) : 0;
+          const pathD = pathPts.length > 1 ? pathPts.map((p, i) => `${i === 0 ? 'M' : 'L'}${i * step},${yy(p)}`).join(' ') : null;
+
+          return (
+            <div className="mt-3 space-y-3">
+              {allPts.length >= 2 && (
+                <div className="rounded-lg border border-slate-700/50 bg-slate-950/50 p-3">
+                  <p className="mb-2 text-[11px] font-semibold text-slate-400">Price vs Trigger Levels</p>
+                  <svg viewBox={`0 0 ${cW} ${cH}`} className="w-full" style={{ height: 140 }} preserveAspectRatio="none">
+                    {/* Bull target (dashed, lighter) */}
+                    {bull?.target_level && <><line x1={0} y1={yy(bull.target_level)} x2={cW} y2={yy(bull.target_level)} stroke="#34d399" strokeWidth="0.5" strokeDasharray="2 4" opacity="0.3" /><text x={cW - 2} y={yy(bull.target_level) - 2} textAnchor="end" fill="#34d399" fontSize="8" opacity="0.4">{amount(bull.target_level)} target</text></>}
+                    {/* Bull trigger */}
+                    {bull?.trigger_level && <><line x1={0} y1={yy(bull.trigger_level)} x2={cW} y2={yy(bull.trigger_level)} stroke="#34d399" strokeWidth="1" strokeDasharray="6 3" opacity="0.6" /><text x={cW - 2} y={yy(bull.trigger_level) - 2} textAnchor="end" fill="#34d399" fontSize="8" opacity="0.8">Bull trigger {amount(bull.trigger_level)}</text></>}
+                    {/* Anchor line */}
+                    {sc.anchor_price && <><line x1={0} y1={yy(sc.anchor_price)} x2={cW} y2={yy(sc.anchor_price)} stroke="#94a3b8" strokeWidth="0.7" strokeDasharray="3 4" opacity="0.3" /><text x={2} y={yy(sc.anchor_price) - 2} textAnchor="start" fill="#94a3b8" fontSize="8" opacity="0.5">Anchor {amount(sc.anchor_price)}</text></>}
+                    {/* Bear trigger */}
+                    {bear?.trigger_level && <><line x1={0} y1={yy(bear.trigger_level)} x2={cW} y2={yy(bear.trigger_level)} stroke="#f87171" strokeWidth="1" strokeDasharray="6 3" opacity="0.6" /><text x={cW - 2} y={yy(bear.trigger_level) + 10} textAnchor="end" fill="#f87171" fontSize="8" opacity="0.8">Bear trigger {amount(bear.trigger_level)}</text></>}
+                    {/* Bear target (dashed, lighter) */}
+                    {bear?.target_level && <><line x1={0} y1={yy(bear.target_level)} x2={cW} y2={yy(bear.target_level)} stroke="#f87171" strokeWidth="0.5" strokeDasharray="2 4" opacity="0.3" /><text x={cW - 2} y={yy(bear.target_level) + 10} textAnchor="end" fill="#f87171" fontSize="8" opacity="0.4">{amount(bear.target_level)} target</text></>}
+                    {/* Observed price path */}
+                    {pathD && <path d={pathD} fill="none" stroke="#a78bfa" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />}
+                    {/* Price dots */}
+                    {pathPts.map((p, i) => <circle key={i} cx={i * step} cy={yy(p)} r={i === pathPts.length - 1 ? 3.5 : 1.5} fill={i === 0 ? '#94a3b8' : '#a78bfa'} opacity={i === pathPts.length - 1 ? 1 : 0.6} />)}
+                  </svg>
+                  <div className="mt-1.5 flex flex-wrap gap-3 text-[10px]">
+                    <span className="flex items-center gap-1"><span className="inline-block h-0.5 w-3 rounded bg-violet-400" />Observed</span>
+                    <span className="flex items-center gap-1"><span className="inline-block h-px w-3 border-t border-dashed border-emerald-400" />Bull trigger</span>
+                    <span className="flex items-center gap-1"><span className="inline-block h-px w-3 border-t border-dashed border-red-400" />Bear trigger</span>
+                    <span className="flex items-center gap-1"><span className="inline-block h-px w-3 border-t border-dashed border-slate-500" />Anchor</span>
+                  </div>
+                </div>
+              )}
+              {sc.contradiction?.present && (
+                <div className="rounded-md border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-200">
+                  <strong className="font-semibold">Contradiction:</strong> {sc.contradiction.summary}
+                </div>
+              )}
+            </div>
+          );
+        })(),
         note: fwDone
           ? 'The 7-day forecast paths have expired. The scenario remains active under its fixed invalidation levels. BTC is no longer claimed to follow a plotted path.'
           : 'Scenarios are fixed at creation. Engine refreshes only update tracking — paths are never rewritten.',
