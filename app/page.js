@@ -3700,7 +3700,7 @@ function AlertsPanel() {
 }
 
 // ---- Account menu (avatar + user settings panel) shown in the top header ----
-function AccountMenu({ user, onSignOut, onNav }) {
+function AccountMenu({ user, onSignOut, onNav, onAboutAlbert }) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState('main'); // main | notifications | briefcoins | passcode | mandate | alerts
   const [pass, setPass] = useState('');
@@ -3811,6 +3811,11 @@ function AccountMenu({ user, onSignOut, onNav }) {
                   className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm text-slate-300 transition-colors hover:bg-slate-800 hover:text-white">
                   <Activity className="h-4 w-4 text-rose-400" /> Price alerts
                   {alertBadge > 0 && <span className="ml-auto rounded-full bg-sky-500/20 px-1.5 py-0.5 text-[10px] font-bold text-sky-300">{alertBadge}</span>}
+                </button>
+                <div className="my-1 h-px bg-slate-800" />
+                <button onClick={() => { setOpen(false); onAboutAlbert && onAboutAlbert(); }}
+                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm text-slate-300 transition-colors hover:bg-slate-800 hover:text-white">
+                  <Globe className="h-4 w-4 text-slate-500" /> About Ask Albert
                 </button>
                 <div className="my-1 h-px bg-slate-800" />
                 <button
@@ -4412,7 +4417,7 @@ export default function DashboardPage() {
             <div className="relative">
               {active !== 'home' && <Button onClick={handleRefresh} disabled={refreshing} size="sm" className="hidden gap-1.5 bg-sky-600 text-white hover:bg-sky-500 sm:inline-flex"><RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} /><span className="hidden lg:inline">{refreshing ? 'Refreshing' : 'Refresh'}</span></Button>}
             </div>
-            <AccountMenu user={authUser} onSignOut={handleSignOut} onNav={navigate} />
+            <AccountMenu user={authUser} onSignOut={handleSignOut} onNav={navigate} onAboutAlbert={() => setAlbertBioOpen(true)} />
             <GlobalMenu active={active} symbol={symbol} onNav={navigate} unread={notif?.unseen || 0} onReport={() => setShowReport(true)} onRefresh={handleRefresh} />
           </header>
 
