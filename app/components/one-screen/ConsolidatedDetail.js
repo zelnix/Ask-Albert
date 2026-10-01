@@ -174,18 +174,78 @@ export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboar
   if (kind === 'brief') {
     const claims = sop?.briefing?.claims || [];
     const briefData = extra.brief || {};
+    const isV2 = briefData.version === 'v2' && briefData.brief;
     const briefObs = briefData.observations || briefData.brief?.observations || [];
     const briefTake = briefData.take || briefData.brief?.take;
     const briefCommentary = briefTake || firstText(claims.find((x) => x.claimId === 'briefing.direction')?.text, sop?.briefing?.headline) || null;
-    area('Unified Brief', 'briefing', { state: healthOf('sop'), commentary: briefCommentary, source: when(sop?.market?.asOf || sop?.generatedAt || briefData.generated_at), facts: [
-      ['Market regime', val(d.regime?.label || d.regime?.regime || sop.market?.regime)],
-      ['Published assessment', firstText(claims.find((x) => x.claimId === 'briefing.direction')?.text, sop?.briefing?.headline)],
-      ['Recorded market changes', val(sop?.changesSinceLastVisit?.length)],
-    ], items: [
-      ...briefObs.slice(0, 4).map((o) => typeof o === 'string' ? o : o?.text || o?.observation || ''),
-      ...claims.filter((x) => x.claimId !== 'briefing.direction').slice(0, 3).map((x) => `${x.claimId || 'Claim'}: ${x.text || 'Unavailable'}`),
-    ].filter(Boolean),
-    note: 'Unified brief combining real-time observations, state-of-play claims and Albert\u2019s take.' });
+
+    if (isV2) {
+      // ── V2 Structured Brief ──
+      const b = briefData.brief;
+      const convC = (b.conviction || '').toLowerCase() === 'high' ? 'text-emerald-400 border-emerald-500/40 bg-emerald-500/10' : (b.conviction || '').toLowerCase() === 'low' ? 'text-red-400 border-red-500/40 bg-red-500/10' : 'text-amber-400 border-amber-500/40 bg-amber-500/10';
+      const callC = (b.market_call || '').toLowerCase().includes('bull') ? 'text-emerald-400' : (b.market_call || '').toLowerCase().includes('bear') ? 'text-red-400' : 'text-amber-400';
+      const allSections = b.sections || [];
+      const sources = b.sources || [];
+
+      // Hero card with headline, call, conviction, summary
+      rows.push(
+        <section key="v2-hero" className="col-span-full rounded-xl border border-violet-500/25 bg-gradient-to-br from-violet-500/[0.06] to-slate-900 p-5 sm:p-6">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <h2 className="text-xl font-bold leading-tight text-white sm:text-2xl">{b.headline}</h2>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <span className={`text-sm font-bold ${callC}`}>{b.market_call}</span>
+                <span className={`rounded-full border px-2.5 py-0.5 text-xs font-bold ${convC}`}>{b.conviction} conviction</span>
+              </div>
+            </div>
+            <span className="shrink-0 rounded-md bg-violet-500/15 px-2 py-0.5 text-xs font-semibold text-violet-300">v2</span>
+          </div>
+          <p className="mt-4 whitespace-pre-line text-[15px] leading-relaxed text-slate-200">{b.executive_summary}</p>
+          {briefData.generated_at && <p className="mt-3 text-[11px] text-slate-500">{when(briefData.generated_at)}</p>}
+        </section>
+      );
+
+      // Each section as its own detailed card
+      allSections.forEach((sec) => {
+        rows.push(
+          <section key={sec.id} className="rounded-lg border border-border bg-card p-4 sm:p-5">
+            <h3 className="text-base font-semibold text-white">{sec.title}</h3>
+            <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-slate-300">{sec.body || sec.dashboard_summary}</p>
+            {sec.dashboard_summary && sec.body && sec.body !== sec.dashboard_summary && (
+              <p className="mt-2 rounded-md border border-slate-700/50 bg-slate-800/30 px-3 py-2 text-xs text-slate-400"><strong className="text-slate-300">Summary:</strong> {sec.dashboard_summary}</p>
+            )}
+          </section>
+        );
+      });
+
+      // Sources
+      if (sources.length > 0) {
+        rows.push(
+          <section key="v2-sources" className="col-span-full rounded-lg border border-border bg-card p-4 sm:p-5">
+            <h3 className="text-sm font-semibold text-slate-300">Sources & Citations</h3>
+            <ul className="mt-2 space-y-1">{sources.map((src, i) => (
+              <li key={src.id || i} className="text-xs text-slate-400">
+                <span className="mr-1 font-semibold text-slate-300">[{i + 1}]</span>
+                {src.url ? <a href={src.url} target="_blank" rel="noopener noreferrer" className="text-violet-300 underline underline-offset-2 hover:text-violet-200">{src.title || src.publisher || src.url}</a> : (src.title || src.publisher || 'Source')}
+                {src.publisher && src.title && <span className="ml-1 text-slate-500">— {src.publisher}</span>}
+                {src.retrieved_at && <span className="ml-1 text-slate-600">· {src.retrieved_at}</span>}
+              </li>
+            ))}</ul>
+          </section>
+        );
+      }
+    } else {
+      // ── V1 fallback (legacy claims layout) ──
+      area('Unified Brief', 'briefing', { state: healthOf('sop'), commentary: briefCommentary, source: when(sop?.market?.asOf || sop?.generatedAt || briefData.generated_at), facts: [
+        ['Market regime', val(d.regime?.label || d.regime?.regime || sop.market?.regime)],
+        ['Published assessment', firstText(claims.find((x) => x.claimId === 'briefing.direction')?.text, sop?.briefing?.headline)],
+        ['Recorded market changes', val(sop?.changesSinceLastVisit?.length)],
+      ], items: [
+        ...briefObs.slice(0, 4).map((o) => typeof o === 'string' ? o : o?.text || o?.observation || ''),
+        ...claims.filter((x) => x.claimId !== 'briefing.direction').slice(0, 3).map((x) => `${x.claimId || 'Claim'}: ${x.text || 'Unavailable'}`),
+      ].filter(Boolean),
+      note: 'Unified brief combining real-time observations, state-of-play claims and Albert\u2019s take.' });
+    }
     /* Evidence & Engines summary inside brief */
     const evalChecks = outlook?.validation?.evaluation?.evaluationPoints;
     const isValidated = outlook?.validation?.predictiveValidation;
