@@ -6844,6 +6844,9 @@ def _startup():
         # Price-watch alerts created from Albert chat: check crossings every 60s.
         scheduler.add_job(_check_price_watches, 'interval', seconds=60, id='price_watch_check',
                           misfire_grace_time=120)
+        # Metric-watch alerts: check threshold crossings every 90s.
+        scheduler.add_job(_check_metric_watches, 'interval', seconds=90, id='metric_watch_check',
+                          misfire_grace_time=120)
         # Background Paper Auto Run: the durable worker that trades paper accounts
         # WITHOUT any browser/dashboard being open. Runs every 30s, one instance.
         scheduler.add_job(_paper_autopilot_worker, 'interval', seconds=30, id='paper_autopilot',
@@ -16949,6 +16952,50 @@ def _check_metric_watches():
         metric_watch_col.update_one({'_id': w['_id']},
                                     {'$set': {'triggered': True, 'triggered_value': val,
                                               'triggered_at': datetime.datetime.utcnow().isoformat()}})
+
+
+@app.get('/api/v1/metric-history/{metric_name}')
+def metric_history(metric_name: str, limit: int = 30):
+    """Return up to `limit` recent data points for a supported metric (for sparklines)."""
+    if metric_name not in METRIC_DEFS:
+        return JSONResponse(status_code=400, content={'error': 'unsupported metric'})
+    points = []
+    try:
+        if metric_name == 'btc_dominance':
+            docs = list(dominance_col.find({}, {'_id': 0, 'date': 1, 'dominance': 1}).sort('date', -1).limit(limit))
+            points = [{'t': d.get('date', ''), 'v': d.get('dominance')} for d in reversed(docs) if d.get('dominance') is not None]
+        elif metric_name == 'fear_greed':
+            # Fear & greed history is stored in misc_col or fetched live
+            try:
+                data = _http_json('https://api.alternative.me/fng/?limit=' + str(limit))['data']
+                points = [{'t': d.get('timestamp', ''), 'v': float(d['value'])} for d in reversed(data)]
+            except Exception:
+                fg = _misc_get('fear_greed', 30 * 60, compute_fear_greed) or {}
+                if fg.get('value') is not None:
+                    points = [{'t': '', 'v': float(fg['value'])}]
+        elif metric_name in ('funding_rate', 'taker_ratio'):
+            # From the last N run docs
+            docs = list(runs_col.find({}, {'_id': 0, 'ts': 1, 'streams': 1}).sort('ts', -1).limit(limit))
+            key = 'funding_rate' if metric_name == 'funding_rate' else 'takerBuySellRatio'
+            for d in reversed(docs):
+                s = (d.get('streams') or {})
+                val = s.get(key) or s.get('fundingRate')
+                if val is not None:
+                    points.append({'t': d.get('ts', ''), 'v': float(val)})
+        elif metric_name == 'alt_breadth':
+            docs = list(runs_col.find({}, {'_id': 0, 'ts': 1, 'phase_assessment': 1}).sort('ts', -1).limit(limit))
+            for d in reversed(docs):
+                pa = d.get('phase_assessment') or {}
+                val = pa.get('altsWithReturns')
+                if val is not None:
+                    points.append({'t': d.get('ts', ''), 'v': float(val)})
+        elif metric_name == 'etf_net_flow':
+            docs = list(etf_col.find({}, {'_id': 0, 'date': 1, 'net_1d': 1}).sort('date', -1).limit(limit))
+            points = [{'t': d.get('date', ''), 'v': float(d['net_1d'])} for d in reversed(docs) if d.get('net_1d') is not None]
+    except Exception:
+        traceback.print_exc()
+    return {'metric': metric_name, 'points': points, 'current': _current_metric_value(metric_name)}
+
 
 
 

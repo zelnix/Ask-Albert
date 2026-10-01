@@ -3391,6 +3391,55 @@ function MandateForm({ mandate, saving, onSave, saved }) {
 }
 
 
+// ---- Mini sparkline SVG (for metric history in alerts panel) ----
+function Sparkline({ points = [], width = 100, height = 28, threshold, direction, className = '' }) {
+  if (!points.length || points.length < 2) return null;
+  const vals = points.map(p => typeof p === 'number' ? p : p.v);
+  const min = Math.min(...vals);
+  const max = Math.max(...vals);
+  const range = max - min || 1;
+  const pad = 1;
+  const w = width - pad * 2;
+  const h = height - pad * 2;
+  const pts = vals.map((v, i) => {
+    const x = pad + (i / (vals.length - 1)) * w;
+    const y = pad + h - ((v - min) / range) * h;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  // Threshold line
+  let threshY = null;
+  if (threshold != null && threshold >= min && threshold <= max) {
+    threshY = pad + h - ((threshold - min) / range) * h;
+  }
+  // Gradient: green if last > first, red if last < first
+  const up = vals[vals.length - 1] >= vals[0];
+  return (
+    <svg width={width} height={height} className={className} viewBox={`0 0 ${width} ${height}`}>
+      <defs>
+        <linearGradient id={`spark-${up ? 'up' : 'dn'}`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={up ? '#34d399' : '#f87171'} stopOpacity="0.3" />
+          <stop offset="100%" stopColor={up ? '#34d399' : '#f87171'} stopOpacity="0.02" />
+        </linearGradient>
+      </defs>
+      {/* Area fill */}
+      <polygon
+        points={`${pad},${pad + h} ${pts.join(' ')} ${pad + w},${pad + h}`}
+        fill={`url(#spark-${up ? 'up' : 'dn'})`}
+      />
+      {/* Line */}
+      <polyline points={pts.join(' ')} fill="none" stroke={up ? '#34d399' : '#f87171'} strokeWidth="1.5" strokeLinejoin="round" />
+      {/* Threshold dashed line */}
+      {threshY != null && (
+        <line x1={pad} y1={threshY} x2={pad + w} y2={threshY}
+          stroke="#fbbf24" strokeWidth="1" strokeDasharray="3,2" opacity="0.7" />
+      )}
+      {/* Last point dot */}
+      <circle cx={pad + w} cy={parseFloat(pts[pts.length - 1].split(',')[1])} r="2"
+        fill={up ? '#34d399' : '#f87171'} />
+    </svg>
+  );
+}
+
 // ---- Price Alerts panel (inside avatar menu) ----
 function AlertsPanel() {
   const [tab, setTab] = useState('price'); // 'price' | 'metric'
@@ -3407,6 +3456,7 @@ function AlertsPanel() {
   const [threshold, setThreshold] = useState('');
   const [mDir, setMDir] = useState('above');
   const [mAdding, setMAdding] = useState(false);
+  const [sparkData, setSparkData] = useState({}); // metric_name -> points[]
 
   const loadPrice = async () => {
     try {
@@ -3420,6 +3470,19 @@ function AlertsPanel() {
       const r = await fetch(`${API_BASE}/v1/metric-alerts`);
       const j = await r.json();
       setMetricAlerts({ watches: j.watches || [], triggered: j.triggered || [], metrics: j.metrics || {} });
+      // Load sparklines for all defined metrics
+      const metricKeys = Object.keys(j.metrics || {});
+      const sparkPromises = metricKeys.map(async (m) => {
+        try {
+          const sr = await fetch(`${API_BASE}/v1/metric-history/${m}?limit=30`);
+          const sd = await sr.json();
+          return [m, sd.points || []];
+        } catch { return [m, []]; }
+      });
+      const sparkResults = await Promise.all(sparkPromises);
+      const sparkMap = {};
+      sparkResults.forEach(([m, pts]) => { sparkMap[m] = pts; });
+      setSparkData(sparkMap);
     } catch {}
   };
   useEffect(() => { loadPrice(); loadMetric(); }, []);
@@ -3571,6 +3634,16 @@ function AlertsPanel() {
             <Button onClick={addMetric} size="sm" disabled={mAdding || !threshold} className="mt-2 w-full bg-sky-500 hover:bg-sky-400 disabled:opacity-50 text-xs">
               {mAdding ? 'Adding…' : 'Add metric alert'}
             </Button>
+            {/* Sparkline preview of selected metric */}
+            {sparkData[metric] && sparkData[metric].length >= 2 && (
+              <div className="mt-2 rounded-md bg-slate-900/60 p-1.5">
+                <div className="mb-0.5 flex items-center justify-between text-[10px]">
+                  <span className="text-slate-500">{mLabel(metric)} — last 30 points</span>
+                  <span className="font-semibold text-slate-300">{sparkData[metric]?.length ? sparkData[metric][sparkData[metric].length - 1]?.v?.toFixed?.(1) ?? '' : ''}</span>
+                </div>
+                <Sparkline points={sparkData[metric]} width={240} height={36} threshold={threshold ? Number(threshold) : undefined} direction={mDir} />
+              </div>
+            )}
           </div>
 
           {/* Active metric alerts */}
@@ -3579,21 +3652,26 @@ function AlertsPanel() {
             {metricAlerts.watches.length === 0 ? (
               <p className="py-2 text-center text-[11px] text-slate-600">No active metric alerts</p>
             ) : (
-              <div className="space-y-1">
+              <div className="space-y-1.5">
                 {metricAlerts.watches.map((w) => (
-                  <div key={w.id} className="flex items-center justify-between rounded-md border border-slate-700/40 bg-slate-800/40 px-2.5 py-1.5">
-                    <div className="min-w-0">
-                      <span className="text-xs font-semibold text-white">{mLabel(w.metric)}</span>
-                      <span className={`ml-1.5 text-[11px] ${w.direction === 'above' ? 'text-emerald-400' : 'text-red-400'}`}>
-                        {w.direction === 'above' ? '↑' : '↓'} {w.threshold}{mUnit(w.metric)}
-                      </span>
-                      {w.current != null && (
-                        <span className="ml-1.5 text-[10px] text-slate-500">now: {typeof w.current === 'number' ? w.current.toFixed(1) : w.current}{mUnit(w.metric)}</span>
-                      )}
+                  <div key={w.id} className="rounded-md border border-slate-700/40 bg-slate-800/40 px-2.5 py-1.5">
+                    <div className="flex items-center justify-between">
+                      <div className="min-w-0">
+                        <span className="text-xs font-semibold text-white">{mLabel(w.metric)}</span>
+                        <span className={`ml-1.5 text-[11px] ${w.direction === 'above' ? 'text-emerald-400' : 'text-red-400'}`}>
+                          {w.direction === 'above' ? '↑' : '↓'} {w.threshold}{mUnit(w.metric)}
+                        </span>
+                        {w.current != null && (
+                          <span className="ml-1.5 text-[10px] text-slate-500">now: {typeof w.current === 'number' ? w.current.toFixed(1) : w.current}{mUnit(w.metric)}</span>
+                        )}
+                      </div>
+                      <button onClick={() => removeMetric(w.id)} className="shrink-0 rounded p-0.5 text-slate-500 hover:bg-red-500/20 hover:text-red-400">
+                        <X className="h-3 w-3" />
+                      </button>
                     </div>
-                    <button onClick={() => removeMetric(w.id)} className="shrink-0 rounded p-0.5 text-slate-500 hover:bg-red-500/20 hover:text-red-400">
-                      <X className="h-3 w-3" />
-                    </button>
+                    {sparkData[w.metric] && sparkData[w.metric].length >= 2 && (
+                      <Sparkline points={sparkData[w.metric]} width={220} height={32} threshold={w.threshold} direction={w.direction} className="mt-1" />
+                    )}
                   </div>
                 ))}
               </div>
@@ -3631,6 +3709,20 @@ function AccountMenu({ user, onSignOut, onNav }) {
   const [mandate, setMandate] = useState(null);
   const [mandateLoading, setMandateLoading] = useState(false);
   const [mandateSaving, setMandateSaving] = useState(false);
+  const [alertBadge, setAlertBadge] = useState(0);
+  // Fetch active alert count when menu opens
+  useEffect(() => {
+    if (!open) return;
+    (async () => {
+      try {
+        const [p, m] = await Promise.all([
+          fetch(`${API_BASE}/v1/price-alerts`).then(r => r.json()).catch(() => ({ watches: [] })),
+          fetch(`${API_BASE}/v1/metric-alerts`).then(r => r.json()).catch(() => ({ watches: [] })),
+        ]);
+        setAlertBadge((p.watches || []).length + (m.watches || []).length);
+      } catch {}
+    })();
+  }, [open]);
   useEffect(() => {
     if (typeof window !== 'undefined') setPass(window.localStorage.getItem('btciq_admin_passcode') || '');
   }, []);
@@ -3718,6 +3810,7 @@ function AccountMenu({ user, onSignOut, onNav }) {
                 <button onClick={() => setTab('alerts')}
                   className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm text-slate-300 transition-colors hover:bg-slate-800 hover:text-white">
                   <Activity className="h-4 w-4 text-rose-400" /> Price alerts
+                  {alertBadge > 0 && <span className="ml-auto rounded-full bg-sky-500/20 px-1.5 py-0.5 text-[10px] font-bold text-sky-300">{alertBadge}</span>}
                 </button>
                 <div className="my-1 h-px bg-slate-800" />
                 <a href="https://askalbert.app" target="_blank" rel="noopener noreferrer"
@@ -3744,7 +3837,7 @@ function AccountMenu({ user, onSignOut, onNav }) {
             )}
 
             {tab === 'briefcoins' && (
-              <div className="max-h-80 overflow-y-auto p-4">
+              <div className="p-4">
                 <button onClick={() => setTab('main')} className="mb-3 flex items-center gap-1 text-xs text-sky-400 hover:text-sky-300">
                   <ChevronDown className="h-3 w-3 rotate-90" /> Back
                 </button>
@@ -3776,7 +3869,7 @@ function AccountMenu({ user, onSignOut, onNav }) {
             )}
 
             {tab === 'mandate' && (
-              <div className="max-h-[420px] overflow-y-auto p-4 [scrollbar-width:thin]">
+              <div className="p-4">
                 <button onClick={() => setTab('main')} className="mb-3 flex items-center gap-1 text-xs text-sky-400 hover:text-sky-300">
                   <ChevronDown className="h-3 w-3 rotate-90" /> Back
                 </button>
@@ -3793,7 +3886,7 @@ function AccountMenu({ user, onSignOut, onNav }) {
             )}
 
             {tab === 'alerts' && (
-              <div className="max-h-[420px] overflow-y-auto p-4 [scrollbar-width:thin]">
+              <div className="p-4">
                 <button onClick={() => setTab('main')} className="mb-3 flex items-center gap-1 text-xs text-sky-400 hover:text-sky-300">
                   <ChevronDown className="h-3 w-3 rotate-90" /> Back
                 </button>
@@ -4324,7 +4417,7 @@ export default function DashboardPage() {
             <div className="relative">
               {active !== 'home' && <Button onClick={handleRefresh} disabled={refreshing} size="sm" className="hidden gap-1.5 bg-sky-600 text-white hover:bg-sky-500 sm:inline-flex"><RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} /><span className="hidden lg:inline">{refreshing ? 'Refreshing' : 'Refresh'}</span></Button>}
             </div>
-            <AccountMenu user={authUser} onSignOut={handleSignOut} />
+            <AccountMenu user={authUser} onSignOut={handleSignOut} onNav={navigate} />
             <GlobalMenu active={active} symbol={symbol} onNav={navigate} unread={notif?.unseen || 0} onReport={() => setShowReport(true)} onRefresh={handleRefresh} />
           </header>
 
