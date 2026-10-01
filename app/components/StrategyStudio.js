@@ -4,6 +4,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import {
   Crosshair, Plus, Loader2, Sparkles, ShieldCheck, ChevronDown, Play, Square, Archive,
   FlaskConical, CheckCircle2, AlertTriangle, ArrowRight, X, XCircle, Bot, Info, Copy, Zap,
+  Pencil, Check,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -771,11 +772,56 @@ function PaperPanel({ sid, name, onChange }) {
       {p.assessment && <div className="rounded-lg border border-slate-700 bg-slate-950/60 p-3 text-[12px] text-slate-300">
         <p className="font-semibold text-white">Albert’s latest assessment · {p.assessment.state}</p>
         <p className="text-[11px] text-slate-500">As of {p.assessment.at || 'unavailable'} · reviewed version {p.assessment.strategyVersion}</p>
-        {(p.assessment.conditions || []).map((condition) => <div key={condition.symbol} className="mt-1.5">
-          <span className="font-semibold text-slate-100">{condition.symbol}: {condition.state}</span>
-          {condition.reason && <span className="ml-1 text-amber-200">{condition.reason}</span>}
-          {(condition.rules || []).filter((r) => r.state === 'WAIT').map((r) => <p key={r.ruleId} className="ml-2 text-amber-300">{r.reason}</p>)}
-        </div>)}
+        {/* Prominent WAIT conditions panel */}
+        {p.assessment.state === 'WAIT' && (p.assessment.conditions || []).some(c => c.state === 'WAIT') && (
+          <div className="mt-2 rounded-md border border-amber-500/30 bg-amber-500/5 p-2.5">
+            <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-amber-300">
+              <AlertTriangle className="h-3.5 w-3.5" />Awaiting conditions
+            </p>
+            <div className="mt-1.5 space-y-2">
+              {(p.assessment.conditions || []).filter(c => c.state === 'WAIT').map((cond) => (
+                <div key={cond.symbol} className="rounded-md border border-slate-700/50 bg-slate-900/60 p-2">
+                  <p className="flex items-center gap-1.5 font-semibold text-amber-200">
+                    <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />{cond.symbol}
+                    <span className="ml-auto text-[10px] font-normal text-amber-400/60">{cond.state}</span>
+                  </p>
+                  {cond.reason && <p className="mt-0.5 text-[11px] text-amber-200/80">{cond.reason}</p>}
+                  {(cond.rules || []).length > 0 && (
+                    <div className="mt-1.5 space-y-0.5 border-t border-slate-800 pt-1.5">
+                      {cond.rules.map((r, ri) => (
+                        <div key={r.ruleId || ri} className="flex items-start gap-1.5 text-[11px]">
+                          <span className={`mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full ${r.state === 'PASS' ? 'bg-emerald-400' : r.state === 'WAIT' ? 'bg-amber-400' : 'bg-slate-500'}`} />
+                          <div>
+                            <span className={r.state === 'PASS' ? 'text-emerald-300' : r.state === 'WAIT' ? 'text-amber-300' : 'text-slate-400'}>
+                              {r.label || r.ruleId || `Rule ${ri + 1}`}: {r.state}
+                            </span>
+                            {r.reason && <span className="ml-1 text-slate-500">{r.reason}</span>}
+                            {r.observed != null && <span className="ml-1 text-slate-500">(current: {typeof r.observed === 'number' ? r.observed.toFixed(2) : String(r.observed)})</span>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {/* READY conditions */}
+        {(p.assessment.conditions || []).filter(c => c.state === 'READY').length > 0 && (
+          <div className="mt-2">
+            {(p.assessment.conditions || []).filter(c => c.state === 'READY').map((cond) => (
+              <div key={cond.symbol} className="mt-1">
+                <span className="flex items-center gap-1.5 font-semibold text-emerald-300">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />{cond.symbol}: READY
+                </span>
+                {(cond.rules || []).filter(r => r.state === 'PASS').length > 0 && (
+                  <p className="ml-3 text-[11px] text-slate-500">{cond.rules.filter(r => r.state === 'PASS').length} rule(s) passing</p>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
         <div className="mt-2 border-t border-slate-800 pt-2">
           <p className="font-semibold text-slate-200">Existing macro &amp; tokenomics context · advisory only</p>
           {(p.assessment.context?.impact || []).map((impact, i) => <p key={i} className="mt-1 text-slate-400">{impact}</p>)}
@@ -913,6 +959,9 @@ function Detail({ sid, onChange, onRevise, onClone, mandate }) {
   const [reviseInput, setReviseInput] = useState('');
   const [revising, setRevising] = useState(false);
   const [reviseOpen, setReviseOpen] = useState(false);
+  const [editingName, setEditingName] = useState(false);
+  const [nameInput, setNameInput] = useState('');
+  const [nameSaving, setNameSaving] = useState(false);
 
   const load = useCallback(async () => {
     setLoadError('');
@@ -926,6 +975,19 @@ function Detail({ sid, onChange, onRevise, onClone, mandate }) {
     }
   }, [sid]);
   useEffect(() => { setS(null); setBt(null); setLoadError(''); load(); }, [load]);
+
+  const renameStrategy = async () => {
+    const trimmed = (nameInput || '').trim();
+    if (!trimmed || trimmed === s?.name) { setEditingName(false); return; }
+    setNameSaving(true);
+    try {
+      const r = await post(`/v1/albert/studio/strategies/${sid}/rename`, { name: trimmed });
+      const j = await r.json();
+      if (r.ok) { setS(prev => prev ? { ...prev, name: j.name || trimmed } : prev); setEditingName(false); }
+      else setErr(j.detail || 'Rename failed.');
+    } catch { setErr('Rename failed.'); }
+    finally { setNameSaving(false); }
+  };
 
   const runBt = async () => {
     setBtBusy(true); setErr('');
@@ -981,7 +1043,30 @@ function Detail({ sid, onChange, onRevise, onClone, mandate }) {
   return (
     <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <h3 className="text-base font-bold text-white">{s.name}</h3>
+        {editingName ? (
+          <div className="flex items-center gap-1.5">
+            <input autoFocus value={nameInput} onChange={(e) => setNameInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') renameStrategy(); if (e.key === 'Escape') setEditingName(false); }}
+              className="h-7 rounded-md border border-sky-600 bg-slate-950 px-2 text-sm font-bold text-white outline-none focus:ring-1 focus:ring-sky-500"
+              style={{ minWidth: 180, maxWidth: 400 }} maxLength={120} disabled={nameSaving} />
+            <button onClick={renameStrategy} disabled={nameSaving}
+              className="rounded p-1 text-emerald-400 hover:bg-emerald-500/20 disabled:opacity-50">
+              {nameSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+            </button>
+            <button onClick={() => setEditingName(false)} className="rounded p-1 text-slate-400 hover:text-white">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ) : (
+          <div className="group flex items-center gap-1.5">
+            <h3 className="text-base font-bold text-white">{s.name}</h3>
+            <button onClick={() => { setNameInput(s.name || ''); setEditingName(true); }}
+              className="rounded p-0.5 text-slate-500 opacity-0 transition-opacity group-hover:opacity-100 hover:text-sky-400"
+              title="Edit strategy name">
+              <Pencil className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
         <Badge variant="outline" className={`border-slate-700 text-[11px] ${meta.color}`}>{meta.label}</Badge>
         <span className="text-[11px] text-slate-500">v{s.version}</span>
         {s.paperStatus !== 'ARCHIVED' && <>

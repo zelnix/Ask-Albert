@@ -15759,6 +15759,25 @@ def albert_backtest(payload: dict = Body(...), user: dict = Depends(get_current_
         return {'status': 'error', 'reason': 'Walk-forward backtest execution failed.'}
 
 
+@app.post('/api/v1/albert/studio/strategies/{sid}/rename')
+def studio_rename(sid: str, payload: dict = Body(...), user: dict = Depends(get_current_user)):
+    """Rename a strategy. Accepts { name: string }."""
+    pid = owner_pid(user)
+    new_name = (payload.get('name') or '').strip()
+    if not new_name:
+        raise HTTPException(status_code=422, detail='Name cannot be empty.')
+    if len(new_name) > 120:
+        raise HTTPException(status_code=422, detail='Name too long (max 120 characters).')
+    doc = _studio_get(sid, pid)
+    if not doc:
+        raise HTTPException(status_code=404, detail='No such strategy.')
+    strategy_contracts_col.update_one(
+        {'_id': doc['_id']},
+        {'$set': {'name': new_name, 'updatedAt': datetime.datetime.utcnow().isoformat()}})
+    fresh = _studio_get(sid, pid)
+    return {'status': 'ready', **_studio_public(fresh)}
+
+
 @app.post('/api/v1/albert/studio/strategies/{sid}/{cmd}')
 def studio_lifecycle(sid: str, cmd: str, payload: dict = Body(default={}), user: dict = Depends(get_current_user)):
     """Lifecycle transitions — only archive is supported. Assign/unassign/activate
@@ -15794,8 +15813,6 @@ def studio_lifecycle(sid: str, cmd: str, payload: dict = Body(default={}), user:
     fresh = _studio_get(sid, pid)
     result = {'status': 'ready', 'command': cmd, **_studio_public(fresh)}
     return _studio_idem(pid, f'{cmd}:{sid}:{idem}', result)
-
-
 
 
 @app.post('/api/v1/chat')
