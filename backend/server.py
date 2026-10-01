@@ -9551,6 +9551,32 @@ def _studio_record_assessment(acct, strat, decisions, marks, observations):
                   'state': 'WAIT' if any(x['state'] == 'WAIT' for x in checks) else 'READY',
                   'conditions': checks, 'context': _studio_assessment_context(strat, observations),
                   'strategyVersion': strat['version'], 'contractHash': strat['contractHash']}
+
+    # ── Condition flip detection: WAIT → READY alerts ──
+    try:
+        prev = (acct.get('strategyAssessment') or {}).get('conditions') or []
+        prev_states = {c['symbol']: c['state'] for c in prev if 'symbol' in c}
+        for cond in checks:
+            sym = cond['symbol']
+            if cond['state'] == 'READY' and prev_states.get(sym) == 'WAIT':
+                _autopilot_notify(
+                    acct['ownerId'], acct['paperAccountId'],
+                    f'{sym} entry condition is now READY',
+                    f'{sym} in strategy "{strat.get("name", "Unnamed")}" has flipped from WAIT to READY. '
+                    f'All entry rules are now passing — review and act before conditions change.',
+                    severity='success')
+        # Also notify if overall assessment flips from WAIT to READY
+        prev_overall = (acct.get('strategyAssessment') or {}).get('state')
+        if assessment['state'] == 'READY' and prev_overall == 'WAIT':
+            _autopilot_notify(
+                acct['ownerId'], acct['paperAccountId'],
+                f'All conditions READY — {strat.get("name", "Strategy")}',
+                f'Every asset in "{strat.get("name", "Unnamed")}" now meets its entry conditions. '
+                f'The strategy is ready to execute.',
+                severity='success')
+    except Exception:
+        traceback.print_exc()
+
     paper_accounts_col.update_one({'paperAccountId': acct['paperAccountId'], 'ownerId': acct['ownerId'],
                                    'strategyVersion': strat['version'], 'runtimeState': 'RUNNING'},
                                   {'$set': {'strategyAssessment': assessment}})

@@ -33,10 +33,14 @@ const ScenarioChart = ({ data, showEMA, showRSI }) => {
   // Include S/R zone boundaries
   support_zones.slice(0, 2).forEach(z => { prices.push(z.low); prices.push(z.high); });
   resistance_zones.slice(0, 2).forEach(z => { prices.push(z.low); prices.push(z.high); });
-  // Include frozen paths
+  // Include frozen paths and trigger/invalidation levels
   if (frozen_paths) {
-    frozen_paths.bull_path.forEach(p => prices.push(p.price));
-    frozen_paths.bear_path.forEach(p => prices.push(p.price));
+    (frozen_paths.bull_path || []).forEach(p => prices.push(p.price));
+    (frozen_paths.bear_path || []).forEach(p => prices.push(p.price));
+    if (frozen_paths.bull_trigger) prices.push(frozen_paths.bull_trigger);
+    if (frozen_paths.bear_trigger) prices.push(frozen_paths.bear_trigger);
+    if (frozen_paths.bull_invalidation) prices.push(frozen_paths.bull_invalidation);
+    if (frozen_paths.bear_invalidation) prices.push(frozen_paths.bear_invalidation);
   }
   const minP = Math.min(...prices) * 0.998;
   const maxP = Math.max(...prices) * 1.002;
@@ -55,19 +59,24 @@ const ScenarioChart = ({ data, showEMA, showRSI }) => {
   const yR = (v) => priceH + volH + 25 + rsiH - ((v || 50) / 100) * (rsiH - 5);
 
   // Frozen path overlay (map day 0-7 to date indices)
+  // When anchor_date is today or beyond last candle, start from the last candle
   let frozenBullPts = '', frozenBearPts = '';
-  if (frozen_paths && scenario?.anchor_date) {
-    const anchorIdx = candles.findIndex(c => c.date >= scenario.anchor_date);
-    if (anchorIdx >= 0) {
-      frozenBullPts = frozen_paths.bull_path.map((p, di) => {
-        const ci = Math.min(anchorIdx + di, n - 1);
-        return `${di === 0 ? 'M' : 'L'}${xI(ci)},${yP(p.price)}`;
-      }).join(' ');
-      frozenBearPts = frozen_paths.bear_path.map((p, di) => {
-        const ci = Math.min(anchorIdx + di, n - 1);
-        return `${di === 0 ? 'M' : 'L'}${xI(ci)},${yP(p.price)}`;
-      }).join(' ');
-    }
+  if (frozen_paths && (scenario?.anchor_date || scenario?.created_at)) {
+    const anchorDate = scenario.anchor_date || (scenario.created_at || '').slice(0, 10);
+    let anchorIdx = candles.findIndex(c => c.date >= anchorDate);
+    if (anchorIdx < 0) anchorIdx = n - 1; // anchor is today/future — start from last candle
+
+    // Extend x-range to accommodate projected path beyond existing candles
+    const projDays = frozen_paths.bull_path?.length || 8;
+    const totalPts = anchorIdx + projDays;
+    const xProj = (i) => padL + (i / (Math.max(totalPts - 1, n - 1))) * chartW;
+
+    frozenBullPts = (frozen_paths.bull_path || []).map((p, di) => {
+      return `${di === 0 ? 'M' : 'L'}${xProj(anchorIdx + di)},${yP(p.price)}`;
+    }).join(' ');
+    frozenBearPts = (frozen_paths.bear_path || []).map((p, di) => {
+      return `${di === 0 ? 'M' : 'L'}${xProj(anchorIdx + di)},${yP(p.price)}`;
+    }).join(' ');
   }
 
   // EMA paths
@@ -168,9 +177,10 @@ const ScenarioChart = ({ data, showEMA, showRSI }) => {
       </text>
 
       {/* Scenario publication marker */}
-      {scenario?.anchor_date && (() => {
-        const idx = candles.findIndex(c => c.date >= scenario.anchor_date);
-        if (idx < 0) return null;
+      {(scenario?.anchor_date || scenario?.created_at) && (() => {
+        const anchorDate = scenario.anchor_date || (scenario.created_at || '').slice(0, 10);
+        let idx = candles.findIndex(c => c.date >= anchorDate);
+        if (idx < 0) idx = n - 1;
         return <g>
           <line x1={xI(idx)} y1={padT} x2={xI(idx)} y2={padT + priceH} stroke="#fbbf24" strokeWidth="1" strokeDasharray="3 3" opacity="0.6" />
           <text x={xI(idx)} y={padT + 8} textAnchor="middle" fill="#fbbf24" fontSize="7" fontWeight="bold">PUB</text>
