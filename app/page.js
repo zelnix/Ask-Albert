@@ -15,7 +15,7 @@ import {
   Sparkles, Info, Lock, Compass, CandlestickChart, Layers, Landmark, Globe, Newspaper,
   Brain, Send, ShieldAlert, Scale, CalendarClock, ClipboardList, ShieldCheck, Wallet, Briefcase,
   Volume2, VolumeX, Maximize2, Minimize2, SlidersHorizontal, Magnet, Plus, Clock,
-  ChevronDown, Coins, Fish, Zap, Loader2, LogOut, MessageSquarePlus, Copy, Search, Eye, EyeOff, Settings2,
+  ChevronDown, Coins, Fish, Zap, Loader2, LogOut, MessageSquarePlus, Copy, Search, Eye, EyeOff, Settings2, BarChart2,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -3271,6 +3271,105 @@ let __alertsCache = null;
 let __notifCache = null;
 
 
+
+// ---- Mandate form (editable trading rules inside the avatar menu) ----
+function MandateForm({ mandate, saving, onSave, saved }) {
+  const [form, setForm] = useState({ ...mandate });
+  const upd = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  useEffect(() => { setForm({ ...mandate }); }, [mandate]);
+
+  const RISK_OPTIONS = ['conservative', 'moderate', 'aggressive'];
+  const HORIZON_OPTIONS = ['short-term', 'swing', 'medium-term', 'long-term'];
+
+  const handleCoins = (k, val) => upd(k, val.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean));
+  const submit = () => onSave(form);
+
+  return (
+    <div className="space-y-3 text-sm">
+      {/* Goal */}
+      <label className="block">
+        <span className="mb-1 block text-[11px] font-medium text-slate-400">Goal</span>
+        <input value={form.goal || ''} onChange={(e) => upd('goal', e.target.value)} placeholder="e.g. Grow portfolio 20% in 6 months"
+          className="w-full rounded-md border border-slate-700 bg-slate-950/60 px-2.5 py-1.5 text-xs text-slate-100 focus:border-sky-500/50 focus:outline-none" />
+      </label>
+
+      {/* Risk tolerance + Time horizon row */}
+      <div className="grid grid-cols-2 gap-2">
+        <label className="block">
+          <span className="mb-1 block text-[11px] font-medium text-slate-400">Risk tolerance</span>
+          <select value={form.risk_tolerance || ''} onChange={(e) => upd('risk_tolerance', e.target.value)}
+            className="w-full rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1.5 text-xs text-slate-100 focus:border-sky-500/50 focus:outline-none">
+            <option value="">Select…</option>
+            {RISK_OPTIONS.map((o) => <option key={o} value={o}>{o.charAt(0).toUpperCase() + o.slice(1)}</option>)}
+          </select>
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[11px] font-medium text-slate-400">Time horizon</span>
+          <select value={form.time_horizon || ''} onChange={(e) => upd('time_horizon', e.target.value)}
+            className="w-full rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1.5 text-xs text-slate-100 focus:border-sky-500/50 focus:outline-none">
+            <option value="">Select…</option>
+            {HORIZON_OPTIONS.map((o) => <option key={o} value={o}>{o.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}</option>)}
+          </select>
+        </label>
+      </div>
+
+      {/* Max drawdown + Reserve row */}
+      <div className="grid grid-cols-2 gap-2">
+        <label className="block">
+          <span className="mb-1 block text-[11px] font-medium text-slate-400">Max drawdown %</span>
+          <input type="number" min={1} max={90} step={1} value={form.max_drawdown_pct ?? ''} onChange={(e) => upd('max_drawdown_pct', e.target.value ? Number(e.target.value) : null)}
+            placeholder="e.g. 15" className="w-full rounded-md border border-slate-700 bg-slate-950/60 px-2.5 py-1.5 text-xs text-slate-100 focus:border-sky-500/50 focus:outline-none" />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[11px] font-medium text-slate-400">Reserve % (cash)</span>
+          <input type="number" min={0} max={100} step={1} value={form.reserve_pct ?? 25} onChange={(e) => upd('reserve_pct', e.target.value ? Number(e.target.value) : 25)}
+            placeholder="25" className="w-full rounded-md border border-slate-700 bg-slate-950/60 px-2.5 py-1.5 text-xs text-slate-100 focus:border-sky-500/50 focus:outline-none" />
+        </label>
+      </div>
+
+      {/* Max trade risk + Leverage row */}
+      <div className="grid grid-cols-2 gap-2">
+        <label className="block">
+          <span className="mb-1 block text-[11px] font-medium text-slate-400">Max trade risk %</span>
+          <input type="number" min={0.1} max={100} step={0.1} value={form.max_trade_risk_pct ?? 2} onChange={(e) => upd('max_trade_risk_pct', e.target.value ? Number(e.target.value) : 2)}
+            placeholder="2.0" className="w-full rounded-md border border-slate-700 bg-slate-950/60 px-2.5 py-1.5 text-xs text-slate-100 focus:border-sky-500/50 focus:outline-none" />
+        </label>
+        <label className="flex items-end gap-2 pb-0.5">
+          <span className="text-[11px] font-medium text-slate-400">Leverage</span>
+          <button type="button" onClick={() => upd('leverage_enabled', !form.leverage_enabled)}
+            className={`relative h-5 w-9 rounded-full transition-colors ${form.leverage_enabled ? 'bg-sky-500' : 'bg-slate-700'}`}>
+            <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${form.leverage_enabled ? 'left-[18px]' : 'left-0.5'}`} />
+          </button>
+          <span className="text-[10px] text-slate-500">{form.leverage_enabled ? 'On' : 'Off'}</span>
+        </label>
+      </div>
+
+      {/* Approved coins */}
+      <label className="block">
+        <span className="mb-1 block text-[11px] font-medium text-slate-400">Approved coins <span className="text-slate-600">(comma-separated)</span></span>
+        <input value={(form.approved_coins || []).join(', ')} onChange={(e) => handleCoins('approved_coins', e.target.value)}
+          placeholder="BTC, ETH, SOL" className="w-full rounded-md border border-slate-700 bg-slate-950/60 px-2.5 py-1.5 text-xs text-slate-100 focus:border-sky-500/50 focus:outline-none" />
+      </label>
+
+      {/* Excluded coins */}
+      <label className="block">
+        <span className="mb-1 block text-[11px] font-medium text-slate-400">Excluded coins <span className="text-slate-600">(comma-separated)</span></span>
+        <input value={(form.excluded_coins || []).join(', ')} onChange={(e) => handleCoins('excluded_coins', e.target.value)}
+          placeholder="DOGE, SHIB" className="w-full rounded-md border border-slate-700 bg-slate-950/60 px-2.5 py-1.5 text-xs text-slate-100 focus:border-sky-500/50 focus:outline-none" />
+      </label>
+
+      {/* Save */}
+      <div className="flex items-center gap-2 pt-1">
+        <Button onClick={submit} size="sm" disabled={saving} className="bg-sky-500 hover:bg-sky-400 disabled:opacity-50">
+          {saving ? 'Saving…' : 'Save mandate'}
+        </Button>
+        {saved && <span className="text-xs font-semibold text-emerald-400">Saved ✓</span>}
+      </div>
+    </div>
+  );
+}
+
+
 // ---- Account menu (avatar + user settings panel) shown in the top header ----
 function AccountMenu({ user, onSignOut, onNav }) {
   const [open, setOpen] = useState(false);
@@ -3418,6 +3517,23 @@ function AccountMenu({ user, onSignOut, onNav }) {
                   <Button onClick={savePass} size="sm" className="bg-sky-500 hover:bg-sky-400">Save</Button>
                 </div>
                 {saved && <span className="mt-1 text-xs font-semibold text-emerald-400">Saved ✓</span>}
+              </div>
+            )}
+
+            {tab === 'mandate' && (
+              <div className="max-h-[420px] overflow-y-auto p-4 [scrollbar-width:thin]">
+                <button onClick={() => setTab('main')} className="mb-3 flex items-center gap-1 text-xs text-sky-400 hover:text-sky-300">
+                  <ChevronDown className="h-3 w-3 rotate-90" /> Back
+                </button>
+                <h4 className="mb-1 text-sm font-semibold text-white">Trading Mandate</h4>
+                <p className="mb-3 text-[11px] text-slate-500">Define your trading rules. Albert uses these to filter strategies and size positions.</p>
+                {mandateLoading ? (
+                  <div className="flex items-center justify-center py-8 text-xs text-slate-500">Loading mandate…</div>
+                ) : mandate ? (
+                  <MandateForm mandate={mandate} saving={mandateSaving} onSave={saveMandate} saved={saved} />
+                ) : (
+                  <div className="py-6 text-center text-xs text-slate-500">Could not load mandate.</div>
+                )}
               </div>
             )}
           </div>
