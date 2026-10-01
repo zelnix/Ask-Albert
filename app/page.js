@@ -3393,23 +3393,38 @@ function MandateForm({ mandate, saving, onSave, saved }) {
 
 // ---- Price Alerts panel (inside avatar menu) ----
 function AlertsPanel() {
+  const [tab, setTab] = useState('price'); // 'price' | 'metric'
   const [alerts, setAlerts] = useState({ watches: [], triggered: [] });
+  const [metricAlerts, setMetricAlerts] = useState({ watches: [], triggered: [], metrics: {} });
   const [loading, setLoading] = useState(true);
+  // Price alert form
   const [asset, setAsset] = useState('BTC');
   const [level, setLevel] = useState('');
   const [direction, setDirection] = useState('above');
   const [adding, setAdding] = useState(false);
+  // Metric alert form
+  const [metric, setMetric] = useState('btc_dominance');
+  const [threshold, setThreshold] = useState('');
+  const [mDir, setMDir] = useState('above');
+  const [mAdding, setMAdding] = useState(false);
 
-  const load = async () => {
+  const loadPrice = async () => {
     try {
       const r = await fetch(`${API_BASE}/v1/price-alerts`);
       const j = await r.json();
       setAlerts({ watches: j.watches || [], triggered: j.triggered || [] });
     } catch {} finally { setLoading(false); }
   };
-  useEffect(() => { load(); }, []);
+  const loadMetric = async () => {
+    try {
+      const r = await fetch(`${API_BASE}/v1/metric-alerts`);
+      const j = await r.json();
+      setMetricAlerts({ watches: j.watches || [], triggered: j.triggered || [], metrics: j.metrics || {} });
+    } catch {}
+  };
+  useEffect(() => { loadPrice(); loadMetric(); }, []);
 
-  const add = async () => {
+  const addPrice = async () => {
     if (!level || isNaN(Number(level))) return;
     setAdding(true);
     try {
@@ -3418,79 +3433,189 @@ function AlertsPanel() {
         body: JSON.stringify({ asset, level: Number(level), direction }),
       });
       setLevel('');
-      await load();
+      await loadPrice();
     } catch {} finally { setAdding(false); }
   };
 
-  const remove = async (wid) => {
-    try { await fetch(`${API_BASE}/v1/price-alert/${wid}`, { method: 'DELETE' }); await load(); } catch {}
+  const addMetric = async () => {
+    if (!threshold || isNaN(Number(threshold))) return;
+    setMAdding(true);
+    try {
+      await fetch(`${API_BASE}/v1/metric-alert`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ metric, threshold: Number(threshold), direction: mDir }),
+      });
+      setThreshold('');
+      await loadMetric();
+    } catch {} finally { setMAdding(false); }
+  };
+
+  const removePrice = async (wid) => {
+    try { await fetch(`${API_BASE}/v1/price-alert/${wid}`, { method: 'DELETE' }); await loadPrice(); } catch {}
+  };
+  const removeMetric = async (wid) => {
+    try { await fetch(`${API_BASE}/v1/metric-alert/${wid}`, { method: 'DELETE' }); await loadMetric(); } catch {}
   };
 
   const fmt = (v) => v >= 1000 ? `$${(v / 1000).toFixed(v >= 10000 ? 1 : 2)}k` : `$${v}`;
+  const mLabel = (m) => (metricAlerts.metrics[m] || {}).label || m;
+  const mUnit = (m) => (metricAlerts.metrics[m] || {}).unit || '';
 
   if (loading) return <div className="flex items-center justify-center py-8 text-xs text-slate-500">Loading alerts…</div>;
 
   return (
     <div className="space-y-3 text-sm">
-      {/* Add new alert */}
-      <div className="rounded-lg border border-slate-700/60 bg-slate-800/30 p-2.5">
-        <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">New price alert</div>
-        <div className="grid grid-cols-[60px_1fr_80px] gap-1.5">
-          <select value={asset} onChange={(e) => setAsset(e.target.value)}
-            className="rounded-md border border-slate-700 bg-slate-950/60 px-1.5 py-1.5 text-xs text-slate-100 focus:border-sky-500/50 focus:outline-none">
-            {['BTC', 'ETH', 'SOL', 'XRP', 'ADA', 'AVAX', 'DOGE', 'DOT', 'LINK', 'MATIC'].map((c) => <option key={c} value={c}>{c}</option>)}
-          </select>
-          <input type="number" value={level} onChange={(e) => setLevel(e.target.value)} placeholder="Price level"
-            className="rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1.5 text-xs text-slate-100 focus:border-sky-500/50 focus:outline-none" />
-          <select value={direction} onChange={(e) => setDirection(e.target.value)}
-            className="rounded-md border border-slate-700 bg-slate-950/60 px-1.5 py-1.5 text-xs text-slate-100 focus:border-sky-500/50 focus:outline-none">
-            <option value="above">Above</option>
-            <option value="below">Below</option>
-          </select>
-        </div>
-        <Button onClick={add} size="sm" disabled={adding || !level} className="mt-2 w-full bg-sky-500 hover:bg-sky-400 disabled:opacity-50 text-xs">
-          {adding ? 'Adding…' : 'Add alert'}
-        </Button>
+      {/* Tab toggle */}
+      <div className="flex rounded-lg border border-slate-700/60 bg-slate-800/30 p-0.5">
+        {[['price', 'Price'], ['metric', 'Metrics']].map(([k, l]) => (
+          <button key={k} onClick={() => setTab(k)}
+            className={`flex-1 rounded-md px-2 py-1.5 text-xs font-medium transition-colors ${tab === k ? 'bg-sky-500/20 text-sky-300' : 'text-slate-400 hover:text-slate-200'}`}>
+            {l}
+          </button>
+        ))}
       </div>
 
-      {/* Active alerts */}
-      <div>
-        <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Active ({alerts.watches.length})</div>
-        {alerts.watches.length === 0 ? (
-          <p className="py-2 text-center text-[11px] text-slate-600">No active alerts</p>
-        ) : (
-          <div className="space-y-1">
-            {alerts.watches.map((w) => (
-              <div key={w.id} className="flex items-center justify-between rounded-md border border-slate-700/40 bg-slate-800/40 px-2.5 py-1.5">
-                <div>
-                  <span className="text-xs font-semibold text-white">{w.asset}</span>
-                  <span className={`ml-1.5 text-[11px] ${w.direction === 'above' ? 'text-emerald-400' : 'text-red-400'}`}>
-                    {w.direction === 'above' ? '↑' : '↓'} {fmt(w.level)}
-                  </span>
-                </div>
-                <button onClick={() => remove(w.id)} className="rounded p-0.5 text-slate-500 hover:bg-red-500/20 hover:text-red-400">
-                  <X className="h-3 w-3" />
-                </button>
-              </div>
-            ))}
+      {tab === 'price' && (
+        <>
+          {/* Add new price alert */}
+          <div className="rounded-lg border border-slate-700/60 bg-slate-800/30 p-2.5">
+            <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">New price alert</div>
+            <div className="grid grid-cols-[60px_1fr_80px] gap-1.5">
+              <select value={asset} onChange={(e) => setAsset(e.target.value)}
+                className="rounded-md border border-slate-700 bg-slate-950/60 px-1.5 py-1.5 text-xs text-slate-100 focus:border-sky-500/50 focus:outline-none">
+                {['BTC', 'ETH', 'SOL', 'XRP', 'ADA', 'AVAX', 'DOGE', 'DOT', 'LINK', 'MATIC'].map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+              <input type="number" value={level} onChange={(e) => setLevel(e.target.value)} placeholder="Price level"
+                className="rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1.5 text-xs text-slate-100 focus:border-sky-500/50 focus:outline-none" />
+              <select value={direction} onChange={(e) => setDirection(e.target.value)}
+                className="rounded-md border border-slate-700 bg-slate-950/60 px-1.5 py-1.5 text-xs text-slate-100 focus:border-sky-500/50 focus:outline-none">
+                <option value="above">Above</option>
+                <option value="below">Below</option>
+              </select>
+            </div>
+            <Button onClick={addPrice} size="sm" disabled={adding || !level} className="mt-2 w-full bg-sky-500 hover:bg-sky-400 disabled:opacity-50 text-xs">
+              {adding ? 'Adding…' : 'Add alert'}
+            </Button>
           </div>
-        )}
-      </div>
 
-      {/* Triggered */}
-      {alerts.triggered.length > 0 && (
-        <div>
-          <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Triggered</div>
-          <div className="space-y-1">
-            {alerts.triggered.slice(0, 5).map((w) => (
-              <div key={w.id} className="flex items-center gap-2 rounded-md border border-slate-700/30 bg-slate-900/40 px-2.5 py-1.5 opacity-60">
-                <Check className="h-3 w-3 text-emerald-400 shrink-0" />
-                <span className="text-[11px] text-slate-400">{w.asset} {w.direction === 'above' ? '↑' : '↓'} {fmt(w.level)}</span>
-                <span className="ml-auto text-[10px] text-slate-600">{w.triggered_at ? new Date(w.triggered_at).toLocaleDateString() : ''}</span>
+          {/* Active price alerts */}
+          <div>
+            <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Active ({alerts.watches.length})</div>
+            {alerts.watches.length === 0 ? (
+              <p className="py-2 text-center text-[11px] text-slate-600">No active price alerts</p>
+            ) : (
+              <div className="space-y-1">
+                {alerts.watches.map((w) => (
+                  <div key={w.id} className="flex items-center justify-between rounded-md border border-slate-700/40 bg-slate-800/40 px-2.5 py-1.5">
+                    <div>
+                      <span className="text-xs font-semibold text-white">{w.asset}</span>
+                      <span className={`ml-1.5 text-[11px] ${w.direction === 'above' ? 'text-emerald-400' : 'text-red-400'}`}>
+                        {w.direction === 'above' ? '↑' : '↓'} {fmt(w.level)}
+                      </span>
+                    </div>
+                    <button onClick={() => removePrice(w.id)} className="rounded p-0.5 text-slate-500 hover:bg-red-500/20 hover:text-red-400">
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
           </div>
-        </div>
+
+          {/* Triggered price */}
+          {alerts.triggered.length > 0 && (
+            <div>
+              <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Triggered</div>
+              <div className="space-y-1">
+                {alerts.triggered.slice(0, 5).map((w) => (
+                  <div key={w.id} className="flex items-center gap-2 rounded-md border border-slate-700/30 bg-slate-900/40 px-2.5 py-1.5 opacity-60">
+                    <Check className="h-3 w-3 text-emerald-400 shrink-0" />
+                    <span className="text-[11px] text-slate-400">{w.asset} {w.direction === 'above' ? '↑' : '↓'} {fmt(w.level)}</span>
+                    <span className="ml-auto text-[10px] text-slate-600">{w.triggered_at ? new Date(w.triggered_at).toLocaleDateString() : ''}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {tab === 'metric' && (
+        <>
+          {/* Add new metric alert */}
+          <div className="rounded-lg border border-slate-700/60 bg-slate-800/30 p-2.5">
+            <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">New metric alert</div>
+            <div className="grid grid-cols-[1fr_80px_80px] gap-1.5">
+              <select value={metric} onChange={(e) => setMetric(e.target.value)}
+                className="rounded-md border border-slate-700 bg-slate-950/60 px-1.5 py-1.5 text-xs text-slate-100 focus:border-sky-500/50 focus:outline-none">
+                {Object.entries(metricAlerts.metrics).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                {Object.keys(metricAlerts.metrics).length === 0 && (
+                  <>
+                    <option value="btc_dominance">BTC Dominance</option>
+                    <option value="fear_greed">Fear & Greed</option>
+                    <option value="funding_rate">Funding Rate</option>
+                    <option value="taker_ratio">Taker Buy/Sell</option>
+                    <option value="alt_breadth">Alt Breadth</option>
+                    <option value="etf_net_flow">ETF Net Flow (M)</option>
+                  </>
+                )}
+              </select>
+              <input type="number" value={threshold} onChange={(e) => setThreshold(e.target.value)} placeholder="Value"
+                className="rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1.5 text-xs text-slate-100 focus:border-sky-500/50 focus:outline-none" />
+              <select value={mDir} onChange={(e) => setMDir(e.target.value)}
+                className="rounded-md border border-slate-700 bg-slate-950/60 px-1.5 py-1.5 text-xs text-slate-100 focus:border-sky-500/50 focus:outline-none">
+                <option value="above">Above</option>
+                <option value="below">Below</option>
+              </select>
+            </div>
+            <Button onClick={addMetric} size="sm" disabled={mAdding || !threshold} className="mt-2 w-full bg-sky-500 hover:bg-sky-400 disabled:opacity-50 text-xs">
+              {mAdding ? 'Adding…' : 'Add metric alert'}
+            </Button>
+          </div>
+
+          {/* Active metric alerts */}
+          <div>
+            <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Active ({metricAlerts.watches.length})</div>
+            {metricAlerts.watches.length === 0 ? (
+              <p className="py-2 text-center text-[11px] text-slate-600">No active metric alerts</p>
+            ) : (
+              <div className="space-y-1">
+                {metricAlerts.watches.map((w) => (
+                  <div key={w.id} className="flex items-center justify-between rounded-md border border-slate-700/40 bg-slate-800/40 px-2.5 py-1.5">
+                    <div className="min-w-0">
+                      <span className="text-xs font-semibold text-white">{mLabel(w.metric)}</span>
+                      <span className={`ml-1.5 text-[11px] ${w.direction === 'above' ? 'text-emerald-400' : 'text-red-400'}`}>
+                        {w.direction === 'above' ? '↑' : '↓'} {w.threshold}{mUnit(w.metric)}
+                      </span>
+                      {w.current != null && (
+                        <span className="ml-1.5 text-[10px] text-slate-500">now: {typeof w.current === 'number' ? w.current.toFixed(1) : w.current}{mUnit(w.metric)}</span>
+                      )}
+                    </div>
+                    <button onClick={() => removeMetric(w.id)} className="shrink-0 rounded p-0.5 text-slate-500 hover:bg-red-500/20 hover:text-red-400">
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Triggered metric */}
+          {metricAlerts.triggered.length > 0 && (
+            <div>
+              <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Triggered</div>
+              <div className="space-y-1">
+                {metricAlerts.triggered.slice(0, 5).map((w) => (
+                  <div key={w.id} className="flex items-center gap-2 rounded-md border border-slate-700/30 bg-slate-900/40 px-2.5 py-1.5 opacity-60">
+                    <Check className="h-3 w-3 text-emerald-400 shrink-0" />
+                    <span className="text-[11px] text-slate-400">{mLabel(w.metric)} {w.direction === 'above' ? '↑' : '↓'} {w.threshold}{mUnit(w.metric)}</span>
+                    <span className="ml-auto text-[10px] text-slate-600">{w.triggered_at ? new Date(w.triggered_at).toLocaleDateString() : ''}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

@@ -68,7 +68,7 @@ from config import (
     RESEND_API_KEY, RESEND_FROM, DIGEST_TZ, DIGEST_HOUR, DIGEST_MINUTE,
     email_recipients_col, email_log_col, email_settings_col,
     PUBLIC_BASE_URL, UNSUB_SECRET, WEEKLY_HOUR, WEEKLY_MINUTE, regime_col,
-    portfolio_col, price_watch_col, albert_calls_col, recap_col, mandate_col,
+    portfolio_col, price_watch_col, metric_watch_col, albert_calls_col, recap_col, mandate_col,
     paper_portfolio_col,
     equity_snapshots_col,
     driver_alert_subs_col, driver_alert_state_col, driver_alerts_col,
@@ -16829,6 +16829,127 @@ def _check_price_watches():
         price_watch_col.update_one({'_id': w['_id']},
                                    {'$set': {'triggered': True, 'triggered_price': spot,
                                              'triggered_at': datetime.datetime.utcnow().isoformat()}})
+
+
+
+# ── Metric threshold alerts (non-price: funding, dominance, fear/greed, etc.) ──
+
+METRIC_DEFS = {
+    'btc_dominance':  {'label': 'BTC Dominance',   'unit': '%',  'decimals': 1},
+    'fear_greed':     {'label': 'Fear & Greed',     'unit': '',   'decimals': 0},
+    'funding_rate':   {'label': 'Funding Rate',     'unit': '%',  'decimals': 4},
+    'taker_ratio':    {'label': 'Taker Buy/Sell',   'unit': '',   'decimals': 2},
+    'alt_breadth':    {'label': 'Alt Breadth',      'unit': '',   'decimals': 0},
+    'etf_net_flow':   {'label': 'ETF Net Flow (M)', 'unit': 'M',  'decimals': 1},
+}
+
+
+def _current_metric_value(metric_name):
+    """Read the latest value for a supported metric from cached/DB sources."""
+    try:
+        if metric_name == 'btc_dominance':
+            doc = dominance_col.find_one({}, {'_id': 0}, sort=[('date', -1)])
+            return float(doc['dominance']) if doc and doc.get('dominance') is not None else None
+        elif metric_name == 'fear_greed':
+            fg = _misc_get('fear_greed', 30 * 60, compute_fear_greed)
+            return float(fg['value']) if fg and fg.get('value') is not None else None
+        elif metric_name == 'funding_rate':
+            run = runs_col.find_one({}, {'_id': 0, 'streams': 1}, sort=[('ts', -1)])
+            s = (run or {}).get('streams') or {}
+            fr = s.get('funding_rate') or s.get('fundingRate')
+            return float(fr) if fr is not None else None
+        elif metric_name == 'taker_ratio':
+            run = runs_col.find_one({}, {'_id': 0, 'streams': 1}, sort=[('ts', -1)])
+            s = (run or {}).get('streams') or {}
+            tr = s.get('takerBuySellRatio')
+            return float(tr) if tr is not None else None
+        elif metric_name == 'alt_breadth':
+            run = runs_col.find_one({}, {'_id': 0, 'phase_assessment': 1}, sort=[('ts', -1)])
+            pa = (run or {}).get('phase_assessment') or {}
+            beat = pa.get('altsWithReturns')
+            return float(beat) if beat is not None else None
+        elif metric_name == 'etf_net_flow':
+            doc = etf_col.find_one({}, {'_id': 0, 'net_1d': 1}, sort=[('date', -1)])
+            return float(doc['net_1d']) if doc and doc.get('net_1d') is not None else None
+    except Exception:
+        pass
+    return None
+
+
+@app.post('/api/v1/metric-alert')
+def create_metric_alert(payload: dict = Body(...), user: dict = Depends(get_current_user)):
+    metric = str(payload.get('metric', '')).strip()
+    if metric not in METRIC_DEFS:
+        return JSONResponse(status_code=400, content={'error': f'Unsupported metric. Choose from: {", ".join(METRIC_DEFS)}'})
+    try:
+        threshold = float(payload.get('threshold'))
+    except (TypeError, ValueError):
+        return JSONResponse(status_code=400, content={'error': 'threshold must be a number'})
+    direction = payload.get('direction')
+    if direction not in ('above', 'below'):
+        cur = _current_metric_value(metric)
+        direction = 'above' if (cur is None or threshold >= cur) else 'below'
+    pid = owner_pid(user)
+    wid = str(uuid.uuid4())
+    cur = _current_metric_value(metric)
+    metric_watch_col.insert_one({
+        '_id': wid, 'id': wid, 'pid': pid, 'metric': metric,
+        'threshold': round(threshold, METRIC_DEFS[metric]['decimals']),
+        'direction': direction, 'current_at_creation': cur, 'triggered': False,
+        'created_at': datetime.datetime.utcnow().isoformat(),
+    })
+    return {'ok': True, 'id': wid, 'metric': metric,
+            'threshold': round(threshold, METRIC_DEFS[metric]['decimals']),
+            'direction': direction, 'current': cur}
+
+
+@app.get('/api/v1/metric-alerts')
+def list_metric_alerts(user: dict = Depends(get_current_user)):
+    q = {'pid': owner_pid(user)}
+    active = list(metric_watch_col.find({**q, 'triggered': False}, {'_id': 0}).sort('created_at', -1).limit(50))
+    triggered = list(metric_watch_col.find({**q, 'triggered': True}, {'_id': 0}).sort('triggered_at', -1).limit(20))
+    # Attach current values
+    for w in active:
+        w['current'] = _current_metric_value(w.get('metric'))
+    return {'watches': active, 'triggered': triggered, 'metrics': METRIC_DEFS}
+
+
+@app.delete('/api/v1/metric-alert/{wid}')
+def delete_metric_alert(wid: str, user: dict = Depends(get_current_user)):
+    metric_watch_col.delete_one({'_id': wid, 'pid': owner_pid(user)})
+    return {'ok': True}
+
+
+def _check_metric_watches():
+    """Scheduler job: fire notification when a watched metric crosses its threshold."""
+    try:
+        watches = list(metric_watch_col.find({'triggered': False}).limit(200))
+    except Exception:
+        return
+    cache = {}
+    for w in watches:
+        m = w.get('metric')
+        if m not in cache:
+            cache[m] = _current_metric_value(m)
+        val = cache[m]
+        if val is None:
+            continue
+        threshold = w.get('threshold')
+        direction = w.get('direction')
+        hit = (direction == 'above' and val >= threshold) or (direction == 'below' and val <= threshold)
+        if not hit:
+            continue
+        mdef = METRIC_DEFS.get(m, {})
+        label = mdef.get('label', m)
+        unit = mdef.get('unit', '')
+        push_alert('metric_watch', 'high',
+                   f"{label} crossed {threshold}{unit}",
+                   f"{label} is now {val}{unit}, {direction} the {threshold}{unit} threshold.",
+                   w.get('id'))
+        metric_watch_col.update_one({'_id': w['_id']},
+                                    {'$set': {'triggered': True, 'triggered_value': val,
+                                              'triggered_at': datetime.datetime.utcnow().isoformat()}})
+
 
 
 CALL_EXTRACT_SYSTEM = (

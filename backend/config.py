@@ -93,6 +93,7 @@ regime_col = db['regime_state']  # Dynamic Regime-Switching HMM: persisted model
 portfolio_col = db['user_portfolios']  # server-side per-client portfolio (holdings + avg entry)
 mandate_col = db['user_mandates']  # per-user Trading Mandate (goals, risk limits, USDC reserve, universe)
 price_watch_col = db['price_watches']  # "alert me at $X" watches created from Albert chat
+metric_watch_col = db['metric_watches']  # "alert me when metric crosses threshold"
 albert_calls_col = db['albert_calls']  # Albert's self-logged buy/sell calls + graded outcomes (track record)
 recap_col = db['albert_recap']  # cached weekly recap note
 # Phase D: auditable decision-change history (BUY/HOLD/SELL/WAIT transitions per asset, scoped by pid)
