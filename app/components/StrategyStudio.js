@@ -221,6 +221,16 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
   const [review, setReview] = useState(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const [mandate, setMandate] = useState(null);
+
+  // Fetch global mandate once on mount
+  useEffect(() => {
+    let active = true;
+    get('/v1/albert/mandate').then(r => r.json()).then(j => {
+      if (active && j.mandate) setMandate(j.mandate);
+    }).catch(() => {});
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     if (!draft) return undefined;
@@ -470,6 +480,19 @@ function Builder({ onSaved, onCancel, initialGoal = '', initialDraft = null, rev
                 </div>
               )}
               {(review.capabilities || []).length > 0 && <div className="mt-2 flex flex-wrap gap-1.5">{review.capabilities.map((cap) => <CoinCapability key={cap.symbol} item={cap} />)}</div>}
+              {mandate && (
+                <div className="mt-2 rounded-lg border border-slate-700/40 bg-slate-800/30 px-3 py-2">
+                  <p className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500"><ShieldCheck className="h-3 w-3" />Global mandate in effect</p>
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
+                    {mandate.risk_tolerance && <span className="text-slate-400">Risk: <span className="font-medium text-slate-200 capitalize">{mandate.risk_tolerance}</span></span>}
+                    {mandate.time_horizon && <span className="text-slate-400">Horizon: <span className="font-medium text-slate-200">{mandate.time_horizon}</span></span>}
+                    {mandate.max_drawdown_pct != null && <span className="text-slate-400">Max DD: <span className="font-medium text-slate-200">{mandate.max_drawdown_pct}%</span></span>}
+                    {mandate.reserve_pct != null && <span className="text-slate-400">Reserve: <span className="font-medium text-slate-200">{mandate.reserve_pct}%</span></span>}
+                    {mandate.max_trade_risk_pct != null && <span className="text-slate-400">Trade risk: <span className="font-medium text-slate-200">{mandate.max_trade_risk_pct}%</span></span>}
+                    {!mandate.risk_tolerance && mandate.max_drawdown_pct == null && mandate.reserve_pct == null && <span className="text-slate-500 italic">No global limits set — strategy settings apply</span>}
+                  </div>
+                </div>
+              )}
               {(review.saveErrors || []).length > 0 && (
                 <div className="mt-2 rounded-lg border border-red-500/30 bg-red-500/10 p-2">
                   <p className="mb-1 text-[11px] font-bold text-red-300">Cannot save — fix these first:</p>
@@ -856,6 +879,16 @@ function Detail({ sid, onChange, onRevise }) {
   const [reviseInput, setReviseInput] = useState('');
   const [revising, setRevising] = useState(false);
   const [reviseOpen, setReviseOpen] = useState(false);
+  const [mandate, setMandate] = useState(null);
+
+  // Fetch global mandate once on mount
+  useEffect(() => {
+    let active = true;
+    get('/v1/albert/mandate').then(r => r.json()).then(j => {
+      if (active && j.mandate) setMandate(j.mandate);
+    }).catch(() => {});
+    return () => { active = false; };
+  }, []);
 
   const load = useCallback(async () => {
     setLoadError('');
@@ -953,6 +986,19 @@ function Detail({ sid, onChange, onRevise }) {
         {(s.assetCapabilities || []).map((cap) => <CoinCapability key={cap.symbol} item={cap} />)}
       </div>
       <p className="mt-2 text-[12px] text-slate-400">Wallet: <span className="font-semibold text-slate-200">{s.walletName || 'Not started'}</span> · Starting virtual balance: {usd(s.startingCash || s.contract?.startingCash)}. Revisions keep the same wallet, holdings and history.</p>
+      {mandate && (
+        <div className="mt-2 rounded-lg border border-slate-700/40 bg-slate-800/30 px-3 py-2">
+          <p className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500"><ShieldCheck className="h-3 w-3" />Global mandate in effect</p>
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
+            {mandate.risk_tolerance && <span className="text-slate-400">Risk: <span className="font-medium text-slate-200 capitalize">{mandate.risk_tolerance}</span></span>}
+            {mandate.time_horizon && <span className="text-slate-400">Horizon: <span className="font-medium text-slate-200">{mandate.time_horizon}</span></span>}
+            {mandate.max_drawdown_pct != null && <span className="text-slate-400">Max DD: <span className="font-medium text-slate-200">{mandate.max_drawdown_pct}%</span></span>}
+            {mandate.reserve_pct != null && <span className="text-slate-400">Reserve: <span className="font-medium text-slate-200">{mandate.reserve_pct}%</span></span>}
+            {mandate.max_trade_risk_pct != null && <span className="text-slate-400">Trade risk: <span className="font-medium text-slate-200">{mandate.max_trade_risk_pct}%</span></span>}
+            {!mandate.risk_tolerance && mandate.max_drawdown_pct == null && mandate.reserve_pct == null && <span className="text-slate-500 italic">No global limits set — strategy settings apply</span>}
+          </div>
+        </div>
+      )}
       {s.readiness === 'needs_changes' && (s.startErrors || []).length > 0 && (
         <div className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2">
           <p className="mb-1 text-[11px] font-bold text-amber-300">Needs changes — not trading</p>
