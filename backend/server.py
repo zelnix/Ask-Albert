@@ -1976,6 +1976,23 @@ def _build_fresh_scenario(chart, decision, last_close, feats, regime_analysis):
             'forecast_window_completed': False,
             'forecast_window_completed_at': None,
             'price': round(price, 0),
+            # ── Phase 3: Full immutable snapshot of all inputs used to produce scenario ──
+            'forecast_horizon': 'P7D',
+            'forecast_horizon_days': 7,
+            'publication_snapshot': {
+                'btc_price': round(price, 2),
+                'publication_time': now_iso,
+                'atr_pct': round(atr, 6),
+                'regime': regime,
+                'regime_label': regime_label,
+                'breakout_up_pct': round(bo_up, 2),
+                'breakdown_pct': round(bo_dn, 2),
+                'bull_tilt_factor': round(bull_tilt, 4),
+                'support_levels': [{'price': l.get('price'), 'strength': l.get('strength')} for l in sup[:5]],
+                'resistance_levels': [{'price': l.get('price'), 'strength': l.get('strength')} for l in res[:5]],
+                'indicators': indicator_snapshot,
+                'contradiction': contradiction,
+            },
         }
     except Exception:
         traceback.print_exc()
@@ -2072,6 +2089,7 @@ def compute_scenarios(chart, decision, last_close, feats, regime_analysis):
                 'following': following,
                 'bull_invalidated': bull_inv,
                 'bear_invalidated': bear_inv,
+                'forecast_window_completed': fw_completed,
             }
 
             # Append tracking (deduplicate by date — only keep latest per day)
@@ -2082,18 +2100,20 @@ def compute_scenarios(chart, decision, last_close, feats, regime_analysis):
                 {'_id': active['_id']},
                 {'$push': {'tracking': tracking_entry}})
 
-            # If both just became invalidated, we'll create a new one on the NEXT run
-            # (requirement: archive before creating replacement)
+            # If both just became invalidated, archive immediately and create new on next run
             if bull_inv and bear_inv:
-                # Both invalidated NOW — archive will happen on next engine run
-                pass
-
-            # Reload and return the active scenario
-            active = btc_scenarios_col.find_one({'_id': active['_id']})
-            return _scenario_to_block(active)
+                btc_scenarios_col.update_one(
+                    {'_id': active['_id']},
+                    {'$set': {'status': 'archived', 'archived_at': now_iso,
+                              'archive_reason': 'both_invalidated'}})
+                # Fall through to create a fresh scenario below
+            else:
+                # Reload and return the active scenario
+                active = btc_scenarios_col.find_one({'_id': active['_id']})
+                return _scenario_to_block(active)
 
         # ── Archive old scenario before creating replacement ──
-        if active:
+        if active and active.get('status') == 'active':
             btc_scenarios_col.update_one(
                 {'_id': active['_id']},
                 {'$set': {'status': 'archived', 'archived_at': now_iso}})
@@ -2138,6 +2158,10 @@ def _scenario_to_block(doc):
         'forecast_window_completed_at': doc.get('forecast_window_completed_at'),
         'tracking': doc.get('tracking', []),
         'indicators_at_creation': doc.get('indicators_at_creation'),
+        # Phase 3: Full snapshot fields
+        'forecast_horizon': doc.get('forecast_horizon', 'P7D'),
+        'forecast_horizon_days': doc.get('forecast_horizon_days', 7),
+        'publication_snapshot': doc.get('publication_snapshot'),
     }
 
 
@@ -7427,7 +7451,22 @@ def news(symbol: str = 'BTC'):
         if _news_state['status'] not in ('running',):
             threading.Thread(target=run_news_bg, daemon=True).start()
         return {'status': 'error' if _news_state['status'] == 'error' else 'computing', 'error': _news_state['error']}
-    return {'status': 'ready', 'news_status': _news_state['status'], **doc}
+    # ── News Refresh Indicator: compute staleness ──
+    stale = False
+    stale_minutes = 0
+    created = doc.get('created_at')
+    if created:
+        try:
+            created_dt = datetime.datetime.fromisoformat(created)
+            age = datetime.datetime.utcnow() - created_dt
+            stale_minutes = int(age.total_seconds() / 60)
+            stale = stale_minutes > 30  # consider stale after 30 minutes
+        except Exception:
+            pass
+    return {'status': 'ready', 'news_status': _news_state['status'],
+            'stale': stale, 'age_minutes': stale_minutes,
+            'cache_source': doc.get('model', 'unknown'),
+            **doc}
 
 
 @app.post('/api/v1/news/refresh')
@@ -12513,6 +12552,514 @@ def btc_scenario_api():
         return {'status': 'error', 'message': 'Failed to load scenario.'}
 
 
+# =====================================================================
+# BTC SCENARIO TRACKER — comprehensive chart endpoint
+# Phases 1-3: Swing S/R zones, volume metrics, technical indicators,
+#              break confirmation, alignment measurement
+# =====================================================================
+
+def _compute_swing_zones(df, order=5):
+    """Phase 1: Identify confirmed swing highs/lows from actual candle history,
+    group nearby swings into zones using 0.5 × ATR(14), and score each zone."""
+    if df is None or len(df) < 60:
+        return [], []
+    d = df.tail(260).reset_index(drop=True)
+    close = d['close']; high = d['high']; low = d['low']; vol = d['volume']
+    n = len(d)
+    price = float(close.iloc[-1])
+    atr_series = _atr(high, low, close, 14)
+    atr_val = float(atr_series.iloc[-1]) if len(atr_series) > 0 else price * 0.02
+    half_atr = atr_val * 0.5
+
+    # Step 1: Identify confirmed swing highs and lows
+    swing_highs, swing_lows = [], []
+    for i in range(order, n - order):
+        window_h = high.iloc[i - order:i + order + 1].values
+        window_l = low.iloc[i - order:i + order + 1].values
+        if float(high.iloc[i]) == float(window_h.max()):
+            rejection = float(high.iloc[i]) - float(close.iloc[i])
+            swing_highs.append({'idx': i, 'price': float(high.iloc[i]),
+                                'rejection': rejection,
+                                'volume': float(vol.iloc[i]) if vol.iloc[i] > 0 else 1.0})
+        if float(low.iloc[i]) == float(window_l.min()):
+            rejection = float(close.iloc[i]) - float(low.iloc[i])
+            swing_lows.append({'idx': i, 'price': float(low.iloc[i]),
+                               'rejection': rejection,
+                               'volume': float(vol.iloc[i]) if vol.iloc[i] > 0 else 1.0})
+
+    # Step 2: Group nearby swing prices into zones (within 0.5 × ATR)
+    def _group_into_zones(swings):
+        zones = []
+        for sw in sorted(swings, key=lambda s: s['price']):
+            placed = False
+            for z in zones:
+                if abs(sw['price'] - z['center']) <= half_atr:
+                    z['touches'].append(sw)
+                    z['center'] = sum(t['price'] for t in z['touches']) / len(z['touches'])
+                    placed = True
+                    break
+            if not placed:
+                zones.append({'center': sw['price'], 'touches': [sw]})
+        return zones
+
+    res_zones = _group_into_zones(swing_highs)
+    sup_zones = _group_into_zones(swing_lows)
+
+    # Step 3: Score each zone
+    vol_avg = float(vol.tail(20).mean()) if float(vol.tail(20).mean()) > 0 else 1.0
+
+    def _score_zone(z, kind):
+        touches = z['touches']
+        touch_count = len(touches)
+        # Recency: weighted by how recent the touches are (0-1)
+        recency_scores = [(t['idx'] / n) for t in touches]
+        recency = max(recency_scores) if recency_scores else 0
+        # Rejection strength: average rejection as % of price
+        avg_rejection = sum(t['rejection'] for t in touches) / len(touches) if touches else 0
+        rejection_pct = avg_rejection / price if price > 0 else 0
+        rejection_score = min(1.0, rejection_pct / 0.03)  # Normalize: 3% rejection = max
+        # Relative volume: average volume at touches vs 20-day avg
+        avg_vol = sum(t['volume'] for t in touches) / len(touches) if touches else 0
+        vol_ratio = avg_vol / vol_avg if vol_avg > 0 else 1.0
+        vol_score = min(1.0, vol_ratio / 2.0)  # Normalize: 2x average = max
+
+        # Weighted score: 40% touch count + 25% recency + 20% rejection + 15% volume
+        touch_score = min(1.0, touch_count / 5.0)
+        total_score = (0.40 * touch_score + 0.25 * recency +
+                       0.20 * rejection_score + 0.15 * vol_score)
+
+        return {
+            'center': round(z['center'], 2),
+            'low': round(z['center'] - half_atr, 2),
+            'high': round(z['center'] + half_atr, 2),
+            'width': round(half_atr * 2, 2),
+            'type': kind,
+            'touch_count': touch_count,
+            'recency': round(recency, 3),
+            'rejection_strength': round(rejection_score, 3),
+            'relative_volume': round(vol_score, 3),
+            'score': round(total_score, 3),
+            'strength_label': ('Strong' if total_score >= 0.6 else 'Moderate'
+                               if total_score >= 0.35 else 'Weak'),
+        }
+
+    resistance_zones = sorted(
+        [_score_zone(z, 'resistance') for z in res_zones if z['center'] > price],
+        key=lambda z: -z['score'])[:5]
+    support_zones = sorted(
+        [_score_zone(z, 'support') for z in sup_zones if z['center'] < price],
+        key=lambda z: -z['score'])[:5]
+
+    return support_zones, resistance_zones
+
+
+def _compute_anchored_vwap(df):
+    """Compute anchored VWAP from the most recent significant swing high and swing low."""
+    if df is None or len(df) < 30:
+        return None, None
+    d = df.tail(120).reset_index(drop=True)
+    close = d['close']; high = d['high']; low = d['low']; vol = d['volume']
+    n = len(d)
+
+    # Find most recent significant swing high and low (order=5)
+    swing_hi_idx, swing_lo_idx = None, None
+    for i in range(n - 6, 4, -1):
+        if swing_hi_idx is None:
+            window = high.iloc[max(0, i - 5):min(n, i + 6)].values
+            if float(high.iloc[i]) == float(window.max()):
+                swing_hi_idx = i
+        if swing_lo_idx is None:
+            window = low.iloc[max(0, i - 5):min(n, i + 6)].values
+            if float(low.iloc[i]) == float(window.min()):
+                swing_lo_idx = i
+        if swing_hi_idx is not None and swing_lo_idx is not None:
+            break
+
+    def _vwap_from(start_idx):
+        if start_idx is None or start_idx >= n - 1:
+            return None
+        segment = d.iloc[start_idx:]
+        tp = (segment['high'] + segment['low'] + segment['close']) / 3
+        cum_tpv = (tp * segment['volume']).cumsum()
+        cum_vol = segment['volume'].cumsum().replace(0, np.nan)
+        vwap_series = cum_tpv / cum_vol
+        return {
+            'anchor_idx': int(start_idx),
+            'anchor_date': str(d['timestamp'].iloc[start_idx].date()) if 'timestamp' in d.columns else None,
+            'current_value': round(float(vwap_series.iloc[-1]), 2) if len(vwap_series) > 0 else None,
+            'series': [round(float(v), 2) for v in vwap_series.values[-60:] if not np.isnan(v)],
+        }
+
+    vwap_from_high = _vwap_from(swing_hi_idx)
+    vwap_from_low = _vwap_from(swing_lo_idx)
+    return vwap_from_high, vwap_from_low
+
+
+def _compute_break_confirmation(price, support_zones, resistance_zones, daily_volume, vol_avg_20d):
+    """Phase 2: Confirm breaks — daily close outside zone AND volume >= 1.2x 20-day avg."""
+    vol_threshold = vol_avg_20d * 1.2 if vol_avg_20d > 0 else 0
+    vol_confirmed = daily_volume >= vol_threshold if vol_threshold > 0 else False
+
+    status = {'support': 'holding', 'resistance': 'holding',
+              'support_detail': None, 'resistance_detail': None}
+
+    # Check if price is below strongest support zone
+    if support_zones:
+        strongest_sup = support_zones[0]
+        if price < strongest_sup['low']:
+            if vol_confirmed:
+                status['support'] = 'confirmed_break'
+                status['support_detail'] = (f"Confirmed break below ${strongest_sup['center']:,.0f} zone — "
+                                            f"close ${price:,.0f} below zone with volume "
+                                            f"{daily_volume / vol_avg_20d:.1f}x average")
+            else:
+                status['support'] = 'testing'
+                status['support_detail'] = (f"Testing support at ${strongest_sup['center']:,.0f} — "
+                                            f"close ${price:,.0f} below zone but volume not confirmed "
+                                            f"({daily_volume / vol_avg_20d:.1f}x vs 1.2x required)")
+        elif price <= strongest_sup['high']:
+            status['support'] = 'at_zone'
+            status['support_detail'] = f"Price within support zone ${strongest_sup['low']:,.0f}–${strongest_sup['high']:,.0f}"
+
+    # Check if price is above strongest resistance zone
+    if resistance_zones:
+        strongest_res = resistance_zones[0]
+        if price > strongest_res['high']:
+            if vol_confirmed:
+                status['resistance'] = 'confirmed_break'
+                status['resistance_detail'] = (f"Confirmed break above ${strongest_res['center']:,.0f} zone — "
+                                               f"close ${price:,.0f} above zone with volume "
+                                               f"{daily_volume / vol_avg_20d:.1f}x average")
+            else:
+                status['resistance'] = 'testing'
+                status['resistance_detail'] = (f"Testing resistance at ${strongest_res['center']:,.0f} — "
+                                               f"close ${price:,.0f} above zone but volume not confirmed "
+                                               f"({daily_volume / vol_avg_20d:.1f}x vs 1.2x required)")
+        elif price >= strongest_res['low']:
+            status['resistance'] = 'at_zone'
+            status['resistance_detail'] = f"Price within resistance zone ${strongest_res['low']:,.0f}–${strongest_res['high']:,.0f}"
+
+    return status
+
+
+def _compute_scenario_alignment(active_scenario, price, atr_val):
+    """Phase 3: Measure alignment by comparing observed price with each saved path,
+    adjusted for current volatility. Not from a single candle."""
+    if not active_scenario:
+        return {'state': 'no_scenario', 'label': 'No Active Scenario', 'detail': ''}
+
+    bull_inv = active_scenario.get('bull_invalidated', False)
+    bear_inv = active_scenario.get('bear_invalidated', False)
+    fw_done = active_scenario.get('forecast_window_completed', False)
+    tracking = active_scenario.get('tracking', [])
+    scenarios = active_scenario.get('scenarios', [])
+    anchor_price = active_scenario.get('anchor_price', price)
+
+    bull = next((s for s in scenarios if s.get('type') == 'bull'), None)
+    bear = next((s for s in scenarios if s.get('type') == 'bear'), None)
+    bull_trig = bull.get('trigger_level') if bull else None
+    bear_trig = bear.get('trigger_level') if bear else None
+
+    # Use last N tracking points for multi-candle alignment (not just current)
+    recent_closes = [t.get('close', 0) for t in tracking[-5:] if t.get('close')]
+    if not recent_closes:
+        recent_closes = [price]
+    avg_recent = sum(recent_closes) / len(recent_closes)
+    vol_band = atr_val * 0.5 if atr_val > 0 else price * 0.01  # half ATR tolerance
+
+    # Days remaining in forecast horizon (7-day window)
+    created_at = active_scenario.get('created_at')
+    days_elapsed = 0
+    days_remaining = 7
+    if created_at:
+        try:
+            created = datetime.datetime.fromisoformat(created_at)
+            days_elapsed = (datetime.datetime.utcnow() - created).days
+            days_remaining = max(0, 7 - days_elapsed)
+        except Exception:
+            pass
+
+    if bull_inv and bear_inv:
+        state = 'both_invalidated'
+        label = 'Both Scenarios Invalidated'
+        detail = 'Both bull and bear paths have been invalidated. A new scenario will be generated.'
+    elif fw_done:
+        # After day 7: determine which path was closer
+        if bull_trig and bear_trig:
+            bull_dist = abs(avg_recent - bull_trig)
+            bear_dist = abs(avg_recent - bear_trig)
+            closer = 'bull' if bull_dist < bear_dist else 'bear'
+        else:
+            closer = 'neutral'
+        state = 'forecast_window_completed'
+        label = f'Forecast Window Completed (Day {days_elapsed})'
+        detail = (f'The 7-day forecast window has ended. Price settled closer to the '
+                  f'{"bull" if closer == "bull" else "bear"} path. Scenario remains active for observation.')
+    elif bull_inv:
+        state = 'following_bear'
+        label = 'Following Bear Scenario'
+        detail = f'Bull path invalidated. Price tracking bearish path toward ${bear.get("target_level", "?"):,.0f}.'
+    elif bear_inv:
+        state = 'following_bull'
+        label = 'Following Bull Scenario'
+        detail = f'Bear path invalidated. Price tracking bullish path toward ${bull.get("target_level", "?"):,.0f}.'
+    elif bull_trig and bear_trig:
+        mid = (bull_trig + bear_trig) / 2
+        if avg_recent > mid + vol_band:
+            state = 'following_bull'
+            label = 'Following Bull Scenario'
+            detail = f'Price ${avg_recent:,.0f} is trending above the midpoint toward bull trigger ${bull_trig:,.0f}.'
+        elif avg_recent < mid - vol_band:
+            state = 'following_bear'
+            label = 'Following Bear Scenario'
+            detail = f'Price ${avg_recent:,.0f} is trending below the midpoint toward bear trigger ${bear_trig:,.0f}.'
+        else:
+            state = 'between_scenarios'
+            label = 'Between Scenarios'
+            detail = f'Price ${avg_recent:,.0f} is within the volatility band between bull and bear triggers.'
+    else:
+        state = 'neutral'
+        label = 'Neutral'
+        detail = 'Insufficient data for alignment measurement.'
+
+    return {
+        'state': state,
+        'label': label,
+        'detail': detail,
+        'days_elapsed': days_elapsed,
+        'days_remaining': days_remaining,
+        'avg_recent_price': round(avg_recent, 2),
+        'volatility_band': round(vol_band, 2),
+    }
+
+
+_scenario_tracker_cache = {'data': None, 'ts': 0}
+_SCENARIO_TRACKER_TTL = 120  # 2 min cache
+
+
+@app.get('/api/v1/btc-scenario-tracker')
+def btc_scenario_tracker_api():
+    """Comprehensive BTC Scenario Tracker endpoint.
+    Returns: candles, volume, EMAs, RSI, ATR, swing S/R zones, VWAP,
+    scenario data, alignment, break confirmation, and frozen paths."""
+    now_ts = time.time()
+    if _scenario_tracker_cache['data'] and (now_ts - _scenario_tracker_cache['ts']) < _SCENARIO_TRACKER_TTL:
+        return _scenario_tracker_cache['data']
+
+    try:
+        # Fetch OHLCV data
+        df = _daily_ohlcv('BTC', limit=260)
+        if df is None or len(df) < 60:
+            return {'status': 'error', 'message': 'Insufficient OHLCV data for BTC.'}
+
+        d = df.tail(120).reset_index(drop=True)
+        close = d['close'].ffill().fillna(0)
+        high = d['high'].ffill().fillna(0)
+        low = d['low'].ffill().fillna(0)
+        vol = d['volume'].fillna(0)
+        price = float(close.iloc[-1])
+
+        # ── Technical indicators ──
+        ema20 = _ema(close, 20)
+        ema50 = _ema(close, 50)
+        rsi14 = _rsi(close, 14)
+        atr14 = _atr(high, low, close, 14)
+        atr_val = float(atr14.iloc[-1]) if len(atr14) > 0 else price * 0.02
+        vol_avg_20 = float(vol.tail(20).mean()) if float(vol.tail(20).mean()) > 0 else 1.0
+        daily_vol = float(vol.iloc[-1])
+        vol_ratio = daily_vol / vol_avg_20 if vol_avg_20 > 0 else 1.0
+
+        # ── Build candle series for chart (last 90 days) ──
+        chart_d = d.tail(90).reset_index(drop=True)
+        candles = []
+        for i in range(len(chart_d)):
+            row = chart_d.iloc[i]
+            ts = str(row['timestamp'].date()) if 'timestamp' in chart_d.columns and hasattr(row['timestamp'], 'date') else str(i)
+            try:
+                o = float(row['open']) if row['open'] is not None else 0
+                h = float(row['high']) if row['high'] is not None else 0
+                l = float(row['low']) if row['low'] is not None else 0
+                c = float(row['close']) if row['close'] is not None else 0
+                v = float(row['volume']) if row['volume'] is not None else 0
+            except (TypeError, ValueError):
+                continue
+            candles.append({
+                'date': ts, 'open': round(o, 2), 'high': round(h, 2),
+                'low': round(l, 2), 'close': round(c, 2), 'volume': round(v, 2),
+                'up': c >= o,
+            })
+
+        # ── Volume metrics ──
+        vol_series = []
+        vol_avg_s = vol.rolling(20).mean()
+        for i in range(max(0, len(d) - 90), len(d)):
+            row = d.iloc[i]
+            ts = str(row['timestamp'].date()) if 'timestamp' in d.columns and hasattr(row['timestamp'], 'date') else str(i)
+            try:
+                rv = float(row['volume']) if row['volume'] is not None else 0
+                rc = float(row['close']) if row['close'] is not None else 0
+                ro = float(row['open']) if row['open'] is not None else 0
+            except (TypeError, ValueError):
+                continue
+            avg20 = float(vol_avg_s.iloc[i]) if not pd.isna(vol_avg_s.iloc[i]) else None
+            vol_series.append({
+                'date': ts, 'volume': round(rv, 2),
+                'avg_20': round(avg20, 2) if avg20 else None,
+                'up': rc >= ro,
+                'ratio': round(rv / avg20, 2) if avg20 and avg20 > 0 else None,
+            })
+
+        # ── EMA overlay series (last 90) ──
+        ema20_series = []
+        ema50_series = []
+        for i in range(max(0, len(d) - 90), len(d)):
+            ts = str(d['timestamp'].iloc[i].date()) if 'timestamp' in d.columns and hasattr(d['timestamp'].iloc[i], 'date') else str(i)
+            e20 = float(ema20.iloc[i]) if i < len(ema20) and not pd.isna(ema20.iloc[i]) else None
+            e50 = float(ema50.iloc[i]) if i < len(ema50) and not pd.isna(ema50.iloc[i]) else None
+            ema20_series.append({'date': ts, 'value': round(e20, 2) if e20 else None})
+            ema50_series.append({'date': ts, 'value': round(e50, 2) if e50 else None})
+
+        # ── RSI series (last 90) ──
+        rsi_series = []
+        for i in range(max(0, len(d) - 90), len(d)):
+            ts = str(d['timestamp'].iloc[i].date()) if 'timestamp' in d.columns and hasattr(d['timestamp'].iloc[i], 'date') else str(i)
+            rv = float(rsi14.iloc[i]) if i < len(rsi14) and not pd.isna(rsi14.iloc[i]) else None
+            rsi_series.append({'date': ts, 'value': round(rv, 2) if rv else None})
+
+        # ── Swing-based S/R zones ──
+        support_zones, resistance_zones = _compute_swing_zones(df, order=5)
+
+        # ── Anchored VWAP ──
+        vwap_high, vwap_low = _compute_anchored_vwap(df)
+
+        # ── Break confirmation ──
+        break_status = _compute_break_confirmation(
+            price, support_zones, resistance_zones, daily_vol, vol_avg_20)
+
+        # ── Active scenario + alignment ──
+        active = btc_scenarios_col.find_one({'status': 'active'})
+        alignment = _compute_scenario_alignment(active, price, atr_val)
+
+        scenario_block = None
+        frozen_paths = None
+        if active:
+            scenario_block = _scenario_to_block(active)
+            # Build frozen bull/bear path series for chart overlay
+            scenarios = active.get('scenarios', [])
+            bull = next((s for s in scenarios if s.get('type') == 'bull'), None)
+            bear = next((s for s in scenarios if s.get('type') == 'bear'), None)
+            anchor_price = active.get('anchor_price', price)
+            anchor_date = active.get('anchor_date')
+            created_at = active.get('created_at')
+
+            # Frozen paths: straight-line from anchor to trigger/target over 7 days
+            if bull and bear:
+                frozen_paths = {
+                    'anchor_price': anchor_price,
+                    'anchor_date': anchor_date,
+                    'bull_trigger': bull.get('trigger_level'),
+                    'bull_target': bull.get('target_level'),
+                    'bear_trigger': bear.get('trigger_level'),
+                    'bear_target': bear.get('target_level'),
+                    'bull_invalidation': active.get('bull_invalidation_level'),
+                    'bear_invalidation': active.get('bear_invalidation_level'),
+                    'forecast_days': 7,
+                    'bull_path': [],
+                    'bear_path': [],
+                }
+                # Generate 7-day frozen path points
+                for day in range(8):  # day 0 through 7
+                    frac = day / 7.0
+                    bull_price = anchor_price + (bull.get('target_level', anchor_price) - anchor_price) * frac
+                    bear_price = anchor_price + (bear.get('target_level', anchor_price) - anchor_price) * frac
+                    frozen_paths['bull_path'].append({'day': day, 'price': round(bull_price, 2)})
+                    frozen_paths['bear_path'].append({'day': day, 'price': round(bear_price, 2)})
+
+        result = {
+            'status': 'ready',
+            'price': round(price, 2),
+            'atr_14': round(atr_val, 2),
+            'atr_pct': round(atr_val / price * 100, 2) if price > 0 else 0,
+            'rsi_14': round(float(rsi14.iloc[-1]), 2) if len(rsi14) > 0 else None,
+            'ema_20': round(float(ema20.iloc[-1]), 2) if len(ema20) > 0 else None,
+            'ema_50': round(float(ema50.iloc[-1]), 2) if len(ema50) > 0 else None,
+            'volume_current': round(daily_vol, 2),
+            'volume_avg_20d': round(vol_avg_20, 2),
+            'volume_ratio': round(vol_ratio, 2),
+            'volume_status': ('High' if vol_ratio >= 1.5 else 'Above Average' if vol_ratio >= 1.2
+                              else 'Average' if vol_ratio >= 0.8 else 'Below Average' if vol_ratio >= 0.5
+                              else 'Low'),
+            'candles': candles,
+            'volume_series': vol_series,
+            'ema_20_series': ema20_series,
+            'ema_50_series': ema50_series,
+            'rsi_series': rsi_series,
+            'support_zones': support_zones,
+            'resistance_zones': resistance_zones,
+            'vwap_from_high': vwap_high,
+            'vwap_from_low': vwap_low,
+            'break_status': break_status,
+            'scenario': scenario_block,
+            'alignment': alignment,
+            'frozen_paths': frozen_paths,
+            'as_of': datetime.datetime.utcnow().isoformat(),
+        }
+        _scenario_tracker_cache['data'] = result
+        _scenario_tracker_cache['ts'] = now_ts
+        return result
+    except Exception:
+        traceback.print_exc()
+        return {'status': 'error', 'message': 'Failed to compute scenario tracker data.'}
+
+
+# =====================================================================
+# FEED HEALTH DASHBOARD — live vs rate-limited RSS sources
+# =====================================================================
+_feed_health = {}   # source_name -> {'status': 'live'|'error', 'last_ok': ts, 'last_error': ts, 'error_msg': str}
+
+
+@app.get('/api/v1/feed-health')
+def feed_health_api():
+    """Returns the health status of each RSS news feed source."""
+    # Test each feed with a lightweight HEAD/parse
+    results = []
+    for name, url, cred in NEWS_SOURCES:
+        entry = _feed_health.get(name, {'status': 'unknown', 'last_ok': None, 'last_error': None, 'error_msg': None})
+        try:
+            fp = feedparser.parse(url)
+            http_status = getattr(fp, 'status', 200)
+            if http_status and int(http_status) >= 400:
+                entry = {'status': 'rate_limited' if int(http_status) == 429 else 'error',
+                         'http_status': int(http_status),
+                         'last_error': datetime.datetime.utcnow().isoformat(),
+                         'last_ok': entry.get('last_ok'),
+                         'error_msg': f'HTTP {http_status}'}
+            elif fp.entries:
+                entry = {'status': 'live', 'http_status': int(http_status) if http_status else 200,
+                         'last_ok': datetime.datetime.utcnow().isoformat(),
+                         'last_error': entry.get('last_error'),
+                         'error_msg': None, 'entry_count': len(fp.entries)}
+            else:
+                entry = {'status': 'empty', 'http_status': int(http_status) if http_status else 200,
+                         'last_ok': entry.get('last_ok'),
+                         'last_error': datetime.datetime.utcnow().isoformat(),
+                         'error_msg': 'Feed returned no entries'}
+        except Exception as exc:
+            entry = {'status': 'error', 'last_error': datetime.datetime.utcnow().isoformat(),
+                     'last_ok': entry.get('last_ok'), 'error_msg': str(exc)[:120]}
+        _feed_health[name] = entry
+        results.append({'source': name, 'url': url, 'credibility': cred, **entry})
+        time.sleep(0.5)  # polite delay
+    live_count = sum(1 for r in results if r['status'] == 'live')
+    return {
+        'status': 'ready',
+        'feeds': results,
+        'summary': f'{live_count}/{len(results)} feeds live',
+        'all_healthy': live_count == len(results),
+        'checked_at': datetime.datetime.utcnow().isoformat(),
+    }
+
+
 @app.post('/api/v1/bitmark/run')
 def bitmark_run(payload: dict = Body(default={}), user: dict = Depends(get_current_user)):
     import time
@@ -13466,8 +14013,21 @@ def albert_ask(request: Request, payload: dict = Body(...), user: dict = Depends
                 'strategyDraftFailed': strategy_draft_failed}
     except Exception:
         traceback.print_exc()
+        # ── Automatic single retry with brief pause on transient errors ──
+        try:
+            time.sleep(2)
+            print("[albert_ask] Retrying after transient error...")
+            ctx, evidence, used, sop, engine_review = _ask_gather(user, message, entity=entity, context=context)
+            system = ASK_ALBERT_SYSTEM.format(ctx=ctx)
+            text, model, sources, requested_model = _albert_answer('', message, session_id, deep=deep, system_override=system, grounded=False)
+            if text:
+                text = re.sub(r'\[REFRESH_ANALYSIS:[^\]]*\]', '', _engine_code_safe_reply(text, engine_review)).strip()
+                return {'status': 'ready', 'reply': text, 'model': model, 'sources': sources,
+                        'sessionId': session_id, 'retried': True, 'paperOnly': True}
+        except Exception:
+            traceback.print_exc()
         return {'status': 'error',
-                'reply': 'Albert could not gather or compose an answer. The backend logs have the details. Please try again.'}
+                'reply': 'Albert could not gather or compose an answer after retrying. The backend logs have the details. Please try again.'}
 
 
 @app.get('/api/v1/albert/ask/evidence')
