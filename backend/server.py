@@ -6900,6 +6900,14 @@ def _startup():
                               coalesce=True, max_instances=1)
         # Albert self-check: grade his logged buy/sell calls once their horizon elapses.
         scheduler.add_job(_grade_albert_calls, 'interval', minutes=30, id='albert_call_grade')
+        # Albert's Brief auto-refresh — regenerate every 4 hours for fresh evidence.
+        scheduler.add_job(_brief_auto_refresh_worker, 'interval', hours=4, id='brief_auto_refresh',
+                          replace_existing=True, coalesce=True, max_instances=1,
+                          misfire_grace_time=600,
+                          next_run_time=datetime.datetime.now() + datetime.timedelta(minutes=10))
+        # Brief cleanup — remove briefs older than 8 days (daily at 3 AM UTC).
+        scheduler.add_job(_brief_cleanup_old, 'cron', hour=3, minute=0, id='brief_cleanup',
+                          replace_existing=True, coalesce=True, max_instances=1)
         # Weekly recap auto-post: drop Albert's recap into the notification bell every Monday.
         scheduler.add_job(_weekly_recap_autopost, 'cron', day_of_week='mon', hour=13, minute=30, id='weekly_recap_autopost')
         # Daily plain-English morning brief pushed to the notification bell.
@@ -20493,9 +20501,10 @@ def _brief_generate_bg_legacy(cache_id, symbol, mode, coin_name, sys_msg, as_of)
 
 
 @app.get('/api/v1/albert/brief')
-async def albert_brief(request: Request, refresh: int = 0, mode: str = 'plain', symbol: str = 'BTC'):
+async def albert_brief(request: Request, refresh: int = 0, mode: str = 'plain', symbol: str = 'BTC', date: str = ''):
     """Albert's Morning Brief — a daily summary, coin-specific. mode='plain' (layman,
     default) or 'technical'; symbol selects the asset (BTC default).
+    Pass date=YYYY-MM-DD to retrieve a specific historical brief (read-only, no refresh).
     Pro briefs are generated asynchronously and cached; the endpoint always returns
     the latest cached brief instantly.  When a new brief is needed, the response
     includes `refreshing: true` so the UI can show 'Albert is updating…'."""
@@ -20504,6 +20513,21 @@ async def albert_brief(request: Request, refresh: int = 0, mode: str = 'plain', 
     is_btc = symbol == 'BTC'
     if not is_btc and symbol not in COMPARE_COINS:
         return {'status': 'error', 'reason': 'unsupported_symbol'}
+
+    # Historical date lookup — return cached brief for a specific past day (no generation)
+    if date and date.strip():
+        date = date.strip()[:10]
+        hist_candidates = [f'brief:{date}:{mode}', f'brief:{date}']
+        if not is_btc:
+            hist_candidates = [f'brief:{date}:{mode}:{symbol}']
+        for cid in hist_candidates:
+            doc = insights_col.find_one({'_id': cid}, {'_id': 0})
+            if doc and (doc.get('text') or doc.get('brief')):
+                return {'status': 'ready', 'cached': True, 'refreshing': False,
+                        'mode': mode, 'symbol': symbol, 'historical': True,
+                        **{k: v for k, v in doc.items() if k != '_id'}}
+        return {'status': 'error', 'reason': 'no_historical_brief', 'date': date}
+
     today = datetime.date.today().isoformat()
     cache_id = f'brief:{today}:{mode}' if is_btc else f'brief:{today}:{mode}:{symbol}'
     cached = insights_col.find_one({'_id': cache_id}, {'_id': 0})
@@ -20544,6 +20568,92 @@ async def albert_brief(request: Request, refresh: int = 0, mode: str = 'plain', 
     return {'status': 'computing', 'refreshing': refreshing,
             'reason': 'generating' if refreshing else 'no_data',
             'mode': mode, 'symbol': symbol}
+
+
+@app.get('/api/v1/albert/brief/history')
+async def albert_brief_history(symbol: str = 'BTC', mode: str = 'plain', days: int = 7):
+    """Return the last N days of briefs (lightweight summaries for the history timeline)."""
+    mode = 'technical' if mode == 'technical' else 'plain'
+    symbol = (symbol or 'BTC').strip().upper()[:6]
+    is_btc = symbol == 'BTC'
+    today = datetime.date.today()
+    history = []
+    for i in range(days):
+        d = (today - datetime.timedelta(days=i)).isoformat()
+        # Try multiple cache_id formats (old and new)
+        candidates = [f'brief:{d}:{mode}', f'brief:{d}']
+        if not is_btc:
+            candidates = [f'brief:{d}:{mode}:{symbol}']
+        doc = None
+        for cid in candidates:
+            doc = insights_col.find_one({'_id': cid}, {'brief.sections.full_commentary': 0,
+                'brief.sections.key_evidence': 0})
+            if doc:
+                break
+        if doc and (doc.get('text') or doc.get('brief') or doc.get('take')):
+            b = doc.get('brief') or {}
+            history.append({
+                'date': d,
+                'headline': b.get('headline') or (doc.get('take') or '')[:80],
+                'market_call': b.get('market_call', ''),
+                'conviction': b.get('conviction', ''),
+                'executive_summary': (b.get('executive_summary') or '')[:200],
+                'version': doc.get('version') or 'v1',
+                'generated_at': doc.get('generated_at', ''),
+                'symbol': doc.get('symbol', symbol),
+                'mode': doc.get('mode', mode),
+            })
+    return {'history': history, 'symbol': symbol, 'days': days}
+
+
+def _brief_auto_refresh_worker():
+    """Scheduled worker: auto-refresh Albert's Brief for BTC every 4 hours.
+    Respects existing refresh locks to avoid double-generation."""
+    try:
+        symbol = 'BTC'
+        mode = 'plain'
+        today = datetime.date.today().isoformat()
+        cache_id = f'brief:{today}:{mode}'
+
+        # Don't double-generate
+        if _BRIEF_REFRESH_LOCKS.get(cache_id, False):
+            print("BRIEF AUTO-REFRESH: Already running, skipping")
+            return
+
+        if not (LLM_READY_KEY and _HAS_LLM):
+            print("BRIEF AUTO-REFRESH: No LLM key available, skipping")
+            return
+
+        ctx, as_of = _brief_context()
+        if not ctx or not ctx.strip():
+            print("BRIEF AUTO-REFRESH: No context data available, skipping")
+            return
+
+        coin_name = 'Bitcoin'
+        sys_prompt = ALBERT_BRIEF_SYSTEM.format(ctx=ctx)
+        _BRIEF_REFRESH_LOCKS[cache_id] = True
+        print(f"BRIEF AUTO-REFRESH: Starting generation for {symbol} ({today})")
+        _brief_generate_bg(cache_id, symbol, mode, coin_name, sys_prompt, as_of)
+    except Exception:
+        traceback.print_exc()
+
+
+def _brief_cleanup_old():
+    """Remove briefs older than 8 days to keep storage lean."""
+    try:
+        cutoff = (datetime.date.today() - datetime.timedelta(days=8)).isoformat()
+        # Find all brief documents
+        for doc in insights_col.find({'kind': 'brief'}, {'_id': 1}):
+            cid = doc.get('_id', '')
+            if cid.startswith('brief:'):
+                parts = cid.split(':')
+                if len(parts) >= 3:
+                    date_str = parts[1]
+                    if date_str < cutoff:
+                        insights_col.delete_one({'_id': cid})
+                        print(f"BRIEF CLEANUP: Removed old brief {cid}")
+    except Exception:
+        traceback.print_exc()
 
 
 

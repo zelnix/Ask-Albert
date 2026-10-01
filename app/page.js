@@ -4395,7 +4395,7 @@ export default function DashboardPage() {
     if (active === 'timemachine') return <TimeMachineSection />;
     if (active === 'ask') return <AskAlbert onNav={setActive} />;
     if (active === 'strategies') return <StrategyStudio chatGoal={chatStrategy?.goal || ''} chatDraftKey={chatStrategy?.key} chatProposal={chatStrategy?.proposal || null} onChatDismiss={() => setChatStrategy(null)} />;
-    if (active === 'albert-brief') return <AlbertBriefScreen onBack={() => setActive('dashboard')} />;
+    if (active === 'albert-brief') return <AlbertBriefScreen onBack={() => setActive('home')} onNav={(r) => setActive(r)} />;
     if (active === 'alert-engine') return <AlertEngineSection />;
     if (active === 'alerts') return <AlertsSection d={d} alertsData={alertsData} onAck={ackAlerts} filter={alertFilter} onFilter={setAlertFilter} coins={coins} />;
     if (active === 'settings') return <SettingsSection />;
