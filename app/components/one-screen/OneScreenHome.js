@@ -247,8 +247,12 @@ const HomeTicker = ({ d, ticker, snapshot, dashboardStatus, onNav }) => {
   const [item, setItem] = useState(null);
   const [evidenceId, setEvidenceId] = useState(null);
   const isUpdating = dashboardStatus === 'loading' || dashboardStatus === 'computing';
+  // Show "Updating…" instead of "Unavailable" when either:
+  // 1. Dashboard is explicitly loading/computing, OR
+  // 2. We haven't received any dashboard data yet (initial load — d is empty/null)
+  const noDataYet = !d || (!d.decision && !d.risk && !d.dominance && !d.cycle);
   const items = TickerContent({ d, ticker, snapshot }).map(entry =>
-    isUpdating && entry.value === 'Unavailable'
+    (isUpdating || noDataYet) && entry.value === 'Unavailable'
       ? { ...entry, value: 'Updating\u2026' }
       : entry
   );

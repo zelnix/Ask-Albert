@@ -35,7 +35,7 @@ const ModalShell = ({ title, onClose, children, className = 'max-w-3xl', label, 
     <div className={`fixed inset-0 z-[100] flex items-start overflow-y-auto bg-slate-950/90 p-3 backdrop-blur-sm sm:p-5 ${placement === 'full' ? '!items-stretch !justify-stretch !overflow-hidden !p-0' : placement === 'side' ? 'justify-start' : 'justify-center sm:items-center'}`} role="presentation"
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <section ref={ref} role="dialog" aria-modal="true" aria-label={label || title}
-        className={`relative w-full overflow-hidden rounded-lg border border-slate-700 bg-slate-900 shadow-2xl ${placement === 'full' ? 'flex h-[100dvh] !w-screen flex-col !rounded-none !border-0' : placement === 'side' ? 'ml-0 mr-auto' : 'mx-auto'} ${className}`}>
+        className={`relative w-full overflow-hidden rounded-lg border border-slate-700 bg-slate-900 shadow-2xl ${placement === 'full' ? 'flex h-[100dvh] !max-w-none !w-screen flex-col !rounded-none !border-0' : placement === 'side' ? 'ml-0 mr-auto' : 'mx-auto'} ${className}`}>
         <div className="flex items-center justify-between gap-3 border-b border-slate-800 px-4 py-3">
           <h2 className="min-w-0 text-base font-bold text-white">{title}</h2>
           <button ref={closeRef} type="button" onClick={onClose} aria-label={`Close ${label || title}`}
