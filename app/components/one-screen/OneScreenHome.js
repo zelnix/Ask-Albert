@@ -9,6 +9,7 @@ import {
 import ModalShell from './ModalShell';
 import DashboardAskPanel from './DashboardAskPanel';
 import { sectionDeepLink } from './ConsolidatedDetail';
+import { API_BASE } from '../../lib/api';
 import { BTCChart, MarketChart, ExpandedChart, matchedMarketSeries } from './OneScreenCharts';
 import EvidenceDrawer from '../albert/EvidenceDrawer';
 import DraggableGrid from './DraggableGrid';
@@ -335,6 +336,14 @@ const OneScreenHome = ({ d, dashboardStatus = 'loading', ticker, news, newsStatu
   }, []);
   const [evidenceId, setEvidenceId] = useState(null);
   const { sop, paper, outlook, eth, streams, driver, etf, whales, network, sentiment, brief, health } = snapshot;
+  /* ── Fetch active scenario lifecycle data ── */
+  const [activeScenario, setActiveScenario] = useState(null);
+  useEffect(() => {
+    fetch(`${API_BASE}/v1/btc-scenario`, { cache: 'no-store' })
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => { if (d?.scenarios?.length) setActiveScenario(d); })
+      .catch(() => {});
+  }, [dashboardStatus]); // re-fetch when dashboard refreshes
   const claims = sop?.briefing?.claims || [];
   const directionClaim = claims.find((c) => c.claimId === 'briefing.direction');
   const leadershipClaim = claims.find((c) => c.claimId === 'briefing.leadership');
@@ -645,6 +654,31 @@ const OneScreenHome = ({ d, dashboardStatus = 'loading', ticker, news, newsStatu
         <DashboardCard cardId="btc" title="BTC Bull & Bear" icon={GitBranch} status={health?.outlook} summary={btcCommentary} freshness={last('Candle', outlook?.baseline?.observedAt)} onAsk={() => ask('btc', 'BTC Bull & Bear', btcCommentary, 'Scenario outlooks', outlook?.baseline?.observedAt)} onOpen={() => open('btc')} detail="Scenarios">
           {focusableChart('btc', 'BTC chart', <BTCChart outlook={outlook} levels={availableLevels} />)}
           <p className="mt-1 truncate text-[11px] text-slate-400">{anchor != null ? money(anchor) : ''} · Support {support ? money(support.price) : '?'} / Resistance {ceiling ? money(ceiling.price) : '?'} · {valText}</p>
+          {activeScenario && activeScenario.scenarios?.length > 0 && (() => {
+            const bull = activeScenario.scenarios.find((s) => s.type === 'bull');
+            const bear = activeScenario.scenarios.find((s) => s.type === 'bear');
+            const bullInv = activeScenario.bull_invalidated;
+            const bearInv = activeScenario.bear_invalidated;
+            const fwDone = activeScenario.forecast_window_completed;
+            const latestT = (activeScenario.tracking || []).slice(-1)[0];
+            const following = latestT?.following || (fwDone ? 'window_done' : 'neutral');
+            const daysActive = activeScenario.created_at ? Math.floor((Date.now() - new Date(activeScenario.created_at).getTime()) / 86400000) : 0;
+            return (
+              <div className="mt-1.5 space-y-1 border-t border-slate-800 pt-1.5 text-[11px]">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="font-semibold text-slate-300">Scenario</span>
+                  <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-400">Day {daysActive}</span>
+                  {fwDone && <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300">Window ended</span>}
+                  {following === 'bull' && <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-300">Following Bull</span>}
+                  {following === 'bear' && <span className="rounded bg-red-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-red-300">Following Bear</span>}
+                  {bullInv && <span className="rounded bg-red-500/15 px-1.5 py-0.5 text-[10px] font-bold text-red-400">Bull ✗</span>}
+                  {bearInv && <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-bold text-emerald-400">Bear ✗</span>}
+                </div>
+                {bull && <p className="truncate text-slate-400">↑ Bull: break ${money(bull.trigger_level)} → {bull.target} ({bull.probability}%){bullInv ? ' · invalidated' : ''}</p>}
+                {bear && <p className="truncate text-slate-400">↓ Bear: lose ${money(bear.trigger_level)} → {bear.target} ({bear.probability}%){bearInv ? ' · invalidated' : ''}</p>}
+              </div>
+            );
+          })()}
         </DashboardCard>
         {/* 5. Market Intelligence */}
         <DashboardCard cardId="intelligence" title="Market Intelligence" icon={BarChart3} status={health?.driver} summary={intelCommentary} freshness={last('Driver', driver?.asOf)} onAsk={() => ask('intelligence', 'Market Intelligence', intelCommentary, 'Market driver', driver?.asOf)} onOpen={() => open('intelligence')}>

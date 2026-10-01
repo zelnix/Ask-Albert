@@ -45,6 +45,7 @@ export const DASHBOARD_AREAS = {
 
 const EMPTY_READS = Object.freeze({});
 const EXTRA_READS = {
+  btc: { btcScenario: '/api/v1/btc-scenario' },
   brief: { brief: '/api/v1/albert/brief' },
   portfolio: { leverage: '/api/v1/leverage?timeframe=4H' },
   intelligence: { analogs: '/api/v1/analogs?symbol=BTC', crossmarket: '/api/v1/markets?symbol=BTC&window=1y' },
@@ -393,6 +394,53 @@ export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboar
     const band = outlook.band || {};
     const forecasts = d.forecasts || [];
     const bitmark = d.bitmark || {};
+
+    // ── Active Scenario (If-Then Playbook) ──
+    const sc = extra.btcScenario || {};
+    const scReady = sc.status === 'ready' || sc.status === 'active';
+    if (scReady && sc.scenarios?.length) {
+      const bull = sc.scenarios.find((x) => x.type === 'bull');
+      const bear = sc.scenarios.find((x) => x.type === 'bear');
+      const bullInv = sc.bull_invalidated;
+      const bearInv = sc.bear_invalidated;
+      const fwDone = sc.forecast_window_completed;
+      const latestTracking = (sc.tracking || []).slice(-1)[0];
+      const following = latestTracking?.following || (fwDone ? 'forecast_window_completed' : 'neutral');
+      const daysActive = sc.created_at ? Math.floor((Date.now() - new Date(sc.created_at).getTime()) / 86400000) : 0;
+
+      area('Active Scenario', 'scenarios', {
+        state: scReady ? 'ready' : 'loading',
+        commentary: bull && bear
+          ? `Scenario anchored at ${amount(sc.anchor_price)} on ${sc.anchor_date}. Bull trigger at ${amount(bull.trigger_level)}, target ${bull.target}. Bear trigger at ${amount(bear.trigger_level)}, target ${bear.target}.${bullInv ? ' Bull path INVALIDATED.' : ''}${bearInv ? ' Bear path INVALIDATED.' : ''}${fwDone ? ' 7-day forecast window ended — invalidation levels still apply.' : ''}`
+          : null,
+        source: when(sc.created_at),
+        facts: [
+          ['Status', val(bullInv && bearInv ? 'Both invalidated — new scenario pending' : 'Active')],
+          ['Anchor price', amount(sc.anchor_price)],
+          ['Created', sc.anchor_date ? val(sc.anchor_date) : null],
+          ['Days active', val(daysActive, ' days')],
+          ['Tracking', val({ bull: 'Following Bull', bear: 'Following Bear', neutral: 'Neutral', forecast_window_completed: 'Forecast window ended' }[following] || following)],
+          ['Bull trigger', bull ? `${amount(bull.trigger_level)} → target ${bull.target} (${bull.probability}%)` : null],
+          ['Bear trigger', bear ? `${amount(bear.trigger_level)} → target ${bear.target} (${bear.probability}%)` : null],
+          ['Bull invalidation level', amount(sc.bull_invalidation_level)],
+          ['Bear invalidation level', amount(sc.bear_invalidation_level)],
+          ['Bull invalidated', val(bullInv ? `Yes${sc.bull_invalidated_at ? ' — ' + when(sc.bull_invalidated_at).replace('Published ', '') : ''}` : 'No')],
+          ['Bear invalidated', val(bearInv ? `Yes${sc.bear_invalidated_at ? ' — ' + when(sc.bear_invalidated_at).replace('Published ', '') : ''}` : 'No')],
+          ['Forecast window', val(fwDone ? 'Completed (7 days elapsed)' : `${Math.max(0, 7 - daysActive)} days remaining`)],
+          ['Regime at creation', val(sc.regime_label || sc.regime)],
+          ['Observations logged', val(sc.tracking?.length || 0)],
+        ],
+        children: sc.contradiction?.present ? (
+          <div className="mt-3 rounded-md border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-200">
+            <strong className="font-semibold">Contradiction:</strong> {sc.contradiction.summary}
+          </div>
+        ) : null,
+        note: fwDone
+          ? 'The 7-day forecast paths have expired. The scenario remains active under its fixed invalidation levels. BTC is no longer claimed to follow a plotted path.'
+          : 'Scenarios are fixed at creation. Engine refreshes only update tracking — paths are never rewritten.',
+      });
+    }
+
     const shortForecast = forecasts.find((x) => x.horizon === '24H');
     const weeklyForecast = forecasts.find((x) => x.horizon === '7D');
     const btcComm = band.statement || (band.lowerPct != null ? `Historical 7-day scenarios show outcomes from ${band.lowerPct > 0 ? '+' : ''}${band.lowerPct}% to ${band.upperPct > 0 ? '+' : ''}${band.upperPct}% from the observed anchor${outlook.baseline?.close ? ` at ${amount(outlook.baseline.close)}` : ''}.` : band.reasonText || null);

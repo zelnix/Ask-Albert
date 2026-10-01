@@ -1797,11 +1797,10 @@ def _scoreside(score):
     return 'bullish' if score >= 55 else ('bearish' if score <= 45 else 'neutral')
 
 
-def compute_scenarios(chart, decision, last_close, feats, regime_analysis):
-    """Albert's actionable If-Then playbook: concrete bull/bear triggers with levels,
-    targets and data-derived probabilities, plus a regime-aware resolution of any
-    contradiction between the signal groups.
-    """
+def _build_fresh_scenario(chart, decision, last_close, feats, regime_analysis):
+    """Build a NEW scenario from current market conditions. Called only when no active
+    scenario exists or both paths have been invalidated. Returns the scenario dict
+    or None if conditions are insufficient."""
     if not chart or not decision or not last_close:
         return None
     try:
@@ -1810,7 +1809,7 @@ def compute_scenarios(chart, decision, last_close, feats, regime_analysis):
         pred = (chart or {}).get('predictive') or {}
         if (raw_atr is None or not (0 < float(raw_atr) < 1)
                 or pred.get('breakout_up') is None or pred.get('breakdown') is None):
-            return None  # WAIT: no observed ATR or historical breakout sample
+            return None
         atr = float(raw_atr)
         sr = chart.get('sr_levels', []) or []
         res = sorted([l for l in sr if l.get('type') == 'resistance' and l['price'] > price],
@@ -1821,15 +1820,12 @@ def compute_scenarios(chart, decision, last_close, feats, regime_analysis):
         bo_dn = float(pred['breakdown'])
         regime = (regime_analysis or {}).get('current_regime')
         regime_label = (regime_analysis or {}).get('regime_label', regime or 'current')
-        # Regime tilts the base rates: momentum favours continuation, distribution/squeeze fade it.
         bull_tilt = {'bull_momentum': 1.15, 'consolidation': 1.0,
                      'bear_distribution': 0.82, 'high_vol_squeeze': 0.9}.get(regime, 1.0)
 
-        # ---- Bull scenario ----
         trig_res = round(res[0]['price'] if res else price * (1 + max(0.01, atr)), 0)
         tgt_bull = round(res[1]['price'] if len(res) > 1 else trig_res * (1 + max(0.015, atr * 1.5)), 0)
         p_bull = int(round(min(85, max(15, bo_up * bull_tilt))))
-        # ---- Bear scenario ----
         trig_sup = round(sup[0]['price'] if sup else price * (1 - max(0.01, atr)), 0)
         tgt_bear = round(sup[1]['price'] if len(sup) > 1 else trig_sup * (1 - max(0.015, atr * 1.5)), 0)
         p_bear = int(round(min(85, max(15, bo_dn * (2 - bull_tilt)))))
@@ -1855,7 +1851,7 @@ def compute_scenarios(chart, decision, last_close, feats, regime_analysis):
             },
         ]
 
-        # ---- Contradiction resolution (uses the LIVE regime weights) ----
+        # Contradiction resolution
         comps = decision.get('components', []) or []
         bulls = [c for c in comps if c['score'] >= 55]
         bears = [c for c in comps if c['score'] <= 45]
@@ -1883,11 +1879,206 @@ def compute_scenarios(chart, decision, last_close, feats, regime_analysis):
             contradiction = {'present': False, 'winner': None,
                              'summary': 'Signal groups are broadly aligned — no material contradiction to resolve.'}
 
-        return {'scenarios': scenarios, 'contradiction': contradiction,
-                'price': round(price, 0), 'regime': regime, 'regime_label': regime_label}
-    except Exception:  # noqa
+        # Capture indicator snapshot at creation
+        indicator_snapshot = {}
+        for k in ('ATR_Pct', 'RSI_14', 'MACD_Histogram', 'BB_Width', 'OBV', 'Volume_SMA_20'):
+            v = (feats or {}).get(k)
+            if v is not None:
+                indicator_snapshot[k] = round(float(v), 6)
+
+        now_iso = datetime.datetime.utcnow().isoformat()
+        scenario_id = str(uuid.uuid4())
+
+        return {
+            '_id': scenario_id,
+            'status': 'active',
+            'created_at': now_iso,
+            'archived_at': None,
+            'anchor_price': round(price, 2),
+            'anchor_date': datetime.date.today().isoformat(),
+            'scenarios': scenarios,
+            'contradiction': contradiction,
+            'regime': regime,
+            'regime_label': regime_label,
+            # Immutable invalidation levels — from the trigger levels of the opposing scenario
+            'bull_invalidation_level': trig_sup,   # bull dies if daily close below bear trigger
+            'bear_invalidation_level': trig_res,   # bear dies if daily close above bull trigger
+            'bull_invalidated': False,
+            'bear_invalidated': False,
+            'bull_invalidated_at': None,
+            'bear_invalidated_at': None,
+            'indicators_at_creation': indicator_snapshot,
+            'support_resistance_at_creation': [
+                {'type': l.get('type'), 'price': l.get('price'), 'source': l.get('source')}
+                for l in (sr[:8] if sr else [])
+            ],
+            'tracking': [],
+            'forecast_window_completed': False,
+            'forecast_window_completed_at': None,
+            'price': round(price, 0),
+        }
+    except Exception:
         traceback.print_exc()
         return None
+
+
+def compute_scenarios(chart, decision, last_close, feats, regime_analysis):
+    """Scenario lifecycle manager. On each engine run:
+    - If an active scenario exists and not both invalidated: append tracking, return it.
+    - If no active or both invalidated: archive old, create new, return it.
+    The scenario's forecast paths are NEVER rewritten — only tracking is appended.
+    """
+    if not chart or not decision or not last_close:
+        return None
+    try:
+        price = float(last_close)
+        now_iso = datetime.datetime.utcnow().isoformat()
+        today = datetime.date.today().isoformat()
+
+        # ── Load active scenario ──
+        active = btc_scenarios_col.find_one({'status': 'active'})
+
+        # ── Determine if we need a new scenario ──
+        need_new = False
+        if not active:
+            need_new = True
+        elif active.get('bull_invalidated') and active.get('bear_invalidated'):
+            need_new = True
+
+        if not need_new and active:
+            # ── Track: append observation, check invalidation ──
+            bull_inv = active.get('bull_invalidated', False)
+            bear_inv = active.get('bear_invalidated', False)
+            bull_inv_level = active.get('bull_invalidation_level')
+            bear_inv_level = active.get('bear_invalidation_level')
+
+            # Check invalidation using daily close (the current price from the engine is
+            # effectively the latest confirmed close passed into compute())
+            if not bull_inv and bull_inv_level is not None and price < bull_inv_level:
+                bull_inv = True
+                btc_scenarios_col.update_one(
+                    {'_id': active['_id']},
+                    {'$set': {'bull_invalidated': True, 'bull_invalidated_at': now_iso}})
+            if not bear_inv and bear_inv_level is not None and price > bear_inv_level:
+                bear_inv = True
+                btc_scenarios_col.update_one(
+                    {'_id': active['_id']},
+                    {'$set': {'bear_invalidated': True, 'bear_invalidated_at': now_iso}})
+
+            # Check forecast window (7 days from creation)
+            fw_completed = active.get('forecast_window_completed', False)
+            if not fw_completed and active.get('created_at'):
+                try:
+                    created = datetime.datetime.fromisoformat(active['created_at'])
+                    elapsed = (datetime.datetime.utcnow() - created).days
+                    if elapsed >= 7:
+                        fw_completed = True
+                        btc_scenarios_col.update_one(
+                            {'_id': active['_id']},
+                            {'$set': {'forecast_window_completed': True,
+                                      'forecast_window_completed_at': now_iso}})
+                except Exception:
+                    pass
+
+            # Determine tracking state
+            anchor = active.get('anchor_price', price)
+            bull_trig = active['scenarios'][0]['trigger_level'] if active.get('scenarios') else None
+            bear_trig = active['scenarios'][1]['trigger_level'] if active.get('scenarios') and len(active['scenarios']) > 1 else None
+
+            if fw_completed:
+                following = 'forecast_window_completed'
+            elif bull_inv and not bear_inv:
+                following = 'bear'
+            elif bear_inv and not bull_inv:
+                following = 'bull'
+            elif bull_trig and bear_trig:
+                mid = (bull_trig + bear_trig) / 2
+                following = 'bull' if price >= mid else 'bear'
+            else:
+                following = 'neutral'
+
+            # Capture indicator snapshot for tracking
+            ind = {}
+            for k in ('ATR_Pct', 'RSI_14', 'MACD_Histogram', 'BB_Width'):
+                v = (feats or {}).get(k)
+                if v is not None:
+                    ind[k] = round(float(v), 6)
+
+            tracking_entry = {
+                'date': today,
+                'timestamp': now_iso,
+                'close': round(price, 2),
+                'indicators': ind,
+                'following': following,
+                'bull_invalidated': bull_inv,
+                'bear_invalidated': bear_inv,
+            }
+
+            # Append tracking (deduplicate by date — only keep latest per day)
+            btc_scenarios_col.update_one(
+                {'_id': active['_id']},
+                {'$pull': {'tracking': {'date': today}}})
+            btc_scenarios_col.update_one(
+                {'_id': active['_id']},
+                {'$push': {'tracking': tracking_entry}})
+
+            # If both just became invalidated, we'll create a new one on the NEXT run
+            # (requirement: archive before creating replacement)
+            if bull_inv and bear_inv:
+                # Both invalidated NOW — archive will happen on next engine run
+                pass
+
+            # Reload and return the active scenario
+            active = btc_scenarios_col.find_one({'_id': active['_id']})
+            return _scenario_to_block(active)
+
+        # ── Archive old scenario before creating replacement ──
+        if active:
+            btc_scenarios_col.update_one(
+                {'_id': active['_id']},
+                {'$set': {'status': 'archived', 'archived_at': now_iso}})
+
+        # ── Create new scenario ──
+        new_scn = _build_fresh_scenario(chart, decision, last_close, feats, regime_analysis)
+        if not new_scn:
+            return None
+        btc_scenarios_col.insert_one(new_scn)
+        return _scenario_to_block(new_scn)
+
+    except Exception:
+        traceback.print_exc()
+        return None
+
+
+def _scenario_to_block(doc):
+    """Convert a btc_scenarios document into the scenarios_block format
+    that the rest of the app (API, frontend) expects."""
+    if not doc:
+        return None
+    scns = doc.get('scenarios', [])
+    return {
+        'scenarios': scns,
+        'contradiction': doc.get('contradiction'),
+        'price': doc.get('anchor_price', doc.get('price', 0)),
+        'regime': doc.get('regime'),
+        'regime_label': doc.get('regime_label'),
+        # Lifecycle fields
+        'scenario_id': doc.get('_id'),
+        'scenario_status': doc.get('status', 'active'),
+        'created_at': doc.get('created_at'),
+        'anchor_price': doc.get('anchor_price'),
+        'anchor_date': doc.get('anchor_date'),
+        'bull_invalidated': doc.get('bull_invalidated', False),
+        'bear_invalidated': doc.get('bear_invalidated', False),
+        'bull_invalidated_at': doc.get('bull_invalidated_at'),
+        'bear_invalidated_at': doc.get('bear_invalidated_at'),
+        'bull_invalidation_level': doc.get('bull_invalidation_level'),
+        'bear_invalidation_level': doc.get('bear_invalidation_level'),
+        'forecast_window_completed': doc.get('forecast_window_completed', False),
+        'forecast_window_completed_at': doc.get('forecast_window_completed_at'),
+        'tracking': doc.get('tracking', []),
+        'indicators_at_creation': doc.get('indicators_at_creation'),
+    }
 
 
 
@@ -12208,6 +12399,60 @@ def scenarios():
         return {'status': 'error', 'scenarios': []}
 
 
+@app.get('/api/v1/btc-scenario')
+def btc_scenario_api():
+    """Return the active BTC scenario with creation time, tracking state and invalidation flags.
+    If no active scenario exists, attempt to bootstrap one from the latest run data."""
+    try:
+        active = btc_scenarios_col.find_one({'status': 'active'})
+        if not active:
+            # Attempt bootstrap from the latest run
+            run = runs_col.find_one(sort=[('created_at', -1)], projection={'_id': 0}) or {}
+            chart = run.get('chart') or {}
+            dec = run.get('decision') or {}
+            lc = run.get('last_close')
+            regime_analysis = dec.get('regime_engine') or {}
+            if lc and chart.get('predictive') and chart.get('sr_levels'):
+                # Build features dict — try feature_snapshot first, fall back to OHLC-derived ATR
+                feats_dict = {}
+                for fs in (run.get('feature_snapshot') or []):
+                    fn = fs.get('feature')
+                    val = fs.get('value')
+                    if fn and val is not None:
+                        if fn in ('RSI', 'StochRSI'):
+                            feats_dict[fn] = val / 100.0
+                        elif fn in ('ATR_Pct', 'BB_Width_Pct', 'MACD_Hist_Norm', 'EMA_Ratio'):
+                            feats_dict[fn] = val / 100.0
+                        else:
+                            feats_dict[fn] = val
+                # If ATR_Pct is missing, compute from OHLC
+                if 'ATR_Pct' not in feats_dict:
+                    ohlc = chart.get('ohlc', [])
+                    if len(ohlc) >= 15:
+                        trs = []
+                        for i in range(max(0, len(ohlc) - 14), len(ohlc)):
+                            row = ohlc[i]
+                            h = row.get('h', row.get('high', 0))
+                            lo = row.get('l', row.get('low', 0))
+                            prev_c = ohlc[i - 1].get('c', ohlc[i - 1].get('close', 0)) if i > 0 else lo
+                            tr = max(h - lo, abs(h - prev_c), abs(lo - prev_c))
+                            trs.append(tr)
+                        if trs:
+                            atr = sum(trs) / len(trs)
+                            feats_dict['ATR_Pct'] = atr / float(lc) if float(lc) > 0 else 0.02
+                new_scn = _build_fresh_scenario(chart, dec, lc, feats_dict, regime_analysis)
+                if new_scn:
+                    btc_scenarios_col.insert_one(new_scn)
+                    active = new_scn
+        if not active:
+            return {'status': 'none', 'message': 'No active scenario. One will be created on the next engine run.'}
+        block = _scenario_to_block(active)
+        return {'status': 'ready', **block}
+    except Exception:
+        traceback.print_exc()
+        return {'status': 'error', 'message': 'Failed to load scenario.'}
+
+
 @app.post('/api/v1/bitmark/run')
 def bitmark_run(payload: dict = Body(default={}), user: dict = Depends(get_current_user)):
     import time
@@ -21781,6 +22026,7 @@ from albert.market import research as _mkt_research  # noqa: E402
 
 market_turnover_col = db['market_turnover_daily']
 scenario_evals_col = db['scenario_evaluations']
+btc_scenarios_col = db['btc_scenarios']
 scenario_history_snapshots_col = db['scenario_history_snapshots']
 scenario_history_current_col = db['scenario_history_current']
 SCENARIO_V2_CONTRACT_VERSION = 'scenario-outlook-contract-v2'
