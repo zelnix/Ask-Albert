@@ -12590,28 +12590,37 @@ def _compute_swing_zones(df, order=5):
     if df is None or len(df) < 60:
         return [], []
     d = df.tail(260).reset_index(drop=True)
+    # Drop rows with any null OHLCV values
+    d = d.dropna(subset=['close', 'high', 'low', 'volume']).reset_index(drop=True)
+    if len(d) < 60:
+        return [], []
     close = d['close']; high = d['high']; low = d['low']; vol = d['volume']
     n = len(d)
     price = float(close.iloc[-1])
     atr_series = _atr(high, low, close, 14)
-    atr_val = float(atr_series.iloc[-1]) if len(atr_series) > 0 else price * 0.02
+    atr_val = float(atr_series.iloc[-1]) if len(atr_series) > 0 and not pd.isna(atr_series.iloc[-1]) else price * 0.02
     half_atr = atr_val * 0.5
 
     # Step 1: Identify confirmed swing highs and lows
     swing_highs, swing_lows = [], []
     for i in range(order, n - order):
-        window_h = high.iloc[i - order:i + order + 1].values
-        window_l = low.iloc[i - order:i + order + 1].values
-        if float(high.iloc[i]) == float(window_h.max()):
-            rejection = float(high.iloc[i]) - float(close.iloc[i])
-            swing_highs.append({'idx': i, 'price': float(high.iloc[i]),
-                                'rejection': rejection,
-                                'volume': float(vol.iloc[i]) if vol.iloc[i] > 0 else 1.0})
-        if float(low.iloc[i]) == float(window_l.min()):
-            rejection = float(close.iloc[i]) - float(low.iloc[i])
-            swing_lows.append({'idx': i, 'price': float(low.iloc[i]),
-                               'rejection': rejection,
-                               'volume': float(vol.iloc[i]) if vol.iloc[i] > 0 else 1.0})
+        try:
+            h_val = float(high.iloc[i])
+            l_val = float(low.iloc[i])
+            c_val = float(close.iloc[i])
+            v_val = float(vol.iloc[i]) if vol.iloc[i] and float(vol.iloc[i]) > 0 else 1.0
+        except (TypeError, ValueError):
+            continue
+        window_h = high.iloc[i - order:i + order + 1].dropna().values
+        window_l = low.iloc[i - order:i + order + 1].dropna().values
+        if len(window_h) == 0 or len(window_l) == 0:
+            continue
+        if h_val == float(window_h.max()):
+            rejection = h_val - c_val
+            swing_highs.append({'idx': i, 'price': h_val, 'rejection': rejection, 'volume': v_val})
+        if l_val == float(window_l.min()):
+            rejection = c_val - l_val
+            swing_lows.append({'idx': i, 'price': l_val, 'rejection': rejection, 'volume': v_val})
 
     # Step 2: Group nearby swing prices into zones (within 0.5 × ATR)
     def _group_into_zones(swings):
@@ -12683,21 +12692,26 @@ def _compute_anchored_vwap(df):
     """Compute anchored VWAP from the most recent significant swing high and swing low."""
     if df is None or len(df) < 30:
         return None, None
-    d = df.tail(120).reset_index(drop=True)
+    d = df.tail(120).dropna(subset=['close', 'high', 'low', 'volume']).reset_index(drop=True)
+    if len(d) < 20:
+        return None, None
     close = d['close']; high = d['high']; low = d['low']; vol = d['volume']
     n = len(d)
 
     # Find most recent significant swing high and low (order=5)
     swing_hi_idx, swing_lo_idx = None, None
     for i in range(n - 6, 4, -1):
-        if swing_hi_idx is None:
-            window = high.iloc[max(0, i - 5):min(n, i + 6)].values
-            if float(high.iloc[i]) == float(window.max()):
-                swing_hi_idx = i
-        if swing_lo_idx is None:
-            window = low.iloc[max(0, i - 5):min(n, i + 6)].values
-            if float(low.iloc[i]) == float(window.min()):
-                swing_lo_idx = i
+        try:
+            if swing_hi_idx is None:
+                window = high.iloc[max(0, i - 5):min(n, i + 6)].dropna().values
+                if len(window) > 0 and float(high.iloc[i]) == float(window.max()):
+                    swing_hi_idx = i
+            if swing_lo_idx is None:
+                window = low.iloc[max(0, i - 5):min(n, i + 6)].dropna().values
+                if len(window) > 0 and float(low.iloc[i]) == float(window.min()):
+                    swing_lo_idx = i
+        except (TypeError, ValueError):
+            continue
         if swing_hi_idx is not None and swing_lo_idx is not None:
             break
 
@@ -13118,11 +13132,9 @@ def _build_market_intelligence():
     # ── 1. Cross-market performance comparison ──
     cross = None
     try:
-        from starlette.testclient import TestClient
-        # Internal call to the existing /markets endpoint
-        cross_raw = requests.get('http://127.0.0.1:8001/api/v1/markets').json()
-        if cross_raw.get('status') == 'ready':
-            cross = cross_raw
+        cross = markets(symbol='BTC', window='1y')
+        if not isinstance(cross, dict) or cross.get('status') != 'ready':
+            cross = None
     except Exception:
         traceback.print_exc()
 
@@ -13161,8 +13173,9 @@ def _build_market_intelligence():
     # Fetch dominance
     dom = None
     try:
-        ticker_data = requests.get('http://127.0.0.1:8001/api/v1/ticker').json()
-        dom = ticker_data.get('dominance')
+        ticker_data = ticker(symbol='BTC')
+        if isinstance(ticker_data, dict):
+            dom = ticker_data.get('dominance')
     except Exception:
         pass
     if not dom or not dom.get('dominance'):
@@ -13174,17 +13187,26 @@ def _build_market_intelligence():
         except Exception:
             pass
 
-    # Fetch sector and participant data from market-streams
+    # Fetch sector and participant data from market-streams (direct call, no auth needed)
     streams = {}
     try:
-        streams_raw = requests.get('http://127.0.0.1:8001/api/v1/albert/market-streams').json()
-        if streams_raw.get('status') == 'ready':
-            streams = streams_raw
+        streams = _market_streams_cached(include_participants=True)
+        if not isinstance(streams, dict) or streams.get('status') != 'ready':
+            streams = {}
     except Exception:
-        pass
+        traceback.print_exc()
 
     sectors_data = streams.get('sectors', {}).get('sectors', [])
     participants = streams.get('participants', {}).get('participants', [])
+
+    # Fallback: if sectors are empty, try direct sector endpoint
+    if not sectors_data:
+        try:
+            sec_raw = alert_engine_sectors()
+            if isinstance(sec_raw, dict) and sec_raw.get('sectors'):
+                sectors_data = sec_raw['sectors']
+        except Exception:
+            pass
 
     # Determine leadership: BTC-led, Altcoin-led, or Mixed
     # Use: BTC dominance change + sector performance + breadth
@@ -13268,6 +13290,13 @@ def _build_market_intelligence():
     # ── 4. Market breadth and concentration ──
     phase = streams.get('phaseAssessment', {})
     phase_inputs = phase.get('inputs', phase.get('thresholds', {}))
+
+    # Fallback: if phase is empty, compute breadth from sector data
+    if not phase_inputs and sectors_data:
+        # Count sectors with positive strength as "rising"
+        rising = sum(1 for s in sectors_data if (s.get('strength') or 0) > 0)
+        total = len(sectors_data)
+        phase_inputs = {'altsWithReturns': total, 'altsBeatingBtc': rising}
     breadth = {
         'alts_rising': None, 'alts_falling': None, 'alts_total': None,
         'pct_rising': None, 'broad': False, 'concentrated': True,
@@ -13310,8 +13339,8 @@ def _build_market_intelligence():
     # 5a. External flows: ETF + stablecoin
     etf_flows = {'btc': None, 'eth': None}
     try:
-        btc_etf = requests.get('http://127.0.0.1:8001/api/v1/etf-flows?symbol=BTC').json()
-        if btc_etf.get('status') == 'ready':
+        btc_etf = etf_flows_feed(refresh=0)
+        if isinstance(btc_etf, dict) and btc_etf.get('status') == 'ready':
             etf_flows['btc'] = {
                 'net_1d': btc_etf.get('net_1d'), 'net_7d': btc_etf.get('net_7d'),
                 'net_30d': btc_etf.get('net_30d'), 'cum_total': btc_etf.get('cum_total'),
@@ -13322,8 +13351,15 @@ def _build_market_intelligence():
     except Exception:
         pass
     try:
-        eth_etf = requests.get('http://127.0.0.1:8001/api/v1/etf-flows?symbol=ETH').json()
-        if eth_etf.get('status') == 'ready' and eth_etf.get('symbol') == 'ETH':
+        eth_etf = etf_flows_feed.__wrapped__(refresh=0) if hasattr(etf_flows_feed, '__wrapped__') else None
+        # ETH ETF: try direct DB lookup
+        if not eth_etf:
+            eth_doc = db['etf_flows_eth'].find_one(sort=[('date', -1)])
+            if eth_doc:
+                eth_etf = {'status': 'ready', 'symbol': 'ETH',
+                           'net_1d': eth_doc.get('net_1d'), 'net_7d': eth_doc.get('net_7d'),
+                           'net_30d': eth_doc.get('net_30d'), 'cum_total': eth_doc.get('cum_total')}
+        if isinstance(eth_etf, dict) and eth_etf.get('status') == 'ready' and eth_etf.get('symbol') == 'ETH':
             etf_flows['eth'] = {
                 'net_1d': eth_etf.get('net_1d'), 'net_7d': eth_etf.get('net_7d'),
                 'net_30d': eth_etf.get('net_30d'), 'cum_total': eth_etf.get('cum_total'),
@@ -13355,8 +13391,8 @@ def _build_market_intelligence():
     # 5b. Exchange positioning
     exchange_pos = {'btc': None, 'summary': ''}
     try:
-        exf = requests.get('http://127.0.0.1:8001/api/v1/exchange-flows').json()
-        if exf.get('status') == 'ready':
+        exf = exchange_flows_feed(refresh=0)
+        if isinstance(exf, dict) and exf.get('status') == 'ready':
             exchange_pos['btc'] = {
                 'current_balance': exf.get('current'),
                 'net_7d': exf.get('net_7d'), 'net_30d': exf.get('net_30d'),
@@ -13402,11 +13438,13 @@ def _build_market_intelligence():
 
     # 1. Crypto vs other markets
     if crypto_vs_equities:
+        gold_str = ''
+        if gold_row and gold_row.get('ret_1m') is not None:
+            gold_str = f', Gold {gold_row["ret_1m"]:+.1f}%'
         commentary_parts.append(
             f'Crypto is {"outperforming" if crypto_vs_equities["outperforming"] else "underperforming"} '
             f'equities over the past month — BTC {btc_perf.get("ret_1m", 0):+.1f}% vs '
-            f'S&P 500 {sp500.get("ret_1m", 0):+.1f}%'
-            f'{f", Gold {gold_row.get(chr(114)+chr(101)+chr(116)+chr(95)+chr(49)+chr(109), 0):+.1f}%" if gold_row and gold_row.get("ret_1m") is not None else ""}.'
+            f'S&P 500 {sp500.get("ret_1m", 0):+.1f}%{gold_str}.'
         )
 
     # 2. Which sector is driving
