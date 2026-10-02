@@ -5,7 +5,6 @@ import { ArrowLeft, ArrowRight, MessageCircle, ShieldCheck, RefreshCw, ExternalL
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, Legend } from 'recharts';
 import PaperTradingBot from '../PaperTradingBot';
 import AnalysisRefreshStatus, { analysisTime } from '../AnalysisRefreshStatus';
-import { BTCChart, MarketChart } from './OneScreenCharts';
 import BTCScenarioTracker from './BTCScenarioTracker';
 import MarketIntelligence from './MarketIntelligence';
 
@@ -462,8 +461,8 @@ export default function ConsolidatedDetail({ kind, snapshot, dashboard, dashboar
       ['Historical upper', val(band.upperPct, '%')],
       ['Matched days', val(band.matchedDays)],
       ['Reason if unavailable', band.lowerPct != null ? null : val(band.reasonCode || band.reasonText)],
-    ], children: (outlook.history || []).length > 1 ? <div className="mt-3"><BTCChart outlook={outlook} levels={d.chart?.sr_levels || []} height={220} expanded /></div> : null,
-    note: 'Dashed paths are past analog outcomes, not forward forecasts.' });
+    ], children: <div className="mt-3"><BTCScenarioTracker compact={false} /></div>,
+    note: 'Scenarios are fixed at creation. Engine refreshes only update tracking — paths are never rewritten.' });
     area('Scenario Evaluation', 'scenario-evaluation', { state: healthOf('outlook'), source: when(evaluated.lastEvaluatedAt), facts: [
       ['Validation status', val(evaluation.status)],
       ['Completed checks', val(evaluated.evaluationPoints)],

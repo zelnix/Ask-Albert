@@ -26,31 +26,88 @@ import base64
 import io
 import wave
 import asyncio
+import gc
 import concurrent.futures
-_LLM_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix='albert-llm')
+_LLM_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix='albert-llm')
 import threading
 import datetime
 import traceback
 import urllib.request
 from albert.analysis_jobs import AnalysisJobs, normalise as _normalise_analysis, refresh_scope as _refresh_scope
 
-_ANALYSIS_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix='albert-analysis')
+_ANALYSIS_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix='albert-analysis')
 
 import requests
 
-import ccxt
-import numpy as np
-import pandas as pd
+# ── Lazy-loaded heavy libraries (saves ~150-200 MB at idle) ──
+# numpy, pandas, sklearn, ccxt are imported on first use via proxy objects.
+class _LazyModule:
+    """Proxy that defers import until first attribute access."""
+    __slots__ = ('_name', '_mod')
+    def __init__(self, name):
+        object.__setattr__(self, '_name', name)
+        object.__setattr__(self, '_mod', None)
+    def _load(self):
+        mod = object.__getattribute__(self, '_mod')
+        if mod is None:
+            import importlib
+            mod = importlib.import_module(object.__getattribute__(self, '_name'))
+            object.__setattr__(self, '_mod', mod)
+        return mod
+    def __getattr__(self, attr):
+        return getattr(self._load(), attr)
+    def __call__(self, *a, **kw):
+        return self._load()(*a, **kw)
+    def __repr__(self):
+        return f"<LazyModule({object.__getattribute__(self, '_name')})>"
+
+np = _LazyModule('numpy')
+pd = _LazyModule('pandas')
+ccxt = _LazyModule('ccxt')
+
 try:
-    import shap  # SHAP factor contributions
+    import shap
     _HAS_SHAP = True
-except Exception:  # noqa
+except Exception:
+    shap = None
     _HAS_SHAP = False
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.ensemble import GradientBoostingRegressor
-from sklearn.calibration import CalibratedClassifierCV
-from sklearn.metrics import accuracy_score
-from sklearn.model_selection import TimeSeriesSplit
+
+# sklearn classes — lazy-loaded via functions (used in ~3 locations each)
+_sklearn_cache = {}
+def _get_RandomForestClassifier():
+    if 'rfc' not in _sklearn_cache:
+        from sklearn.ensemble import RandomForestClassifier
+        _sklearn_cache['rfc'] = RandomForestClassifier
+    return _sklearn_cache['rfc']
+def _get_GradientBoostingRegressor():
+    if 'gbr' not in _sklearn_cache:
+        from sklearn.ensemble import GradientBoostingRegressor
+        _sklearn_cache['gbr'] = GradientBoostingRegressor
+    return _sklearn_cache['gbr']
+def _get_CalibratedClassifierCV():
+    if 'ccv' not in _sklearn_cache:
+        from sklearn.calibration import CalibratedClassifierCV
+        _sklearn_cache['ccv'] = CalibratedClassifierCV
+    return _sklearn_cache['ccv']
+def _get_accuracy_score():
+    if 'as' not in _sklearn_cache:
+        from sklearn.metrics import accuracy_score
+        _sklearn_cache['as'] = accuracy_score
+    return _sklearn_cache['as']
+def _get_TimeSeriesSplit():
+    if 'tss' not in _sklearn_cache:
+        from sklearn.model_selection import TimeSeriesSplit
+        _sklearn_cache['tss'] = TimeSeriesSplit
+    return _sklearn_cache['tss']
+
+# ── Bounded cache helper ──
+def _bounded_cache_set(cache_dict, key, value, maxsize=100):
+    """Set a key in a dict-cache, evicting oldest entries if over maxsize."""
+    cache_dict[key] = value
+    if len(cache_dict) > maxsize:
+        excess = len(cache_dict) - maxsize
+        for old_key in list(cache_dict.keys())[:excess]:
+            del cache_dict[old_key]
 from fastapi import FastAPI, Body, Request, Cookie, Header, Depends, Response, HTTPException
 from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -197,6 +254,38 @@ _ticker_cache = {}  # symbol -> {'data':..., 'ts':...}
 _fx_cache = {'rate': None, 'ts': 0.0, 'cooldown_ts': 0.0}
 _FX_TTL_SEC = 1800          # serve a good rate for 30 min
 _FX_FAIL_COOLDOWN_SEC = 600  # after a failure, don't retry Yahoo for 10 min
+
+# ── Memory management: periodic cache janitor + GC ──
+_CACHE_LIMITS = {
+    '_ticker_cache': 20,
+    '_scenario_cache': 10,
+    '_OHLCV_CACHE': 15,
+    '_WELCOME_CACHE': 5,
+    '_WEEKLY_BRIEF_CACHE': 5,
+    '_TTS_CACHE': 10,
+    '_MD_ALERT_CACHE': 10,
+    '_SCENARIO_HIST_CACHE': 10,
+    '_EDGE_CACHE': 20,
+    '_UNLOCK_CACHE': 20,
+}
+
+def _memory_janitor():
+    """Periodic cache cap + forced garbage collection. Runs every 10 min."""
+    import time as _t
+    try:
+        g = globals()
+        for name, limit in _CACHE_LIMITS.items():
+            cache = g.get(name)
+            if isinstance(cache, dict) and len(cache) > limit:
+                # Keep newest entries by evicting oldest (first-inserted)
+                excess = len(cache) - limit
+                for key in list(cache.keys())[:excess]:
+                    del cache[key]
+        # Force garbage collection to reclaim freed memory
+        collected = gc.collect()
+        print(f"[memory-janitor] caches capped, gc collected {collected} objects", flush=True)
+    except Exception:
+        traceback.print_exc()
 
 
 def grade_pending(df):
@@ -1286,9 +1375,9 @@ def _conformal_corridor(Xf, close, lx, h, price, alpha=0.10):
         if len(Xcal) < 20:
             return None
         q_lo, q_hi = alpha / 2.0, 1.0 - alpha / 2.0
-        gl = GradientBoostingRegressor(loss='quantile', alpha=q_lo, n_estimators=60,
+        gl = _get_GradientBoostingRegressor()(loss='quantile', alpha=q_lo, n_estimators=60,
                                        max_depth=3, learning_rate=0.05, random_state=42)
-        gh = GradientBoostingRegressor(loss='quantile', alpha=q_hi, n_estimators=60,
+        gh = _get_GradientBoostingRegressor()(loss='quantile', alpha=q_hi, n_estimators=60,
                                        max_depth=3, learning_rate=0.05, random_state=42)
         gl.fit(Xtr, ytr)
         gh.fit(Xtr, ytr)
@@ -1369,16 +1458,16 @@ def _horizon_forecast(Xfull, close, live_X, h, price, mu, sigma, as_of_ts, light
     # backtest accuracy via time-series split
     accs = []
     try:
-        tscv = TimeSeriesSplit(n_splits=3)
+        tscv = _get_TimeSeriesSplit()(n_splits=3)
         for tr, te in tscv.split(Xv):
-            m = RandomForestClassifier(n_estimators=120, max_depth=5, random_state=42, n_jobs=-1)
+            m = _get_RandomForestClassifier()(n_estimators=120, max_depth=5, random_state=42, n_jobs=-1)
             m.fit(Xv.iloc[tr], yv.iloc[tr])
-            accs.append(accuracy_score(yv.iloc[te], m.predict(Xv.iloc[te])))
+            accs.append(_get_accuracy_score()(yv.iloc[te], m.predict(Xv.iloc[te])))
     except Exception:  # noqa
         accs = [0.5]
     acc = float(np.mean(accs)) if accs else 0.5
     # final model -> live probability (raw RF; also used for SHAP)
-    fm = RandomForestClassifier(n_estimators=150, max_depth=5, random_state=42, n_jobs=-1)
+    fm = _get_RandomForestClassifier()(n_estimators=150, max_depth=5, random_state=42, n_jobs=-1)
     fm.fit(Xv, yv)
     cl = list(fm.classes_)
     pr = fm.predict_proba(lx)[0]
@@ -1391,8 +1480,8 @@ def _horizon_forecast(Xfull, close, live_X, h, price, mu, sigma, as_of_ts, light
     try:
         vc = yv.value_counts()
         if len(Xv) >= 150 and yv.nunique() == 2 and int(vc.min()) >= 30:
-            base = RandomForestClassifier(n_estimators=120, max_depth=5, random_state=42, n_jobs=-1)
-            cal = CalibratedClassifierCV(base, method='isotonic', cv=3)
+            base = _get_RandomForestClassifier()(n_estimators=120, max_depth=5, random_state=42, n_jobs=-1)
+            cal = _get_CalibratedClassifierCV()(base, method='isotonic', cv=3)
             cal.fit(Xv, yv)
             clc = list(cal.classes_)
             pc = cal.predict_proba(lx)[0]
@@ -5680,12 +5769,12 @@ def compute():
     y = train_df['Target']
 
     # --- TimeSeriesSplit cross validation (no future leakage) ---
-    tscv = TimeSeriesSplit(n_splits=5)
+    tscv = _get_TimeSeriesSplit()(n_splits=5)
     cv_folds = []
     for i, (tr, te) in enumerate(tscv.split(X)):
-        m = RandomForestClassifier(n_estimators=150, max_depth=5, random_state=42, n_jobs=-1)
+        m = _get_RandomForestClassifier()(n_estimators=150, max_depth=5, random_state=42, n_jobs=-1)
         m.fit(X.iloc[tr], y.iloc[tr])
-        acc = accuracy_score(y.iloc[te], m.predict(X.iloc[te]))
+        acc = _get_accuracy_score()(y.iloc[te], m.predict(X.iloc[te]))
         cv_folds.append({'fold': i + 1, 'accuracy': round(float(acc) * 100, 2), 'testSize': int(len(te))})
 
     # --- Walk-forward backtest -> accuracy over time + trade log ---
@@ -5697,7 +5786,7 @@ def compute():
     closes_full = df['close'].reset_index(drop=True)  # includes live row at end
     for i in range(start, len(X)):
         if model is None or (i - start) % retrain_every == 0:
-            model = RandomForestClassifier(n_estimators=150, max_depth=5, random_state=42, n_jobs=-1)
+            model = _get_RandomForestClassifier()(n_estimators=150, max_depth=5, random_state=42, n_jobs=-1)
             model.fit(X.iloc[:i], y.iloc[:i])
         classes = list(model.classes_)
         proba = model.predict_proba(X.iloc[[i]])[0]
@@ -5763,7 +5852,7 @@ def compute():
         })
 
     # --- Final model on all training data -> live next-day signal ---
-    final = RandomForestClassifier(n_estimators=200, max_depth=5, random_state=42, n_jobs=-1)
+    final = _get_RandomForestClassifier()(n_estimators=200, max_depth=5, random_state=42, n_jobs=-1)
     final.fit(X, y)
     live_X = live_row[FEATURE_COLS]
     pred = int(final.predict(live_X)[0])
@@ -6174,6 +6263,8 @@ def run_compute_bg():
         _state['status'] = 'error'
         _state['error'] = str(e)
         traceback.print_exc()
+    finally:
+        gc.collect()
 
 
 # =====================================================================
@@ -6207,6 +6298,7 @@ def _lightweight_reassess():
         traceback.print_exc()
     finally:
         _lightweight_state['running'] = False
+        gc.collect()
 
 
 # =====================================================================
@@ -7116,20 +7208,20 @@ def _startup():
         scheduler.add_job(_refresh_etf_bg, 'interval', hours=3, id='etf_refresh')
         # Large-transaction feed: keep the labeled whale-tx feed fresh.
         scheduler.add_job(_refresh_whale_tx_bg, 'interval', minutes=30, id='whale_tx_refresh')
-        # Price-watch alerts created from Albert chat: check crossings every 60s.
-        scheduler.add_job(_check_price_watches, 'interval', seconds=60, id='price_watch_check',
+        # Price-watch alerts created from Albert chat: check crossings every 3 min.
+        scheduler.add_job(_check_price_watches, 'interval', seconds=180, id='price_watch_check',
                           misfire_grace_time=120)
-        # Metric-watch alerts: check threshold crossings every 90s.
-        scheduler.add_job(_check_metric_watches, 'interval', seconds=90, id='metric_watch_check',
+        # Metric-watch alerts: check threshold crossings every 3 min.
+        scheduler.add_job(_check_metric_watches, 'interval', seconds=180, id='metric_watch_check',
                           misfire_grace_time=120)
         # Background Paper Auto Run: the durable worker that trades paper accounts
-        # WITHOUT any browser/dashboard being open. Runs every 30s, one instance.
-        scheduler.add_job(_paper_autopilot_worker, 'interval', seconds=30, id='paper_autopilot',
+        # WITHOUT any browser/dashboard being open. Runs every 2 min, one instance.
+        scheduler.add_job(_paper_autopilot_worker, 'interval', seconds=120, id='paper_autopilot',
                           replace_existing=True, coalesce=True, max_instances=1,
                           misfire_grace_time=120,
                           next_run_time=datetime.datetime.now() + datetime.timedelta(seconds=20))
         # Albert Trading Strategies: track active playbooks, fire nudges & paper-trade fills.
-        scheduler.add_job(_strategy_eval_job, 'interval', seconds=30, id='strategy_eval',
+        scheduler.add_job(_strategy_eval_job, 'interval', seconds=120, id='strategy_eval',
                           replace_existing=True, coalesce=True, max_instances=1,
                           misfire_grace_time=120)
         # Alert Engine: scan the watchlist's daily signals hourly and fire in-app alerts.
@@ -7140,9 +7232,9 @@ def _startup():
         scheduler.add_job(_engine_snapshot_job, 'interval', minutes=15, id='engine_snapshot',
                           replace_existing=True, coalesce=True, max_instances=1,
                           next_run_time=datetime.datetime.now() + datetime.timedelta(seconds=40))
-        # Lightweight market reassessment — refresh live data feeds every 5 min.
+        # Lightweight market reassessment — refresh live data feeds every 10 min.
         # No model training; respects provider rate limits.
-        scheduler.add_job(_lightweight_reassess, 'interval', minutes=5, id='lightweight_reassess',
+        scheduler.add_job(_lightweight_reassess, 'interval', minutes=10, id='lightweight_reassess',
                           replace_existing=True, coalesce=True, max_instances=1,
                           misfire_grace_time=300,
                           next_run_time=datetime.datetime.now() + datetime.timedelta(seconds=60))
@@ -7201,7 +7293,7 @@ def _startup():
                           replace_existing=True, coalesce=True, max_instances=1,
                           misfire_grace_time=300)
         # Pillar 4/1: real-time liquidation-cascade watcher on the live WS feed.
-        scheduler.add_job(check_liq_cascade_alert, 'interval', seconds=30, id='liq_cascade',
+        scheduler.add_job(check_liq_cascade_alert, 'interval', seconds=120, id='liq_cascade',
                           replace_existing=True, coalesce=True, max_instances=1,
                           misfire_grace_time=60)
         # Weekly recap — Sundays.
@@ -7215,6 +7307,10 @@ def _startup():
                               minute=WEEKLY_MINUTE, id='weekly_recap', replace_existing=True,
                               coalesce=True, max_instances=1)
         scheduler.start()
+        # Memory janitor: cap in-memory caches + gc.collect() every 10 min
+        scheduler.add_job(_memory_janitor, 'interval', minutes=10, id='memory_janitor',
+                          replace_existing=True, coalesce=True, max_instances=1,
+                          next_run_time=datetime.datetime.now() + datetime.timedelta(seconds=90))
         _scheduler = scheduler
     except Exception:  # noqa
         traceback.print_exc()
@@ -22018,6 +22114,8 @@ def _brief_auto_refresh_worker():
         _brief_generate_bg(cache_id, symbol, mode, coin_name, sys_prompt, as_of)
     except Exception:
         traceback.print_exc()
+    finally:
+        gc.collect()
 
 
 def _brief_cleanup_old():
@@ -22172,12 +22270,12 @@ def compute_coin_dashboard(symbol):
     y = train_df['Target']
 
     # TimeSeriesSplit cross validation
-    tscv = TimeSeriesSplit(n_splits=5)
+    tscv = _get_TimeSeriesSplit()(n_splits=5)
     cv_folds = []
     for i, (tr, te) in enumerate(tscv.split(X)):
-        m = RandomForestClassifier(n_estimators=150, max_depth=5, random_state=42, n_jobs=-1)
+        m = _get_RandomForestClassifier()(n_estimators=150, max_depth=5, random_state=42, n_jobs=-1)
         m.fit(X.iloc[tr], y.iloc[tr])
-        acc = accuracy_score(y.iloc[te], m.predict(X.iloc[te]))
+        acc = _get_accuracy_score()(y.iloc[te], m.predict(X.iloc[te]))
         cv_folds.append({'fold': i + 1, 'accuracy': round(float(acc) * 100, 2), 'testSize': int(len(te))})
 
     # Walk-forward backtest -> accuracy over time + trade log
@@ -22189,7 +22287,7 @@ def compute_coin_dashboard(symbol):
     closes_full = df['close'].reset_index(drop=True)
     for i in range(start, len(X)):
         if model is None or (i - start) % retrain_every == 0:
-            model = RandomForestClassifier(n_estimators=150, max_depth=5, random_state=42, n_jobs=-1)
+            model = _get_RandomForestClassifier()(n_estimators=150, max_depth=5, random_state=42, n_jobs=-1)
             model.fit(X.iloc[:i], y.iloc[:i])
         classes = list(model.classes_)
         pred = int(model.predict(X.iloc[[i]])[0])
@@ -22252,7 +22350,7 @@ def compute_coin_dashboard(symbol):
             'aiAccuracy': round(float(r['rolling_acc']), 2),
         })
 
-    final = RandomForestClassifier(n_estimators=200, max_depth=5, random_state=42, n_jobs=-1)
+    final = _get_RandomForestClassifier()(n_estimators=200, max_depth=5, random_state=42, n_jobs=-1)
     final.fit(X, y)
     live_X = live_row[FEATURE_COLS]
     pred = int(final.predict(live_X)[0])
